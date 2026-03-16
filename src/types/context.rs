@@ -1,0 +1,221 @@
+//! Context and Tool definitions.
+
+use crate::types::Message;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Conversation context.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Context {
+    /// System prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Conversation messages.
+    pub messages: Vec<Message>,
+    /// Available tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            system_prompt: None,
+            messages: Vec::new(),
+            tools: None,
+        }
+    }
+}
+
+impl Context {
+    /// Create a new empty context.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a context with a system prompt.
+    pub fn with_system_prompt(prompt: impl Into<String>) -> Self {
+        Self {
+            system_prompt: Some(prompt.into()),
+            messages: Vec::new(),
+            tools: None,
+        }
+    }
+
+    /// Add a message to the context.
+    pub fn add_message(&mut self, message: Message) {
+        self.messages.push(message);
+    }
+
+    /// Add a user message to the context.
+    pub fn user(&mut self, content: impl Into<String>) {
+        self.messages.push(Message::User(crate::types::UserMessage::text(content)));
+    }
+
+    /// Set the system prompt.
+    pub fn set_system_prompt(&mut self, prompt: impl Into<String>) {
+        self.system_prompt = Some(prompt.into());
+    }
+
+    /// Set the tools.
+    pub fn set_tools(&mut self, tools: Vec<Tool>) {
+        self.tools = Some(tools);
+    }
+
+    /// Get the last message.
+    pub fn last_message(&self) -> Option<&Message> {
+        self.messages.last()
+    }
+
+    /// Check if the context has any messages.
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    /// Get the number of messages.
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Clear all messages.
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+}
+
+/// Tool definition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tool {
+    /// Tool name.
+    pub name: String,
+    /// Tool description.
+    pub description: String,
+    /// Parameters schema (JSON Schema).
+    pub parameters: serde_json::Value,
+}
+
+impl Tool {
+    /// Create a new tool.
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+
+    /// Create a tool builder.
+    pub fn builder() -> ToolBuilder {
+        ToolBuilder::default()
+    }
+}
+
+/// Builder for Tool.
+#[derive(Debug, Default)]
+pub struct ToolBuilder {
+    name: Option<String>,
+    description: Option<String>,
+    parameters: Option<serde_json::Value>,
+}
+
+impl ToolBuilder {
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn parameters(mut self, parameters: serde_json::Value) -> Self {
+        self.parameters = Some(parameters);
+        self
+    }
+
+    /// Set parameters from a type that implements JsonSchema.
+    pub fn parameters_from_schema<T: JsonSchema>(mut self) -> Self {
+        let schema = schemars::schema_for!(T);
+        self.parameters = Some(serde_json::to_value(&schema).unwrap_or_default());
+        self
+    }
+
+    pub fn build(self) -> Result<Tool, String> {
+        let name = self.name.ok_or("name is required")?;
+        let description = self.description.unwrap_or_default();
+        let parameters = self.parameters.unwrap_or(serde_json::json!({"type": "object", "properties": {}}));
+
+        Ok(Tool {
+            name,
+            description,
+            parameters,
+        })
+    }
+}
+
+/// Stream options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamOptions {
+    /// Temperature for sampling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Maximum tokens to generate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// API key override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Custom headers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Session ID for caching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+impl Default for StreamOptions {
+    fn default() -> Self {
+        Self {
+            temperature: None,
+            max_tokens: None,
+            api_key: None,
+            headers: None,
+            session_id: None,
+        }
+    }
+}
+
+/// Simple stream options with thinking support.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimpleStreamOptions {
+    /// Base stream options.
+    #[serde(flatten)]
+    pub base: StreamOptions,
+    /// Thinking/reasoning level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<crate::thinking::ThinkingLevel>,
+    /// Custom thinking budget tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget_tokens: Option<u32>,
+}
+
+impl Default for SimpleStreamOptions {
+    fn default() -> Self {
+        Self {
+            base: StreamOptions::default(),
+            reasoning: None,
+            thinking_budget_tokens: None,
+        }
+    }
+}
+
+impl From<StreamOptions> for SimpleStreamOptions {
+    fn from(base: StreamOptions) -> Self {
+        Self {
+            base,
+            reasoning: None,
+            thinking_budget_tokens: None,
+        }
+    }
+}
