@@ -667,3 +667,323 @@ fn test_zenmux_provider_from_string() {
     let provider = Provider::from("zenmux".to_string());
     assert_eq!(provider, Provider::Zenmux);
 }
+
+// ============================================================================
+// stream_simple coverage for all delegation providers
+// ============================================================================
+
+#[tokio::test]
+async fn test_minimax_stream_simple() {
+    let server = mock_anthropic_server("MiniMax-simple").await;
+    let model = make_model(Api::AnthropicMessages, Provider::MiniMax, &server.uri());
+    let provider = MiniMaxProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "MiniMax-simple");
+}
+
+#[tokio::test]
+async fn test_kimi_coding_stream_simple() {
+    let server = mock_anthropic_server("Kimi-simple").await;
+    let model = make_model(Api::AnthropicMessages, Provider::KimiCoding, &server.uri());
+    let provider = KimiCodingProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Kimi-simple");
+}
+
+#[tokio::test]
+async fn test_xai_stream_simple() {
+    let server = mock_openai_server("xAI-simple").await;
+    let model = make_model(Api::OpenAICompletions, Provider::XAI, &server.uri());
+    let provider = XAIProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "xAI-simple");
+}
+
+#[tokio::test]
+async fn test_groq_stream_simple() {
+    let server = mock_openai_server("Groq-simple").await;
+    let model = make_model(Api::OpenAICompletions, Provider::Groq, &server.uri());
+    let provider = GroqProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Groq-simple");
+}
+
+#[tokio::test]
+async fn test_openrouter_stream_simple() {
+    let server = mock_openai_server("OpenRouter-simple").await;
+    let model = make_model(Api::OpenAICompletions, Provider::OpenRouter, &server.uri());
+    let provider = OpenRouterProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "OpenRouter-simple");
+}
+
+#[tokio::test]
+async fn test_zai_stream_simple() {
+    let server = mock_openai_server("ZAI-simple").await;
+    let model = make_model(Api::OpenAICompletions, Provider::ZAI, &server.uri());
+    let provider = ZAIProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ZAI-simple");
+}
+
+// ============================================================================
+// Compat injection: model WITH explicit compat should preserve it
+// ============================================================================
+
+#[tokio::test]
+async fn test_xai_preserves_explicit_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::XAI, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat {
+        supports_store: true,
+        supports_developer_role: true,
+        ..Default::default()
+    });
+    let context = Context::with_system_prompt("test");
+    let provider = XAIProvider::with_api_key("test-key");
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_groq_preserves_explicit_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::Groq, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = GroqProvider::with_api_key("test-key");
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_zai_preserves_explicit_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::ZAI, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = ZAIProvider::with_api_key("test-key");
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+// ============================================================================
+// stream_simple with explicit compat preserved
+// ============================================================================
+
+#[tokio::test]
+async fn test_xai_stream_simple_preserves_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::XAI, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = XAIProvider::with_api_key("test-key");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_groq_stream_simple_preserves_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::Groq, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = GroqProvider::with_api_key("test-key");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_zai_stream_simple_preserves_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::ZAI, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = ZAIProvider::with_api_key("test-key");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+// ============================================================================
+// API key resolution: provider default key used when options.api_key is None
+// ============================================================================
+
+#[tokio::test]
+async fn test_groq_resolve_api_key_from_provider() {
+    let server = mock_openai_server("ok").await;
+    let model = make_model(Api::OpenAICompletions, Provider::Groq, &server.uri());
+    let context = Context::with_system_prompt("test");
+    let provider = GroqProvider::with_api_key("provider-key");
+    // No api_key in options → should use provider's default
+    let stream = provider.stream(&model, &context, StreamOptions::default());
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_openrouter_resolve_api_key_from_provider() {
+    let server = mock_openai_server("ok").await;
+    let model = make_model(Api::OpenAICompletions, Provider::OpenRouter, &server.uri());
+    let context = Context::with_system_prompt("test");
+    let provider = OpenRouterProvider::with_api_key("provider-key");
+    let stream = provider.stream(&model, &context, StreamOptions::default());
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_minimax_resolve_api_key_from_provider() {
+    let server = mock_anthropic_server("ok").await;
+    let model = make_model(Api::AnthropicMessages, Provider::MiniMax, &server.uri());
+    let context = Context::with_system_prompt("test");
+    let provider = MiniMaxProvider::with_api_key("provider-key");
+    let stream = provider.stream(&model, &context, StreamOptions::default());
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_kimi_resolve_api_key_from_provider() {
+    let server = mock_anthropic_server("ok").await;
+    let model = make_model(Api::AnthropicMessages, Provider::KimiCoding, &server.uri());
+    let context = Context::with_system_prompt("test");
+    let provider = KimiCodingProvider::with_api_key("provider-key");
+    let stream = provider.stream(&model, &context, StreamOptions::default());
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
