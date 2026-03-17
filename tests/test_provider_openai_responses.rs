@@ -55,7 +55,7 @@ fn responses_sse(events: Vec<(&str, &str)>) -> String {
 #[test]
 fn test_provider_type() {
     let provider = OpenAIResponsesProvider::new();
-    assert_eq!(provider.provider_type(), Provider::OpenAI);
+    assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
 }
 
 // ============================================================================

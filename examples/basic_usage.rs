@@ -15,9 +15,16 @@
 //! For request body:  RUST_LOG=debug cargo run --example basic_usage
 
 use futures::StreamExt;
+use std::sync::Arc;
 use tiy_core::{
     models::get_model,
-    provider::{openai_completions::OpenAICompletionsProvider, LLMProvider},
+    provider::{
+        anthropic::AnthropicProvider, get_provider, google::GoogleProvider, groq::GroqProvider,
+        kimi_coding::KimiCodingProvider, minimax::MiniMaxProvider, ollama::OllamaProvider,
+        openai_completions::OpenAICompletionsProvider, openai_responses::OpenAIResponsesProvider,
+        openrouter::OpenRouterProvider, register_provider, xai::XAIProvider, zai::ZAIProvider,
+        zenmux::ZenmuxProvider,
+    },
     stream::AssistantMessageEventStream,
     types::{Context, Model, Provider, StreamOptions, UserMessage},
 };
@@ -39,16 +46,6 @@ fn main() {
     println!("=== tiy-core Basic Usage Example ===\n");
 
     // ============================================
-    // Part 1: List all supported Providers
-    // ============================================
-    println!("--- Supported Providers ---");
-    let providers = tiy_core::models::get_providers();
-    for provider in &providers {
-        println!("  - {}", provider);
-    }
-    println!();
-
-    // ============================================
     // Part 2: Make Actual LLM Request
     // ============================================
     println!("--- Making LLM Request ---");
@@ -66,7 +63,7 @@ fn main() {
         Model::builder()
             .id(&model_id)
             .name(&model_id)
-            .provider(Provider::OpenAI)
+            .provider(Provider::Anthropic)
             .context_window(128000)
             .max_tokens(4096)
             .build()
@@ -86,12 +83,41 @@ fn main() {
     println!("  Provider: {}", model.provider);
     println!(
         "  Base URL: {}",
-        base_url.as_deref().or(model.base_url.as_deref()).unwrap_or("(default)")
+        base_url
+            .as_deref()
+            .or(model.base_url.as_deref())
+            .unwrap_or("(default)")
     );
     println!("  Prompt: \"{}\"", "What is the capital of France?");
 
-    // Create provider
-    let provider = OpenAICompletionsProvider::new();
+    // Register all supported providers into the global registry.
+    // After this, providers are resolved automatically from model.provider.
+    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIResponsesProvider::new()));
+    register_provider(Arc::new(AnthropicProvider::new()));
+    register_provider(Arc::new(GoogleProvider::new()));
+    register_provider(Arc::new(OllamaProvider::new()));
+    register_provider(Arc::new(GroqProvider::new()));
+    register_provider(Arc::new(XAIProvider::new()));
+    register_provider(Arc::new(OpenRouterProvider::new()));
+    register_provider(Arc::new(MiniMaxProvider::new()));
+    register_provider(Arc::new(KimiCodingProvider::new()));
+    register_provider(Arc::new(ZAIProvider::new()));
+    register_provider(Arc::new(ZenmuxProvider::new()));
+
+    // ============================================
+    // List all supported Providers
+    // ============================================
+    println!("--- Supported Providers ---");
+    let providers = tiy_core::models::get_providers();
+    for provider in &providers {
+        println!("  - {}", provider);
+    }
+    println!();
+
+    // Resolve provider from the registry using model.provider
+    let provider = get_provider(&model.provider)
+        .expect(&format!("No provider registered for: {}", model.provider));
 
     match api_key {
         Some(key) => {

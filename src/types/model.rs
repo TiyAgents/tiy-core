@@ -123,6 +123,9 @@ pub enum Provider {
     /// OpenAI.
     #[serde(rename = "openai")]
     OpenAI,
+    /// OpenAI Responses API.
+    #[serde(rename = "openai-responses")]
+    OpenAIResponses,
     /// Azure OpenAI Responses.
     #[serde(rename = "azure-openai-responses")]
     AzureOpenAIResponses,
@@ -192,6 +195,7 @@ impl Provider {
             Provider::GoogleAntigravity => "google-antigravity",
             Provider::GoogleVertex => "google-vertex",
             Provider::OpenAI => "openai",
+            Provider::OpenAIResponses => "openai-responses",
             Provider::AzureOpenAIResponses => "azure-openai-responses",
             Provider::OpenAICodex => "openai-codex",
             Provider::GitHubCopilot => "github-copilot",
@@ -231,6 +235,7 @@ impl From<String> for Provider {
             "google-antigravity" => Provider::GoogleAntigravity,
             "google-vertex" => Provider::GoogleVertex,
             "openai" => Provider::OpenAI,
+            "openai-responses" => Provider::OpenAIResponses,
             "azure-openai-responses" => Provider::AzureOpenAIResponses,
             "openai-codex" => Provider::OpenAICodex,
             "github-copilot" => Provider::GitHubCopilot,
