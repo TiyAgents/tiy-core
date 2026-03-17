@@ -110,7 +110,7 @@ pub struct HttpLimits {
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
 
-    /// Total request timeout (including streaming body) in seconds. Default: 300 (5 min).
+    /// Total request timeout (including streaming body) in seconds. Default: 1800 (30 min).
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
 
@@ -136,7 +136,7 @@ fn default_connect_timeout_secs() -> u64 {
     30
 }
 fn default_request_timeout_secs() -> u64 {
-    300
+    1800
 }
 fn default_max_sse_line_buffer_bytes() -> usize {
     2 * 1024 * 1024
@@ -510,7 +510,7 @@ mod tests {
     fn test_security_config_default() {
         let config = SecurityConfig::default();
         assert_eq!(config.http.connect_timeout_secs, 30);
-        assert_eq!(config.http.request_timeout_secs, 300);
+        assert_eq!(config.http.request_timeout_secs, 1800);
         assert_eq!(config.http.max_sse_line_buffer_bytes, 2 * 1024 * 1024);
         assert_eq!(config.http.max_error_body_bytes, 64 * 1024);
         assert_eq!(config.http.max_error_message_chars, 4096);
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(config.http.max_sse_line_buffer_bytes, 1_048_576);
         assert_eq!(config.http.connect_timeout_secs, 10);
         // Unspecified fields use defaults
-        assert_eq!(config.http.request_timeout_secs, 300);
+        assert_eq!(config.http.request_timeout_secs, 1800);
         assert_eq!(config.agent.max_messages, 500);
         assert!(!config.agent.validate_tool_calls);
         // Completely unspecified sections use defaults
@@ -639,7 +639,7 @@ mod tests {
     fn test_http_limits_duration_helpers() {
         let limits = HttpLimits::default();
         assert_eq!(limits.connect_timeout(), Duration::from_secs(30));
-        assert_eq!(limits.request_timeout(), Duration::from_secs(300));
+        assert_eq!(limits.request_timeout(), Duration::from_secs(1800));
     }
 
     #[test]

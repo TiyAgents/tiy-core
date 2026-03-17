@@ -52,7 +52,7 @@ graph TD
 
 | 层 | 路径 | 职责 |
 |---|---|---|
-| **Types** | `src/types/` | 与提供商无关的数据模型：`Message`、`ContentBlock`、`Model`、`Tool`、`Context` |
+| **Types** | `src/types/` | 与提供商无关的数据模型：`Message`、`ContentBlock`、`Model`、`Tool`、`Context`、`SecurityConfig` |
 | **Provider** | `src/provider/` | `LLMProvider` trait + 协议与代理实现 |
 | **Stream** | `src/stream/` | 通用 `EventStream<T, R>`，实现 `futures::Stream` |
 | **Agent** | `src/agent/` | 有状态对话管理器，含工具执行循环 |
@@ -241,6 +241,169 @@ Key 按以下优先级解析：
 
 Base URL 遵循相同模式：`StreamOptions.base_url` > `model.base_url` > 提供商的 `DEFAULT_BASE_URL`。
 
+## 安全配置
+
+tiy-core 内置了集中式 `SecurityConfig` 结构体，统一管理所有安全限制和策略。每个字段都有安全的默认值 — 你只需覆盖想要修改的部分。
+
+### 启用安全配置
+
+**代码中使用（编程方式）：**
+
+```rust
+use tiy_core::types::{SecurityConfig, HttpLimits, AgentLimits, StreamOptions};
+
+// 方式一：使用默认值（零配置）
+let options = StreamOptions::default();
+// options.security 为 None → 自动使用所有默认值
+
+// 方式二：覆盖特定值
+let security = SecurityConfig::default()
+    .with_http(HttpLimits {
+        connect_timeout_secs: 10,
+        request_timeout_secs: 600,
+        ..Default::default()
+    })
+    .with_agent(AgentLimits {
+        max_messages: 500,
+        max_parallel_tool_calls: 8,
+        ..Default::default()
+    });
+
+let options = StreamOptions {
+    api_key: Some("sk-...".to_string()),
+    security: Some(security),
+    ..Default::default()
+};
+```
+
+**从 JSON 配置文件加载：**
+
+```rust
+use tiy_core::types::SecurityConfig;
+
+// 从文件加载 — 仅覆盖指定字段，其余使用默认值
+let json = std::fs::read_to_string("security.json").unwrap();
+let security: SecurityConfig = serde_json::from_str(&json).unwrap();
+```
+
+**从 TOML 配置文件加载（需要 `toml` crate）：**
+
+```rust
+let toml_str = std::fs::read_to_string("security.toml").unwrap();
+let security: SecurityConfig = toml::from_str(&toml_str).unwrap();
+```
+
+### JSON 配置参考
+
+完整的 `security.json`，包含所有字段及其默认值：
+
+```jsonc
+{
+  // HTTP 客户端和 SSE 流解析限制（每次 Provider 请求时生效）
+  "http": {
+    "connect_timeout_secs": 30,           // TCP 连接超时（秒）
+    "request_timeout_secs": 1800,         // 请求总超时，含流式传输（30 分钟）
+    "max_sse_line_buffer_bytes": 2097152, // SSE 行缓冲区上限，防止 OOM（2 MiB）
+    "max_error_body_bytes": 65536,        // 错误响应体最大读取字节数（64 KiB）
+    "max_error_message_chars": 4096       // 存入事件的错误消息最大字符数
+  },
+
+  // Agent 运行时限制
+  "agent": {
+    "max_messages": 1000,                 // 对话历史上限（0 = 无限，超出后 FIFO 丢弃最旧消息）
+    "max_parallel_tool_calls": 16,        // 并行工具执行上限
+    "tool_execution_timeout_secs": 120,   // 单次工具执行超时（2 分钟）
+    "validate_tool_calls": true,          // 执行前是否校验工具参数的 JSON Schema
+    "max_subscriber_slots": 128           // 最大事件订阅者槽位数
+  },
+
+  // EventStream 基础设施限制
+  "stream": {
+    "max_event_queue_size": 10000,        // 事件队列缓冲上限（0 = 无限）
+    "result_timeout_secs": 600            // EventStream::result() 阻塞超时（10 分钟）
+  },
+
+  // 请求头安全策略 — 防止自定义 Header 覆盖认证头
+  "headers": {
+    "protected_headers": [
+      "authorization",
+      "x-api-key",
+      "x-goog-api-key",
+      "anthropic-version",
+      "anthropic-beta"
+    ]
+  },
+
+  // Base URL 验证策略（SSRF 防护）
+  "url": {
+    "require_https": true,                // 强制 HTTPS（localhost/127.0.0.1 豁免）
+    "block_private_ips": false,           // 是否阻止私有/回环 IP（默认关闭，方便本地开发）
+    "allowed_schemes": ["https", "http"]  // 允许的 URL scheme
+  }
+}
+```
+
+> **部分覆盖：** 你只需包含想要修改的字段，省略的字段和整个 section 会自动使用默认值。例如 `{}` 表示全部使用默认值，`{"http": {"connect_timeout_secs": 10}}` 只修改连接超时。
+
+### TOML 配置参考
+
+同样的配置，TOML 格式：
+
+```toml
+[http]
+connect_timeout_secs = 30
+request_timeout_secs = 1800
+max_sse_line_buffer_bytes = 2097152
+max_error_body_bytes = 65536
+max_error_message_chars = 4096
+
+[agent]
+max_messages = 1000
+max_parallel_tool_calls = 16
+tool_execution_timeout_secs = 120
+validate_tool_calls = true
+max_subscriber_slots = 128
+
+[stream]
+max_event_queue_size = 10000
+result_timeout_secs = 600
+
+[headers]
+protected_headers = [
+  "authorization",
+  "x-api-key",
+  "x-goog-api-key",
+  "anthropic-version",
+  "anthropic-beta",
+]
+
+[url]
+require_https = true
+block_private_ips = false
+allowed_schemes = ["https", "http"]
+```
+
+### 默认值速查表
+
+| 分组 | 字段 | 默认值 | 说明 |
+|---|---|---|---|
+| **http** | `connect_timeout_secs` | `30` | TCP 连接超时 |
+| | `request_timeout_secs` | `1800` | 请求总超时（30 分钟） |
+| | `max_sse_line_buffer_bytes` | `2097152` | SSE 缓冲区上限（2 MiB） |
+| | `max_error_body_bytes` | `65536` | 错误响应体读取上限（64 KiB） |
+| | `max_error_message_chars` | `4096` | 错误消息截断长度 |
+| **agent** | `max_messages` | `1000` | 历史消息上限（0 = 无限） |
+| | `max_parallel_tool_calls` | `16` | 并行工具执行上限 |
+| | `tool_execution_timeout_secs` | `120` | 单工具超时（2 分钟） |
+| | `validate_tool_calls` | `true` | JSON Schema 校验 |
+| | `max_subscriber_slots` | `128` | 订阅者槽位 |
+| **stream** | `max_event_queue_size` | `10000` | 事件队列上限（0 = 无限） |
+| | `result_timeout_secs` | `600` | Result 阻塞超时（10 分钟） |
+| **headers** | `protected_headers` | `["authorization", ...]` | 不可被覆盖 |
+| **url** | `require_https` | `true` | 强制 HTTPS（localhost 豁免） |
+| | `block_private_ips` | `false` | 私有 IP 阻断 |
+| | `allowed_schemes` | `["https", "http"]` | 允许的 URL scheme |
+
 ## 构建与测试
 
 ```bash
@@ -266,6 +429,7 @@ src/
 │   ├── message.rs      # Message (User/Assistant/ToolResult), StopReason
 │   ├── content.rs      # ContentBlock (Text/Thinking/ToolCall/Image)
 │   ├── context.rs      # Context, Tool, StreamOptions
+│   ├── limits.rs       # SecurityConfig, HttpLimits, AgentLimits, StreamLimits, UrlPolicy, HeaderPolicy
 │   ├── events.rs       # AssistantMessageEvent（流式事件）
 │   └── usage.rs        # Token 用量追踪
 ├── provider/
