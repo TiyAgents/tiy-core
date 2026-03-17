@@ -56,12 +56,12 @@ impl Usage {
         self.output += other.output;
         self.cache_read += other.cache_read;
         self.cache_write += other.cache_write;
-        self.total_tokens += other.total_tokens;
+        self.total_tokens = self.input + self.output + self.cache_read + self.cache_write;
         self.cost.input += other.cost.input;
         self.cost.output += other.cost.output;
         self.cost.cache_read += other.cost.cache_read;
         self.cost.cache_write += other.cost.cache_write;
-        self.cost.total += other.cost.total;
+        self.cost.recalculate_total();
     }
 
     /// Calculate the total cost.
@@ -115,8 +115,13 @@ impl UsageCost {
         }
     }
 
-    /// Calculate the total cost.
+    /// Calculate the total cost from component costs.
     pub fn total(&self) -> f64 {
         self.input + self.output + self.cache_read + self.cache_write
+    }
+
+    /// Recalculate and update the stored total from component costs.
+    pub fn recalculate_total(&mut self) {
+        self.total = self.input + self.output + self.cache_read + self.cache_write;
     }
 }

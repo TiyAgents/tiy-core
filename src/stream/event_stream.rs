@@ -1,19 +1,28 @@
-//! Simplified event stream implementation.
+//! Simplified event stream implementation using async-safe primitives.
 
 use futures::Stream;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
+
+/// Shared inner state for the event stream.
+struct EventStreamInner<T, R> {
+    /// Event queue.
+    events: Mutex<VecDeque<T>>,
+    /// Whether the stream is done.
+    done: AtomicBool,
+    /// The final result.
+    result: Mutex<Option<R>>,
+    /// Waker to notify when new events are available.
+    waker: Mutex<Option<Waker>>,
+}
 
 /// A generic event stream that supports async iteration and final result retrieval.
 pub struct EventStream<T, R = T> {
-    queue: Arc<Mutex<VecDeque<T>>>,
-    done: Arc<AtomicBool>,
-    condvar: Arc<Condvar>,
-    result: Arc<Mutex<Option<R>>>,
+    inner: Arc<EventStreamInner<T, R>>,
     is_complete: fn(&T) -> bool,
     extract_result: fn(T) -> R,
 }
@@ -26,53 +35,62 @@ where
     /// Create a new event stream.
     pub fn new(is_complete: fn(&T) -> bool, extract_result: fn(T) -> R) -> Self {
         Self {
-            queue: Arc::new(Mutex::new(VecDeque::new())),
-            done: Arc::new(AtomicBool::new(false)),
-            condvar: Arc::new(Condvar::new()),
-            result: Arc::new(Mutex::new(None)),
+            inner: Arc::new(EventStreamInner {
+                events: Mutex::new(VecDeque::new()),
+                done: AtomicBool::new(false),
+                result: Mutex::new(None),
+                waker: Mutex::new(None),
+            }),
             is_complete,
             extract_result,
         }
     }
 
+    /// Wake the stream consumer.
+    fn wake(&self) {
+        if let Some(waker) = self.inner.waker.lock().take() {
+            waker.wake();
+        }
+    }
+
     /// Push an event to the stream.
     pub fn push(&self, event: T) {
-        let mut queue = self.queue.lock();
-
-        // Check if this is a completion event
-        let is_complete = (self.is_complete)(&event);
-        if is_complete {
-            self.done.store(true, Ordering::SeqCst);
-            let result = (self.extract_result)(event);
-            *self.result.lock() = Some(result);
-            self.condvar.notify_all();
+        if self.inner.done.load(Ordering::SeqCst) {
+            // Stream is already done, ignore further events
             return;
         }
 
-        queue.push_back(event);
-        self.condvar.notify_one();
+        let is_complete = (self.is_complete)(&event);
+        if is_complete {
+            // Extract the result and store it for result() callers
+            let result = (self.extract_result)(event);
+            *self.inner.result.lock() = Some(result);
+            self.inner.done.store(true, Ordering::SeqCst);
+        } else {
+            self.inner.events.lock().push_back(event);
+        }
+        self.wake();
     }
 
     /// End the stream with an optional result.
     pub fn end(&self, result: Option<R>) {
-        self.done.store(true, Ordering::SeqCst);
-        if let Some(r) = result {
-            *self.result.lock() = Some(r);
+        if result.is_some() {
+            *self.inner.result.lock() = result;
         }
-        self.condvar.notify_all();
+        self.inner.done.store(true, Ordering::SeqCst);
+        self.wake();
     }
 
     /// Check if the stream has ended.
     pub fn is_done(&self) -> bool {
-        self.done.load(Ordering::SeqCst)
+        self.inner.done.load(Ordering::SeqCst)
     }
 
-    /// Get the final result (blocks until ready).
+    /// Get the final result (async, non-blocking wait).
     pub async fn result(&self) -> R {
-        // Wait for result
         loop {
             {
-                let mut result = self.result.lock();
+                let mut result = self.inner.result.lock();
                 if let Some(r) = result.take() {
                     return r;
                 }
@@ -90,35 +108,42 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let mut queue = this.queue.lock();
 
-        if let Some(event) = queue.pop_front() {
-            return Poll::Ready(Some(event));
+        // Try to get an event from the queue
+        {
+            let mut queue = this.inner.events.lock();
+            if let Some(event) = queue.pop_front() {
+                return Poll::Ready(Some(event));
+            }
         }
 
-        if this.done.load(Ordering::SeqCst) {
+        // Queue is empty — check if we're done
+        if this.inner.done.load(Ordering::SeqCst) {
             return Poll::Ready(None);
         }
 
-        // Wait for more events
-        let _ = this.condvar.wait(&mut queue);
-        if let Some(event) = queue.pop_front() {
-            Poll::Ready(Some(event))
-        } else if this.done.load(Ordering::SeqCst) {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
+        // Not done, no events: register waker and return Pending
+        *this.inner.waker.lock() = Some(cx.waker().clone());
+
+        // Double-check after registering waker to avoid race condition
+        {
+            let mut queue = this.inner.events.lock();
+            if let Some(event) = queue.pop_front() {
+                return Poll::Ready(Some(event));
+            }
         }
+        if this.inner.done.load(Ordering::SeqCst) {
+            return Poll::Ready(None);
+        }
+
+        Poll::Pending
     }
 }
 
 impl<T, R> Clone for EventStream<T, R> {
     fn clone(&self) -> Self {
         Self {
-            queue: Arc::clone(&self.queue),
-            done: Arc::clone(&self.done),
-            condvar: Arc::clone(&self.condvar),
-            result: Arc::clone(&self.result),
+            inner: Arc::clone(&self.inner),
             is_complete: self.is_complete,
             extract_result: self.extract_result,
         }

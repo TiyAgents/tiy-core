@@ -5,29 +5,39 @@ use std::collections::HashMap;
 
 /// Known API types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum Api {
     /// OpenAI Chat Completions API.
+    #[serde(rename = "openai-completions")]
     OpenAICompletions,
     /// Mistral Conversations API.
+    #[serde(rename = "mistral-conversations")]
     MistralConversations,
     /// OpenAI Responses API (new).
+    #[serde(rename = "openai-responses")]
     OpenAIResponses,
     /// Azure OpenAI Responses API.
+    #[serde(rename = "azure-openai-responses")]
     AzureOpenAIResponses,
     /// OpenAI Codex Responses API.
+    #[serde(rename = "openai-codex-responses")]
     OpenAICodexResponses,
     /// Anthropic Messages API.
+    #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
     /// AWS Bedrock Converse Stream API.
+    #[serde(rename = "bedrock-converse-stream")]
     BedrockConverseStream,
     /// Google Generative AI API.
+    #[serde(rename = "google-generative-ai")]
     GoogleGenerativeAi,
     /// Google Gemini CLI API.
+    #[serde(rename = "google-gemini-cli")]
     GoogleGeminiCli,
     /// Google Vertex AI API.
+    #[serde(rename = "google-vertex")]
     GoogleVertex,
     /// Ollama API (OpenAI compatible).
+    #[serde(rename = "ollama")]
     Ollama,
     /// Custom API type.
     Custom(String),
@@ -91,55 +101,81 @@ impl From<String> for Api {
 
 /// Known provider types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum Provider {
     /// Amazon Bedrock.
+    #[serde(rename = "amazon-bedrock")]
     AmazonBedrock,
     /// Anthropic.
+    #[serde(rename = "anthropic")]
     Anthropic,
     /// Google.
+    #[serde(rename = "google")]
     Google,
     /// Google Gemini CLI.
+    #[serde(rename = "google-gemini-cli")]
     GoogleGeminiCli,
     /// Google Antigravity.
+    #[serde(rename = "google-antigravity")]
     GoogleAntigravity,
     /// Google Vertex AI.
+    #[serde(rename = "google-vertex")]
     GoogleVertex,
     /// OpenAI.
+    #[serde(rename = "openai")]
     OpenAI,
     /// Azure OpenAI Responses.
+    #[serde(rename = "azure-openai-responses")]
     AzureOpenAIResponses,
     /// OpenAI Codex.
+    #[serde(rename = "openai-codex")]
     OpenAICodex,
     /// GitHub Copilot.
+    #[serde(rename = "github-copilot")]
     GitHubCopilot,
     /// xAI.
+    #[serde(rename = "xai")]
     XAI,
     /// Groq.
+    #[serde(rename = "groq")]
     Groq,
     /// Cerebras.
+    #[serde(rename = "cerebras")]
     Cerebras,
     /// OpenRouter.
+    #[serde(rename = "openrouter")]
     OpenRouter,
     /// Vercel AI Gateway.
+    #[serde(rename = "vercel-ai-gateway")]
     VercelAiGateway,
     /// ZAI.
+    #[serde(rename = "zai")]
     ZAI,
     /// Mistral.
+    #[serde(rename = "mistral")]
     Mistral,
     /// MiniMax.
+    #[serde(rename = "minimax")]
     MiniMax,
     /// MiniMax CN.
+    #[serde(rename = "minimax-cn")]
     MiniMaxCN,
     /// HuggingFace.
+    #[serde(rename = "huggingface")]
     HuggingFace,
     /// OpenCode.
+    #[serde(rename = "opencode")]
     OpenCode,
     /// OpenCode Go.
+    #[serde(rename = "opencode-go")]
     OpenCodeGo,
     /// Kimi Coding.
+    #[serde(rename = "kimi-coding")]
     KimiCoding,
+    /// Zenmux.
+    #[serde(rename = "zenmux")]
+    Zenmux,
     /// Ollama.
+    #[serde(rename = "ollama")]
     Ollama,
     /// Custom provider.
     Custom(String),
@@ -172,6 +208,7 @@ impl Provider {
             Provider::OpenCode => "opencode",
             Provider::OpenCodeGo => "opencode-go",
             Provider::KimiCoding => "kimi-coding",
+            Provider::Zenmux => "zenmux",
             Provider::Ollama => "ollama",
             Provider::Custom(s) => s.as_str(),
         }
@@ -210,6 +247,7 @@ impl From<String> for Provider {
             "opencode" => Provider::OpenCode,
             "opencode-go" => Provider::OpenCodeGo,
             "kimi-coding" => Provider::KimiCoding,
+            "zenmux" => Provider::Zenmux,
             "ollama" => Provider::Ollama,
             _ => Provider::Custom(s),
         }

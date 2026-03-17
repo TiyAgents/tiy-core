@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 /// Text content block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextContent {
-    /// The text content.
-    #[serde(rename = "type")]
-    pub content_type: String,
     /// The actual text.
     pub text: String,
     /// Optional signature for OpenAI responses.
@@ -18,7 +15,6 @@ pub struct TextContent {
 impl Default for TextContent {
     fn default() -> Self {
         Self {
-            content_type: "text".to_string(),
             text: String::new(),
             text_signature: None,
         }
@@ -29,7 +25,6 @@ impl TextContent {
     /// Create a new text content.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
-            content_type: "text".to_string(),
             text: text.into(),
             text_signature: None,
         }
@@ -39,9 +34,6 @@ impl TextContent {
 /// Thinking content block (Extended Thinking).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThinkingContent {
-    /// Content type identifier.
-    #[serde(rename = "type")]
-    pub content_type: String,
     /// The thinking/reasoning content.
     pub thinking: String,
     /// Optional signature for thinking blocks.
@@ -55,7 +47,6 @@ pub struct ThinkingContent {
 impl Default for ThinkingContent {
     fn default() -> Self {
         Self {
-            content_type: "thinking".to_string(),
             thinking: String::new(),
             thinking_signature: None,
             redacted: false,
@@ -67,7 +58,6 @@ impl ThinkingContent {
     /// Create a new thinking content.
     pub fn new(thinking: impl Into<String>) -> Self {
         Self {
-            content_type: "thinking".to_string(),
             thinking: thinking.into(),
             thinking_signature: None,
             redacted: false,
@@ -78,9 +68,6 @@ impl ThinkingContent {
 /// Image content block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImageContent {
-    /// Content type identifier.
-    #[serde(rename = "type")]
-    pub content_type: String,
     /// Base64 encoded image data.
     pub data: String,
     /// MIME type of the image (e.g., "image/jpeg", "image/png").
@@ -91,7 +78,6 @@ impl ImageContent {
     /// Create a new image content.
     pub fn new(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
         Self {
-            content_type: "image".to_string(),
             data: data.into(),
             mime_type: mime_type.into(),
         }
@@ -101,9 +87,6 @@ impl ImageContent {
 /// Tool call content block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Content type identifier.
-    #[serde(rename = "type")]
-    pub content_type: String,
     /// Unique identifier for this tool call.
     pub id: String,
     /// Name of the tool to call.
@@ -119,7 +102,6 @@ impl ToolCall {
     /// Create a new tool call.
     pub fn new(id: impl Into<String>, name: impl Into<String>, arguments: serde_json::Value) -> Self {
         Self {
-            content_type: "toolCall".to_string(),
             id: id.into(),
             name: name.into(),
             arguments,

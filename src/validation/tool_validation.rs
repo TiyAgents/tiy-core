@@ -2,7 +2,7 @@
 
 use crate::types::Tool;
 use crate::types::ToolCall;
-use jsonschema::{Draft, JSONSchema, ValidationError};
+use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 
 /// Validate tool call arguments against tool schema.

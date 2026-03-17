@@ -1,6 +1,6 @@
 //! Provider registry for managing LLM API providers.
 
-use crate::provider::{ArcProvider, LLMProvider};
+use crate::provider::ArcProvider;
 use crate::types::Api;
 use parking_lot::RwLock;
 use std::collections::HashMap;

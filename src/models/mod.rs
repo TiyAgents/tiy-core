@@ -2,8 +2,6 @@
 
 mod predefined;
 
-pub use predefined::*;
-
 use crate::types::{Api, Model, Provider};
 use std::collections::HashMap;
 
@@ -187,6 +185,10 @@ fn get_google_models() -> Vec<Model> {
     ]
 }
 
+/// Global model registry (single instance shared by all functions).
+static GLOBAL_MODEL_REGISTRY: once_cell::sync::Lazy<ModelRegistry> =
+    once_cell::sync::Lazy::new(ModelRegistry::with_predefined);
+
 /// Get a model by provider and ID.
 pub fn get_model(provider: impl Into<String>, model_id: impl Into<String>) -> Option<Model> {
     let provider = provider.into();
@@ -195,17 +197,10 @@ pub fn get_model(provider: impl Into<String>, model_id: impl Into<String>) -> Op
     // Try to parse provider
     let provider_enum: Provider = provider.clone().into();
 
-    // Use global registry
-    static GLOBAL_REGISTRY: once_cell::sync::Lazy<ModelRegistry> =
-        once_cell::sync::Lazy::new(ModelRegistry::with_predefined);
-
-    GLOBAL_REGISTRY.get(&provider_enum, &model_id).cloned()
+    GLOBAL_MODEL_REGISTRY.get(&provider_enum, &model_id).cloned()
 }
 
 /// Get all providers.
 pub fn get_providers() -> Vec<String> {
-    static GLOBAL_REGISTRY: once_cell::sync::Lazy<ModelRegistry> =
-        once_cell::sync::Lazy::new(ModelRegistry::with_predefined);
-
-    GLOBAL_REGISTRY.providers()
+    GLOBAL_MODEL_REGISTRY.providers()
 }
