@@ -3,6 +3,9 @@
 //! Implements streaming via Google's SSE protocol with JSON chunks containing
 //! response candidates with parts-based content format.
 
+/// Default base URL for Google Generative AI API.
+const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+
 use crate::provider::LLMProvider;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
@@ -436,7 +439,9 @@ async fn run_stream(
     };
 
     // Google API URL: {base_url}/models/{model_id}:streamGenerateContent?alt=sse
-    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let base = options.base_url.as_deref()
+        .or(model.base_url.as_deref())
+        .unwrap_or(DEFAULT_BASE_URL);
     let url = format!(
         "{}/models/{}:streamGenerateContent?alt=sse",
         base, model.id

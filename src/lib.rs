@@ -21,7 +21,7 @@
 //!         name: "GPT-4o Mini".to_string(),
 //!         api: None,
 //!         provider: Provider::OpenAI,
-//!         base_url: "https://api.openai.com/v1".to_string(),
+//!         base_url: Some("https://api.openai.com/v1".to_string()),
 //!         reasoning: false,
 //!         input: vec![InputType::Text, InputType::Image],
 //!         cost: Cost::default(),

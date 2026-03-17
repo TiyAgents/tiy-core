@@ -86,7 +86,7 @@ fn main() {
     println!("  Provider: {}", model.provider);
     println!(
         "  Base URL: {}",
-        base_url.as_deref().unwrap_or(&model.base_url)
+        base_url.as_deref().or(model.base_url.as_deref()).unwrap_or("(default)")
     );
     println!("  Prompt: \"{}\"", "What is the capital of France?");
 

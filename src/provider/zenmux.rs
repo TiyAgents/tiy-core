@@ -87,8 +87,10 @@ impl LLMProvider for ZenmuxProvider {
         if Self::is_google_model(&model.id) {
             // Route to Google Generative AI protocol
             let mut m = model.clone();
-            if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
-                m.base_url = ZENMUX_GOOGLE_BASE_URL.to_string();
+            let needs_default = m.base_url.as_ref()
+                .is_none_or(|url| url.contains("zenmux.ai") || url.is_empty());
+            if needs_default {
+                m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
             }
             m.api = Some(Api::GoogleGenerativeAi);
 
@@ -97,8 +99,10 @@ impl LLMProvider for ZenmuxProvider {
         } else {
             // Route to Anthropic Messages protocol
             let mut m = model.clone();
-            if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
-                m.base_url = ZENMUX_ANTHROPIC_BASE_URL.to_string();
+            let needs_default = m.base_url.as_ref()
+                .is_none_or(|url| url.contains("zenmux.ai") || url.is_empty());
+            if needs_default {
+                m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
             }
             m.api = Some(Api::AnthropicMessages);
 
@@ -120,8 +124,10 @@ impl LLMProvider for ZenmuxProvider {
 
         if Self::is_google_model(&model.id) {
             let mut m = model.clone();
-            if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
-                m.base_url = ZENMUX_GOOGLE_BASE_URL.to_string();
+            let needs_default = m.base_url.as_ref()
+                .is_none_or(|url| url.contains("zenmux.ai") || url.is_empty());
+            if needs_default {
+                m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
             }
             m.api = Some(Api::GoogleGenerativeAi);
 
@@ -129,8 +135,10 @@ impl LLMProvider for ZenmuxProvider {
             provider.stream_simple(&m, context, opts)
         } else {
             let mut m = model.clone();
-            if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
-                m.base_url = ZENMUX_ANTHROPIC_BASE_URL.to_string();
+            let needs_default = m.base_url.as_ref()
+                .is_none_or(|url| url.contains("zenmux.ai") || url.is_empty());
+            if needs_default {
+                m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
             }
             m.api = Some(Api::AnthropicMessages);
 

@@ -1,5 +1,8 @@
 //! OpenAI Chat Completions API provider.
 
+/// Default base URL for OpenAI Chat Completions API.
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
 use crate::provider::LLMProvider;
 use crate::types::{StreamOptions, SimpleStreamOptions};
 use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
@@ -571,7 +574,9 @@ async fn run_stream(
         reasoning_effort: None,
     };
 
-    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let base = options.base_url.as_deref()
+        .or(model.base_url.as_deref())
+        .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/chat/completions", base);
 
     tracing::info!(

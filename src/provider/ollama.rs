@@ -48,7 +48,7 @@ impl LLMProvider for OllamaProvider {
         // Ollama is OpenAI-compatible, so we can use the OpenAI Completions provider
         // with the Ollama base URL
         let ollama_model = Model {
-            base_url: self.base_url.clone(),
+            base_url: Some(self.base_url.clone()),
             ..model.clone()
         };
 
@@ -63,7 +63,7 @@ impl LLMProvider for OllamaProvider {
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
         let ollama_model = Model {
-            base_url: self.base_url.clone(),
+            base_url: Some(self.base_url.clone()),
             ..model.clone()
         };
 

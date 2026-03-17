@@ -381,8 +381,9 @@ pub struct Model {
     pub api: Option<Api>,
     /// Provider name.
     pub provider: Provider,
-    /// Base URL for API calls.
-    pub base_url: String,
+    /// Base URL for API calls. When None, the provider uses its own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     /// Whether this model supports reasoning/thinking.
     pub reasoning: bool,
     /// Supported input types.
@@ -509,7 +510,6 @@ impl ModelBuilder {
         let id = self.id.ok_or("id is required")?;
         let name = self.name.ok_or("name is required")?;
         let provider = self.provider.ok_or("provider is required")?;
-        let base_url = self.base_url.ok_or("base_url is required")?;
         let context_window = self.context_window.ok_or("context_window is required")?;
         let max_tokens = self.max_tokens.ok_or("max_tokens is required")?;
 
@@ -518,7 +518,7 @@ impl ModelBuilder {
             name,
             api: self.api,
             provider,
-            base_url,
+            base_url: self.base_url,
             reasoning: self.reasoning,
             input: self.input,
             cost: self.cost,

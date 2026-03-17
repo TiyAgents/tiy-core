@@ -4,6 +4,9 @@
 //! response.output_item.added → response.output_text.delta / response.function_call_arguments.delta
 //! → response.output_item.done → response.completed
 
+/// Default base URL for OpenAI Responses API.
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
 use crate::provider::LLMProvider;
 use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
 use crate::types::*;
@@ -381,7 +384,9 @@ async fn run_stream(
         reasoning: None,
     };
 
-    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let base = options.base_url.as_deref()
+        .or(model.base_url.as_deref())
+        .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/responses", base);
 
     tracing::info!(

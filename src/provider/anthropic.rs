@@ -3,6 +3,9 @@
 //! Implements streaming via Anthropic's SSE protocol with events:
 //! message_start → content_block_start → content_block_delta → content_block_stop → message_delta → message_stop
 
+/// Default base URL for Anthropic Messages API.
+const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
+
 use crate::provider::LLMProvider;
 use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
 use crate::types::*;
@@ -468,7 +471,9 @@ async fn run_stream(
         thinking: None, // Thinking params can be set via SimpleStreamOptions
     };
 
-    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let base = options.base_url.as_deref()
+        .or(model.base_url.as_deref())
+        .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/messages", base);
 
     tracing::info!(
