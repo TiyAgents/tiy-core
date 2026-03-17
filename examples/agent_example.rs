@@ -1,7 +1,6 @@
 //! Agent example for tiy-core.
 
 use tiy_core::agent::Agent;
-use tiy_core::types::{Api, Provider};
 
 fn main() {
     // Create an agent with default model

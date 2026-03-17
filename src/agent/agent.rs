@@ -1,24 +1,44 @@
-//! Agent implementation.
+//! Agent implementation with full conversation loop.
 
-use crate::agent::{AgentConfig, AgentContext, AgentEvent, AgentMessage, AgentState, AgentTool, ToolExecutionMode};
+use crate::agent::{AgentConfig, AgentEvent, AgentMessage, AgentState, AgentTool, AgentToolResult, ToolExecutionMode};
+use crate::provider::{ArcProvider, get_provider};
+use crate::stream::AssistantMessageEventStream;
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
+use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Agent for managing stateful conversations.
+/// Default maximum number of turns (LLM calls) per prompt.
+const DEFAULT_MAX_TURNS: usize = 25;
+
+/// Tool executor function type.
+pub type ToolExecutor = Arc<dyn Fn(&str, &str, &serde_json::Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>> + Send + Sync>;
+
+/// Agent for managing stateful conversations with LLM providers.
 pub struct Agent {
     /// Agent state.
     state: Arc<AgentState>,
     /// Configuration.
     config: RwLock<AgentConfig>,
+    /// Provider (optional, resolved from registry if not set).
+    provider: RwLock<Option<ArcProvider>>,
+    /// Tool executor callback.
+    tool_executor: RwLock<Option<ToolExecutor>>,
+    /// Maximum turns per prompt.
+    max_turns: RwLock<usize>,
     /// Steering message queue.
     steering_queue: Mutex<VecDeque<AgentMessage>>,
     /// Follow-up message queue.
     follow_up_queue: Mutex<VecDeque<AgentMessage>>,
-    /// Event subscribers.
-    subscribers: RwLock<Vec<Box<dyn Fn(&AgentEvent) + Send + Sync>>>,
+    /// Event subscribers (shared via Arc for safe unsubscribe).
+    subscribers: Arc<RwLock<Vec<Option<Box<dyn Fn(&AgentEvent) + Send + Sync>>>>>,
+    /// Abort flag.
+    abort_flag: Arc<AtomicBool>,
+    /// API key for the provider.
+    api_key: RwLock<Option<String>>,
 }
 
 impl Agent {
@@ -36,9 +56,14 @@ impl Agent {
                 .max_tokens(16384)
                 .build()
                 .unwrap())),
+            provider: RwLock::new(None),
+            tool_executor: RwLock::new(None),
+            max_turns: RwLock::new(DEFAULT_MAX_TURNS),
             steering_queue: Mutex::new(VecDeque::new()),
             follow_up_queue: Mutex::new(VecDeque::new()),
-            subscribers: RwLock::new(Vec::new()),
+            subscribers: Arc::new(RwLock::new(Vec::new())),
+            abort_flag: Arc::new(AtomicBool::new(false)),
+            api_key: RwLock::new(None),
         }
     }
 
@@ -50,26 +75,51 @@ impl Agent {
         agent
     }
 
-    /// Subscribe to agent events.
+    /// Set the LLM provider explicitly.
+    pub fn set_provider(&self, provider: ArcProvider) {
+        *self.provider.write() = Some(provider);
+    }
+
+    /// Set the API key.
+    pub fn set_api_key(&self, key: impl Into<String>) {
+        *self.api_key.write() = Some(key.into());
+    }
+
+    /// Set the tool executor callback.
+    ///
+    /// The executor receives (tool_name, tool_call_id, arguments) and returns an AgentToolResult.
+    pub fn set_tool_executor<F, Fut>(&self, executor: F)
+    where
+        F: Fn(&str, &str, &serde_json::Value) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = AgentToolResult> + Send + 'static,
+    {
+        let executor = Arc::new(move |name: &str, id: &str, args: &serde_json::Value| {
+            let fut = executor(name, id, args);
+            Box::pin(fut) as std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
+        });
+        *self.tool_executor.write() = Some(executor);
+    }
+
+    /// Set maximum turns per prompt.
+    pub fn set_max_turns(&self, max: usize) {
+        *self.max_turns.write() = max;
+    }
+
+    /// Subscribe to agent events. Returns an unsubscribe closure.
     pub fn subscribe<F>(&self, callback: F) -> impl Fn()
     where
         F: Fn(&AgentEvent) + Send + Sync + 'static,
     {
         let mut subscribers = self.subscribers.write();
         let index = subscribers.len();
-        subscribers.push(Box::new(callback));
+        subscribers.push(Some(Box::new(callback)));
         drop(subscribers);
 
-        let subs_ptr = Arc::new(&self.subscribers as *const RwLock<Vec<Box<dyn Fn(&AgentEvent) + Send + Sync>>>);
-
+        let subs = Arc::clone(&self.subscribers);
         move || {
-            unsafe {
-                let subs = &*(*subs_ptr);
-                if let Some(mut guard) = subs.try_write() {
-                    if index < guard.len() {
-                        guard.remove(index);
-                    }
-                }
+            let mut guard = subs.write();
+            if index < guard.len() {
+                guard[index] = None; // Mark slot as removed (tombstone)
             }
         }
     }
@@ -77,7 +127,7 @@ impl Agent {
     /// Emit an event to all subscribers.
     fn emit(&self, event: AgentEvent) {
         let subscribers = self.subscribers.read();
-        for callback in subscribers.iter() {
+        for callback in subscribers.iter().flatten() {
             callback(&event);
         }
     }
@@ -166,17 +216,363 @@ impl Agent {
         !self.steering_queue.lock().is_empty() || !self.follow_up_queue.lock().is_empty()
     }
 
-    /// Get steering messages.
-    fn get_steering_messages(&self) -> Vec<AgentMessage> {
+    /// Get steering messages (drains the queue).
+    pub(crate) fn get_steering_messages(&self) -> Vec<AgentMessage> {
         self.steering_queue.lock().drain(..).collect()
     }
 
-    /// Get follow-up messages.
-    fn get_follow_up_messages(&self) -> Vec<AgentMessage> {
+    /// Get follow-up messages (drains the queue).
+    pub(crate) fn get_follow_up_messages(&self) -> Vec<AgentMessage> {
         self.follow_up_queue.lock().drain(..).collect()
     }
 
+    // ============================================================================
+    // Core Agent Loop
+    // ============================================================================
+
+    /// Build the context from current agent state.
+    fn build_context(&self) -> Context {
+        let system_prompt = self.state.system_prompt.read().clone();
+        let messages = self.state.messages.read().clone();
+        let tools = self.state.tools.read().clone();
+
+        let mut context = if system_prompt.is_empty() {
+            Context::new()
+        } else {
+            Context::with_system_prompt(&system_prompt)
+        };
+
+        // Convert AgentMessages to Messages
+        for msg in &messages {
+            match msg {
+                AgentMessage::User(m) => context.add_message(Message::User(m.clone())),
+                AgentMessage::Assistant(m) => context.add_message(Message::Assistant(m.clone())),
+                AgentMessage::ToolResult(m) => context.add_message(Message::ToolResult(m.clone())),
+            }
+        }
+
+        // Add tools
+        if !tools.is_empty() {
+            let tool_defs: Vec<Tool> = tools.iter().map(|t| t.as_tool()).collect();
+            context.set_tools(tool_defs);
+        }
+
+        context
+    }
+
+    /// Resolve the provider to use.
+    fn resolve_provider(&self) -> Result<ArcProvider, AgentError> {
+        // First check explicit provider
+        if let Some(ref provider) = *self.provider.read() {
+            return Ok(provider.clone());
+        }
+
+        // Then try registry by API type
+        let model = self.config.read().model.clone();
+        if let Some(provider) = get_provider(&model.api) {
+            return Ok(provider);
+        }
+
+        Err(AgentError::ProviderError(format!(
+            "No provider registered for API type: {}",
+            model.api.as_str()
+        )))
+    }
+
+    /// Build stream options.
+    fn build_stream_options(&self) -> StreamOptions {
+        StreamOptions {
+            api_key: self.api_key.read().clone(),
+            ..Default::default()
+        }
+    }
+
+    /// Run a single LLM turn: call provider, consume stream, return AssistantMessage.
+    async fn run_turn(&self, provider: &ArcProvider) -> Result<AssistantMessage, AgentError> {
+        let context = self.build_context();
+        let model = self.config.read().model.clone();
+        let options = self.build_stream_options();
+
+        // Call provider to create a stream
+        let mut stream: AssistantMessageEventStream = provider.stream(&model, &context, options);
+
+        // Process stream events
+        while let Some(event) = stream.next().await {
+            // Check abort
+            if self.abort_flag.load(Ordering::SeqCst) {
+                return Err(AgentError::Other("Aborted".to_string()));
+            }
+
+            // Check for steering messages
+            let steering = self.get_steering_messages();
+            if !steering.is_empty() {
+                // Apply steering: add steering messages to state
+                for steer_msg in steering {
+                    self.state.add_message(steer_msg);
+                }
+                // Abort current turn and restart
+                return Err(AgentError::Other("Steered".to_string()));
+            }
+
+            // Forward stream event to subscribers
+            match &event {
+                AssistantMessageEvent::Start { partial } => {
+                    *self.state.stream_message.write() = Some(AgentMessage::Assistant(partial.clone()));
+                    self.emit(AgentEvent::MessageUpdate {
+                        message: AgentMessage::Assistant(partial.clone()),
+                        assistant_event: event.clone(),
+                    });
+                }
+                AssistantMessageEvent::TextDelta { .. }
+                | AssistantMessageEvent::ThinkingDelta { .. }
+                | AssistantMessageEvent::ToolCallDelta { .. } => {
+                    if let Some(partial) = event.partial_message() {
+                        *self.state.stream_message.write() = Some(AgentMessage::Assistant(partial.clone()));
+                        self.emit(AgentEvent::MessageUpdate {
+                            message: AgentMessage::Assistant(partial.clone()),
+                            assistant_event: event.clone(),
+                        });
+                    }
+                }
+                _ => {
+                    // Forward all other events too
+                    if let Some(partial) = event.partial_message() {
+                        self.emit(AgentEvent::MessageUpdate {
+                            message: AgentMessage::Assistant(partial.clone()),
+                            assistant_event: event.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Get the final result
+        let result = stream.result().await;
+
+        // Clear streaming message
+        *self.state.stream_message.write() = None;
+
+        if result.stop_reason == StopReason::Error {
+            let error_msg = result.error_message.clone().unwrap_or_else(|| "Unknown error".to_string());
+            return Err(AgentError::ProviderError(error_msg));
+        }
+
+        Ok(result)
+    }
+
+    /// Execute tool calls from an assistant message.
+    async fn execute_tool_calls(
+        &self,
+        assistant_msg: &AssistantMessage,
+    ) -> Vec<ToolResultMessage> {
+        let tool_calls = assistant_msg.tool_calls();
+        if tool_calls.is_empty() {
+            return Vec::new();
+        }
+
+        let executor = self.tool_executor.read().clone();
+        let execution_mode = self.config.read().tool_execution;
+
+        let mut results = Vec::new();
+
+        match execution_mode {
+            ToolExecutionMode::Parallel => {
+                let mut futures = Vec::new();
+
+                for tc in &tool_calls {
+                    let tc_id = tc.id.clone();
+                    let tc_name = tc.name.clone();
+                    let tc_args = tc.arguments.clone();
+
+                    // Emit tool execution start
+                    self.emit(AgentEvent::ToolExecutionStart {
+                        tool_call_id: tc_id.clone(),
+                        tool_name: tc_name.clone(),
+                        args: tc_args.clone(),
+                    });
+
+                    // Track pending
+                    self.state.pending_tool_calls.write().insert(tc_id.clone());
+
+                    let executor = executor.clone();
+                    futures.push(async move {
+                        let result = if let Some(ref exec) = executor {
+                            exec(&tc_name, &tc_id, &tc_args).await
+                        } else {
+                            AgentToolResult::error(format!("No tool executor registered for '{}'", tc_name))
+                        };
+                        (tc_id, tc_name, result)
+                    });
+                }
+
+                let results_vec = futures::future::join_all(futures).await;
+
+                for (tc_id, tc_name, result) in results_vec {
+                    let is_error = result.content.iter().any(|b| {
+                        b.as_text().map(|t| t.text.starts_with("No tool executor")).unwrap_or(false)
+                    });
+
+                    let result_json = serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
+                    self.emit(AgentEvent::ToolExecutionEnd {
+                        tool_call_id: tc_id.clone(),
+                        tool_name: tc_name.clone(),
+                        result: result_json,
+                        is_error,
+                    });
+
+                    self.state.pending_tool_calls.write().remove(&tc_id);
+
+                    results.push(ToolResultMessage::new(
+                        tc_id, tc_name, result.content, is_error,
+                    ));
+                }
+            }
+            ToolExecutionMode::Sequential => {
+                for tc in &tool_calls {
+                    if self.abort_flag.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    let tc_id = tc.id.clone();
+                    let tc_name = tc.name.clone();
+                    let tc_args = tc.arguments.clone();
+
+                    self.emit(AgentEvent::ToolExecutionStart {
+                        tool_call_id: tc_id.clone(),
+                        tool_name: tc_name.clone(),
+                        args: tc_args.clone(),
+                    });
+
+                    self.state.pending_tool_calls.write().insert(tc_id.clone());
+
+                    let result = if let Some(ref exec) = executor {
+                        exec(&tc_name, &tc_id, &tc_args).await
+                    } else {
+                        AgentToolResult::error(format!("No tool executor registered for '{}'", tc_name))
+                    };
+
+                    let is_error = result.content.iter().any(|b| {
+                        b.as_text().map(|t| t.text.starts_with("No tool executor")).unwrap_or(false)
+                    });
+
+                    let result_json = serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
+                    self.emit(AgentEvent::ToolExecutionEnd {
+                        tool_call_id: tc_id.clone(),
+                        tool_name: tc_name.clone(),
+                        result: result_json,
+                        is_error,
+                    });
+
+                    self.state.pending_tool_calls.write().remove(&tc_id);
+
+                    results.push(ToolResultMessage::new(
+                        tc_id, tc_name, result.content, is_error,
+                    ));
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Run the agent loop: stream LLM → check tool calls → execute → loop.
+    async fn run_loop(&self) -> Result<Vec<AgentMessage>, AgentError> {
+        let provider = self.resolve_provider()?;
+        let max_turns = *self.max_turns.read();
+        let mut new_messages = Vec::new();
+        let mut turn_count = 0;
+
+        loop {
+            // Check abort
+            if self.abort_flag.load(Ordering::SeqCst) {
+                self.emit(AgentEvent::AgentEnd { messages: new_messages.clone() });
+                return Err(AgentError::Other("Aborted".to_string()));
+            }
+
+            // Check max turns
+            if turn_count >= max_turns {
+                break;
+            }
+
+            self.emit(AgentEvent::TurnStart);
+
+            // Run one LLM turn
+            let assistant_result = self.run_turn(&provider).await;
+
+            match assistant_result {
+                Ok(assistant_msg) => {
+                    // Add assistant message to state and new_messages
+                    let agent_msg = AgentMessage::Assistant(assistant_msg.clone());
+                    self.state.add_message(agent_msg.clone());
+                    new_messages.push(agent_msg.clone());
+
+                    self.emit(AgentEvent::MessageStart { message: agent_msg.clone() });
+                    self.emit(AgentEvent::MessageEnd { message: agent_msg.clone() });
+
+                    // Check if there are tool calls
+                    if assistant_msg.has_tool_calls() && assistant_msg.stop_reason == StopReason::ToolUse {
+                        // Execute tools
+                        let tool_results = self.execute_tool_calls(&assistant_msg).await;
+
+                        // Add tool results to state and new_messages
+                        for result in &tool_results {
+                            let result_msg = AgentMessage::ToolResult(result.clone());
+                            self.state.add_message(result_msg.clone());
+                            new_messages.push(result_msg);
+                        }
+
+                        self.emit(AgentEvent::TurnEnd {
+                            message: agent_msg,
+                            tool_results,
+                        });
+
+                        // Check for follow-up messages
+                        let follow_ups = self.get_follow_up_messages();
+                        for msg in follow_ups {
+                            self.state.add_message(msg.clone());
+                            new_messages.push(msg);
+                        }
+
+                        turn_count += 1;
+                        continue;
+                    } else {
+                        // No tool calls — conversation turn is complete
+                        self.emit(AgentEvent::TurnEnd {
+                            message: agent_msg,
+                            tool_results: Vec::new(),
+                        });
+
+                        // Check for follow-up messages
+                        let follow_ups = self.get_follow_up_messages();
+                        if !follow_ups.is_empty() {
+                            for msg in follow_ups {
+                                self.state.add_message(msg.clone());
+                                new_messages.push(msg);
+                            }
+                            turn_count += 1;
+                            continue;
+                        }
+
+                        break;
+                    }
+                }
+                Err(AgentError::Other(ref msg)) if msg == "Steered" => {
+                    turn_count += 1;
+                    continue;
+                }
+                Err(e) => {
+                    *self.state.error.write() = Some(e.to_string());
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(new_messages)
+    }
+
+    // ============================================================================
     // Prompt methods
+    // ============================================================================
 
     /// Send a prompt to the agent.
     pub async fn prompt(&self, message: impl Into<AgentMessage>) -> Result<Vec<AgentMessage>, AgentError> {
@@ -186,32 +582,37 @@ impl Agent {
 
         let message = message.into();
         self.state.set_streaming(true);
+        self.abort_flag.store(false, Ordering::SeqCst);
 
-        // Add message to state
+        // Add user message to state
         self.state.add_message(message.clone());
 
-        // Emit events
+        // Emit start event
         self.emit(AgentEvent::AgentStart);
-        self.emit(AgentEvent::TurnStart);
-        self.emit(AgentEvent::MessageStart { message: message.clone() });
-        self.emit(AgentEvent::MessageEnd { message });
 
-        // TODO: Actually run the agent loop
-        // For now, just return the messages
-        let messages = self.state.messages.read().clone();
-        self.emit(AgentEvent::AgentEnd { messages: messages.clone() });
+        // Run the agent loop
+        let result = self.run_loop().await;
+
         self.state.set_streaming(false);
 
-        Ok(messages)
+        match result {
+            Ok(messages) => {
+                self.emit(AgentEvent::AgentEnd { messages: messages.clone() });
+                Ok(messages)
+            }
+            Err(e) => {
+                self.emit(AgentEvent::AgentEnd { messages: Vec::new() });
+                Err(e)
+            }
+        }
     }
 
-    /// Continue from current state.
+    /// Continue from current state (e.g., after adding tool results externally).
     pub async fn continue_(&self) -> Result<Vec<AgentMessage>, AgentError> {
         if self.state.is_streaming() {
             return Err(AgentError::AlreadyStreaming);
         }
 
-        // Check last message
         let messages = self.state.messages.read();
         if messages.is_empty() {
             return Err(AgentError::NoMessages);
@@ -223,16 +624,29 @@ impl Agent {
         drop(messages);
 
         self.state.set_streaming(true);
+        self.abort_flag.store(false, Ordering::SeqCst);
 
-        // TODO: Actually run the agent loop
-        let messages = self.state.messages.read().clone();
+        self.emit(AgentEvent::AgentStart);
+
+        let result = self.run_loop().await;
+
         self.state.set_streaming(false);
 
-        Ok(messages)
+        match result {
+            Ok(messages) => {
+                self.emit(AgentEvent::AgentEnd { messages: messages.clone() });
+                Ok(messages)
+            }
+            Err(e) => {
+                self.emit(AgentEvent::AgentEnd { messages: Vec::new() });
+                Err(e)
+            }
+        }
     }
 
     /// Abort current operation.
     pub fn abort(&self) {
+        self.abort_flag.store(true, Ordering::SeqCst);
         self.state.set_streaming(false);
         self.clear_all_queues();
     }

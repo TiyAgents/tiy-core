@@ -2,11 +2,10 @@
 
 use crate::thinking::ThinkingLevel;
 use crate::types::Model;
-use crate::agent::{AgentMessage, AgentTool, ToolExecutionMode};
+use crate::agent::{AgentMessage, AgentTool};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 /// Agent state.
 #[derive(Debug)]

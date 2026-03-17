@@ -5,5 +5,5 @@ mod agent;
 mod state;
 
 pub use types::*;
-pub use agent::Agent;
+pub use agent::{Agent, AgentError};
 pub use state::AgentState;
