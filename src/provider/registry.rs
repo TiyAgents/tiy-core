@@ -1,11 +1,11 @@
-//! Provider registry for managing LLM API providers.
+//! Provider registry for managing LLM providers.
 
 use crate::provider::ArcProvider;
-use crate::types::Api;
+use crate::types::Provider;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-/// Provider registry for managing LLM API providers.
+/// Provider registry for managing LLM providers.
 pub struct ProviderRegistry {
     providers: RwLock<HashMap<String, ArcProvider>>,
 }
@@ -20,27 +20,27 @@ impl ProviderRegistry {
 
     /// Register a provider.
     pub fn register(&self, provider: ArcProvider) {
-        let api = provider.api_type();
+        let provider_type = provider.provider_type();
         let mut providers = self.providers.write();
-        providers.insert(api.as_str().to_string(), provider);
+        providers.insert(provider_type.as_str().to_string(), provider);
     }
 
-    /// Get a provider by API type.
-    pub fn get(&self, api: &Api) -> Option<ArcProvider> {
+    /// Get a provider by provider type.
+    pub fn get(&self, provider: &Provider) -> Option<ArcProvider> {
         let providers = self.providers.read();
-        providers.get(api.as_str()).cloned()
+        providers.get(provider.as_str()).cloned()
     }
 
-    /// Get a provider by API type string.
-    pub fn get_by_name(&self, api_name: &str) -> Option<ArcProvider> {
+    /// Get a provider by provider type string.
+    pub fn get_by_name(&self, provider_name: &str) -> Option<ArcProvider> {
         let providers = self.providers.read();
-        providers.get(api_name).cloned()
+        providers.get(provider_name).cloned()
     }
 
-    /// Unregister a provider by API type.
-    pub fn unregister(&self, api: &Api) {
+    /// Unregister a provider by provider type.
+    pub fn unregister(&self, provider: &Provider) {
         let mut providers = self.providers.write();
-        providers.remove(api.as_str());
+        providers.remove(provider.as_str());
     }
 
     /// Clear all providers.
@@ -49,16 +49,16 @@ impl ProviderRegistry {
         providers.clear();
     }
 
-    /// Get all registered API types.
-    pub fn api_types(&self) -> Vec<String> {
+    /// Get all registered provider types.
+    pub fn provider_types(&self) -> Vec<String> {
         let providers = self.providers.read();
         providers.keys().cloned().collect()
     }
 
     /// Check if a provider is registered.
-    pub fn contains(&self, api: &Api) -> bool {
+    pub fn contains(&self, provider: &Provider) -> bool {
         let providers = self.providers.read();
-        providers.contains_key(api.as_str())
+        providers.contains_key(provider.as_str())
     }
 }
 
@@ -83,8 +83,8 @@ pub fn register_provider(provider: ArcProvider) {
 }
 
 /// Get a provider from the global registry.
-pub fn get_provider(api: &Api) -> Option<ArcProvider> {
-    GLOBAL_REGISTRY.get(api)
+pub fn get_provider(provider: &Provider) -> Option<ArcProvider> {
+    GLOBAL_REGISTRY.get(provider)
 }
 
 /// Clear all providers from the global registry.

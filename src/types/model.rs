@@ -376,8 +376,9 @@ pub struct Model {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// API type.
-    pub api: Api,
+    /// API type (optional — determined by Provider implementation if not set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<Api>,
     /// Provider name.
     pub provider: Provider,
     /// Base URL for API calls.
@@ -507,7 +508,6 @@ impl ModelBuilder {
     pub fn build(self) -> Result<Model, String> {
         let id = self.id.ok_or("id is required")?;
         let name = self.name.ok_or("name is required")?;
-        let api = self.api.ok_or("api is required")?;
         let provider = self.provider.ok_or("provider is required")?;
         let base_url = self.base_url.ok_or("base_url is required")?;
         let context_window = self.context_window.ok_or("context_window is required")?;
@@ -516,7 +516,7 @@ impl ModelBuilder {
         Ok(Model {
             id,
             name,
-            api,
+            api: self.api,
             provider,
             base_url,
             reasoning: self.reasoning,

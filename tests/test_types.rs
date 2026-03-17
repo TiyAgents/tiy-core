@@ -166,7 +166,7 @@ fn test_model_builder_success() {
     let model = model.unwrap();
     assert_eq!(model.id, "gpt-4o");
     assert_eq!(model.name, "GPT-4o");
-    assert_eq!(model.api, Api::OpenAICompletions);
+    assert_eq!(model.api, Some(Api::OpenAICompletions));
     assert_eq!(model.provider, Provider::OpenAI);
     assert!(!model.reasoning);
     assert!(model.supports_text());
@@ -187,7 +187,7 @@ fn test_model_builder_missing_required_fields() {
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "id is required");
 
-    // Missing api
+    // api is now optional (Option<Api>), so building without it should succeed
     let result = Model::builder()
         .id("test")
         .name("test")
@@ -196,8 +196,8 @@ fn test_model_builder_missing_required_fields() {
         .context_window(1000)
         .max_tokens(100)
         .build();
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "api is required");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().api, None);
 }
 
 #[test]

@@ -120,19 +120,19 @@ async fn mock_openai_server(text: &str) -> MockServer {
 #[test]
 fn test_minimax_api_type() {
     let provider = MiniMaxProvider::new();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::MiniMax);
 }
 
 #[test]
 fn test_minimax_with_api_key() {
     let provider = MiniMaxProvider::with_api_key("test-key");
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::MiniMax);
 }
 
 #[test]
 fn test_minimax_default() {
     let provider = MiniMaxProvider::default();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::MiniMax);
 }
 
 #[tokio::test]
@@ -159,19 +159,19 @@ async fn test_minimax_stream_delegates_to_anthropic() {
 #[test]
 fn test_kimi_coding_api_type() {
     let provider = KimiCodingProvider::new();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::KimiCoding);
 }
 
 #[test]
 fn test_kimi_coding_with_api_key() {
     let provider = KimiCodingProvider::with_api_key("test-key");
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::KimiCoding);
 }
 
 #[test]
 fn test_kimi_coding_default() {
     let provider = KimiCodingProvider::default();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::KimiCoding);
 }
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn test_kimi_coding_stream_delegates_to_anthropic() {
 #[test]
 fn test_xai_api_type() {
     let provider = XAIProvider::new();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::XAI);
 }
 
 #[test]
@@ -256,7 +256,7 @@ async fn test_xai_stream_events() {
 #[test]
 fn test_groq_api_type() {
     let provider = GroqProvider::new();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::Groq);
 }
 
 #[test]
@@ -300,13 +300,13 @@ async fn test_groq_stream_delegates_to_openai() {
 #[test]
 fn test_openrouter_api_type() {
     let provider = OpenRouterProvider::new();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::OpenRouter);
 }
 
 #[test]
 fn test_openrouter_default() {
     let provider = OpenRouterProvider::default();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::OpenRouter);
 }
 
 #[tokio::test]
@@ -333,7 +333,7 @@ async fn test_openrouter_stream_delegates_to_openai() {
 #[test]
 fn test_zai_api_type() {
     let provider = ZAIProvider::new();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::ZAI);
 }
 
 #[test]
@@ -369,13 +369,13 @@ async fn test_zai_stream_delegates_to_openai() {
 #[test]
 fn test_zenmux_api_type() {
     let provider = ZenmuxProvider::new();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::Zenmux);
 }
 
 #[test]
 fn test_zenmux_default() {
     let provider = ZenmuxProvider::default();
-    assert_eq!(provider.api_type(), Api::AnthropicMessages);
+    assert_eq!(provider.provider_type(), Provider::Zenmux);
 }
 
 #[test]

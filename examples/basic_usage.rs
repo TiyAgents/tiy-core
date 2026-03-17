@@ -19,7 +19,7 @@ use tiy_core::{
     models::get_model,
     provider::{openai_completions::OpenAICompletionsProvider, LLMProvider},
     stream::AssistantMessageEventStream,
-    types::{Api, Context, Model, Provider, StreamOptions, UserMessage},
+    types::{Context, Model, Provider, StreamOptions, UserMessage},
 };
 
 /// Resolve an env var with fallback: try `primary`, then `fallback`.
@@ -66,9 +66,7 @@ fn main() {
         Model::builder()
             .id(&model_id)
             .name(&model_id)
-            .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
-            .base_url(base_url.as_deref().unwrap_or("https://api.openai.com/v1"))
             .context_window(128000)
             .max_tokens(4096)
             .build()
@@ -102,7 +100,7 @@ fn main() {
             // base_url in StreamOptions overrides model.base_url
             let options = StreamOptions {
                 temperature: Some(0.7),
-                max_tokens: Some(100),
+                max_tokens: Some(8192),
                 api_key: Some(key),
                 base_url,
                 headers: None,

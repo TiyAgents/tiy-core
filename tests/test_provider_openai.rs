@@ -52,15 +52,15 @@ fn sse_response(chunks: Vec<&str>) -> String {
 // ============================================================================
 
 #[test]
-fn test_provider_api_type() {
+fn test_provider_type() {
     let provider = OpenAICompletionsProvider::new();
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::OpenAI);
 }
 
 #[test]
 fn test_provider_with_api_key() {
     let provider = OpenAICompletionsProvider::with_api_key("sk-test-key");
-    assert_eq!(provider.api_type(), Api::OpenAICompletions);
+    assert_eq!(provider.provider_type(), Provider::OpenAI);
 }
 
 // ============================================================================

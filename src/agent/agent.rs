@@ -49,7 +49,6 @@ impl Agent {
             config: RwLock::new(AgentConfig::new(Model::builder()
                 .id("gpt-4o-mini")
                 .name("GPT-4o Mini")
-                .api(Api::OpenAICompletions)
                 .provider(Provider::OpenAI)
                 .base_url("https://api.openai.com/v1")
                 .context_window(128000)
@@ -267,15 +266,15 @@ impl Agent {
             return Ok(provider.clone());
         }
 
-        // Then try registry by API type
+        // Then try registry by Provider type
         let model = self.config.read().model.clone();
-        if let Some(provider) = get_provider(&model.api) {
+        if let Some(provider) = get_provider(&model.provider) {
             return Ok(provider);
         }
 
         Err(AgentError::ProviderError(format!(
-            "No provider registered for API type: {}",
-            model.api.as_str()
+            "No provider registered for provider type: {}",
+            model.provider.as_str()
         )))
     }
 

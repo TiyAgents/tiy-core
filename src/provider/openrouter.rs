@@ -58,8 +58,8 @@ impl Default for OpenRouterProvider {
 
 #[async_trait]
 impl LLMProvider for OpenRouterProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::OpenRouter
     }
 
     fn stream(

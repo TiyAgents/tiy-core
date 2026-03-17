@@ -38,7 +38,6 @@ impl AgentState {
             model: RwLock::new(Model::builder()
                 .id("gpt-4o-mini")
                 .name("GPT-4o Mini")
-                .api(crate::types::Api::OpenAICompletions)
                 .provider(crate::types::Provider::OpenAI)
                 .base_url("https://api.openai.com/v1")
                 .context_window(128000)

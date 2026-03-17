@@ -35,8 +35,8 @@ impl Default for OllamaProvider {
 
 #[async_trait]
 impl LLMProvider for OllamaProvider {
-    fn api_type(&self) -> Api {
-        Api::Ollama
+    fn provider_type(&self) -> Provider {
+        Provider::Ollama
     }
 
     fn stream(

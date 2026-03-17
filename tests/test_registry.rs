@@ -108,7 +108,7 @@ fn test_predefined_openai_models() {
 
     // gpt-4o-mini
     let model = registry.get(&Provider::OpenAI, "gpt-4o-mini").unwrap();
-    assert_eq!(model.api, Api::OpenAICompletions);
+    assert_eq!(model.api, None);
     assert!(!model.reasoning);
     assert!(model.supports_text());
     assert!(model.supports_image());
@@ -132,7 +132,7 @@ fn test_predefined_anthropic_models() {
     let registry = ModelRegistry::with_predefined();
 
     let sonnet = registry.get(&Provider::Anthropic, "claude-sonnet-4-20250514").unwrap();
-    assert_eq!(sonnet.api, Api::AnthropicMessages);
+    assert_eq!(sonnet.api, None);
     assert!(sonnet.reasoning);
     assert_eq!(sonnet.cost.input, 3.0);
     assert_eq!(sonnet.cost.output, 15.0);
@@ -147,7 +147,7 @@ fn test_predefined_google_models() {
     let registry = ModelRegistry::with_predefined();
 
     let gemini = registry.get(&Provider::Google, "gemini-2.5-flash").unwrap();
-    assert_eq!(gemini.api, Api::GoogleGenerativeAi);
+    assert_eq!(gemini.api, None);
     assert!(gemini.reasoning);
     assert_eq!(gemini.context_window, 1048576);
 }
@@ -186,8 +186,8 @@ use tiy_core::stream::AssistantMessageEventStream;
 struct MockProvider;
 
 impl LLMProvider for MockProvider {
-    fn api_type(&self) -> Api {
-        Api::Custom("mock".to_string())
+    fn provider_type(&self) -> Provider {
+        Provider::Custom("mock".to_string())
     }
 
     fn stream(
@@ -212,7 +212,7 @@ impl LLMProvider for MockProvider {
 #[test]
 fn test_provider_registry_new() {
     let registry = ProviderRegistry::new();
-    assert!(registry.api_types().is_empty());
+    assert!(registry.provider_types().is_empty());
 }
 
 #[test]
@@ -221,12 +221,12 @@ fn test_provider_registry_register_and_get() {
     let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
     registry.register(provider);
 
-    let api = Api::Custom("mock".to_string());
-    assert!(registry.contains(&api));
+    let p = Provider::Custom("mock".to_string());
+    assert!(registry.contains(&p));
 
-    let retrieved = registry.get(&api);
+    let retrieved = registry.get(&p);
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().api_type(), api);
+    assert_eq!(retrieved.unwrap().provider_type(), p);
 }
 
 #[test]
@@ -245,11 +245,11 @@ fn test_provider_registry_unregister() {
     let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
     registry.register(provider);
 
-    let api = Api::Custom("mock".to_string());
-    assert!(registry.contains(&api));
+    let p = Provider::Custom("mock".to_string());
+    assert!(registry.contains(&p));
 
-    registry.unregister(&api);
-    assert!(!registry.contains(&api));
+    registry.unregister(&p);
+    assert!(!registry.contains(&p));
 }
 
 #[test]
@@ -259,16 +259,16 @@ fn test_provider_registry_clear() {
     registry.register(provider);
 
     registry.clear();
-    assert!(registry.api_types().is_empty());
+    assert!(registry.provider_types().is_empty());
 }
 
 #[test]
-fn test_provider_registry_api_types() {
+fn test_provider_registry_provider_types() {
     let registry = ProviderRegistry::new();
     let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
     registry.register(provider);
 
-    let types = registry.api_types();
+    let types = registry.provider_types();
     assert_eq!(types.len(), 1);
     assert!(types.contains(&"mock".to_string()));
 }
@@ -276,6 +276,6 @@ fn test_provider_registry_api_types() {
 #[test]
 fn test_provider_registry_not_found() {
     let registry = ProviderRegistry::new();
-    assert!(registry.get(&Api::OpenAICompletions).is_none());
-    assert!(!registry.contains(&Api::OpenAICompletions));
+    assert!(registry.get(&Provider::OpenAI).is_none());
+    assert!(!registry.contains(&Provider::OpenAI));
 }

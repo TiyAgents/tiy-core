@@ -74,7 +74,9 @@ fn transform_assistant_message(
         })
         .collect();
 
-    new_msg.api = target_model.api.clone();
+    if let Some(api) = &target_model.api {
+        new_msg.api = api.clone();
+    }
     new_msg.provider = target_model.provider.clone();
     new_msg.model = target_model.id.clone();
 

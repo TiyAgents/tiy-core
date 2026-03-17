@@ -54,8 +54,8 @@ impl Default for AnthropicProvider {
 
 #[async_trait]
 impl LLMProvider for AnthropicProvider {
-    fn api_type(&self) -> Api {
-        Api::AnthropicMessages
+    fn provider_type(&self) -> Provider {
+        Provider::Anthropic
     }
 
     fn stream(
@@ -797,9 +797,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_provider_api_type() {
+    fn test_provider_type() {
         let provider = AnthropicProvider::new();
-        assert_eq!(provider.api_type(), Api::AnthropicMessages);
+        assert_eq!(provider.provider_type(), Provider::Anthropic);
     }
 
     #[test]

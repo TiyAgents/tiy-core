@@ -69,9 +69,8 @@ impl Default for ZenmuxProvider {
 
 #[async_trait]
 impl LLMProvider for ZenmuxProvider {
-    fn api_type(&self) -> Api {
-        // Return the most common protocol; actual routing happens in stream/stream_simple
-        Api::AnthropicMessages
+    fn provider_type(&self) -> Provider {
+        Provider::Zenmux
     }
 
     fn stream(
@@ -91,7 +90,7 @@ impl LLMProvider for ZenmuxProvider {
             if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
                 m.base_url = ZENMUX_GOOGLE_BASE_URL.to_string();
             }
-            m.api = Api::GoogleGenerativeAi;
+            m.api = Some(Api::GoogleGenerativeAi);
 
             let provider = super::google::GoogleProvider::new();
             provider.stream(&m, context, opts)
@@ -101,7 +100,7 @@ impl LLMProvider for ZenmuxProvider {
             if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
                 m.base_url = ZENMUX_ANTHROPIC_BASE_URL.to_string();
             }
-            m.api = Api::AnthropicMessages;
+            m.api = Some(Api::AnthropicMessages);
 
             let provider = super::anthropic::AnthropicProvider::new();
             provider.stream(&m, context, opts)
@@ -124,7 +123,7 @@ impl LLMProvider for ZenmuxProvider {
             if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
                 m.base_url = ZENMUX_GOOGLE_BASE_URL.to_string();
             }
-            m.api = Api::GoogleGenerativeAi;
+            m.api = Some(Api::GoogleGenerativeAi);
 
             let provider = super::google::GoogleProvider::new();
             provider.stream_simple(&m, context, opts)
@@ -133,7 +132,7 @@ impl LLMProvider for ZenmuxProvider {
             if m.base_url.contains("zenmux.ai") || m.base_url.is_empty() {
                 m.base_url = ZENMUX_ANTHROPIC_BASE_URL.to_string();
             }
-            m.api = Api::AnthropicMessages;
+            m.api = Some(Api::AnthropicMessages);
 
             let provider = super::anthropic::AnthropicProvider::new();
             provider.stream_simple(&m, context, opts)

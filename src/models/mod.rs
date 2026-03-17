@@ -2,7 +2,7 @@
 
 mod predefined;
 
-use crate::types::{Api, Model, Provider};
+use crate::types::{Model, Provider};
 use std::collections::HashMap;
 
 /// Model registry for managing model definitions.
@@ -84,7 +84,6 @@ fn get_openai_models() -> Vec<Model> {
         Model::builder()
             .id("gpt-4o-mini")
             .name("GPT-4o Mini")
-            .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
@@ -97,7 +96,6 @@ fn get_openai_models() -> Vec<Model> {
         Model::builder()
             .id("gpt-4o")
             .name("GPT-4o")
-            .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
@@ -110,7 +108,6 @@ fn get_openai_models() -> Vec<Model> {
         Model::builder()
             .id("gpt-4.1")
             .name("GPT-4.1")
-            .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
@@ -123,7 +120,6 @@ fn get_openai_models() -> Vec<Model> {
         Model::builder()
             .id("o3")
             .name("o3")
-            .api(Api::OpenAICompletions)
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(true)
@@ -141,7 +137,6 @@ fn get_anthropic_models() -> Vec<Model> {
         Model::builder()
             .id("claude-sonnet-4-20250514")
             .name("Claude Sonnet 4")
-            .api(Api::AnthropicMessages)
             .provider(Provider::Anthropic)
             .base_url("https://api.anthropic.com/v1")
             .reasoning(true)
@@ -154,7 +149,6 @@ fn get_anthropic_models() -> Vec<Model> {
         Model::builder()
             .id("claude-opus-4-20250514")
             .name("Claude Opus 4")
-            .api(Api::AnthropicMessages)
             .provider(Provider::Anthropic)
             .base_url("https://api.anthropic.com/v1")
             .reasoning(true)
@@ -172,7 +166,6 @@ fn get_google_models() -> Vec<Model> {
         Model::builder()
             .id("gemini-2.5-flash")
             .name("Gemini 2.5 Flash")
-            .api(Api::GoogleGenerativeAi)
             .provider(Provider::Google)
             .base_url("https://generativelanguage.googleapis.com/v1beta")
             .reasoning(true)

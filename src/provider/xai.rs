@@ -68,8 +68,8 @@ impl Default for XAIProvider {
 
 #[async_trait]
 impl LLMProvider for XAIProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::XAI
     }
 
     fn stream(

@@ -56,8 +56,8 @@ impl Default for OpenAIResponsesProvider {
 
 #[async_trait]
 impl LLMProvider for OpenAIResponsesProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAIResponses
+    fn provider_type(&self) -> Provider {
+        Provider::OpenAI
     }
 
     fn stream(
@@ -784,9 +784,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_provider_api_type() {
+    fn test_provider_type() {
         let provider = OpenAIResponsesProvider::new();
-        assert_eq!(provider.api_type(), Api::OpenAIResponses);
+        assert_eq!(provider.provider_type(), Provider::OpenAI);
     }
 
     #[test]

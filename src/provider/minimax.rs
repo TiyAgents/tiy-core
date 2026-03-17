@@ -55,8 +55,8 @@ impl Default for MiniMaxProvider {
 
 #[async_trait]
 impl LLMProvider for MiniMaxProvider {
-    fn api_type(&self) -> Api {
-        Api::AnthropicMessages
+    fn provider_type(&self) -> Provider {
+        Provider::MiniMax
     }
 
     fn stream(

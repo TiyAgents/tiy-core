@@ -70,8 +70,8 @@ impl Default for OpenAICompletionsProvider {
 
 #[async_trait]
 impl LLMProvider for OpenAICompletionsProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::OpenAI
     }
 
     fn stream(
@@ -542,7 +542,7 @@ async fn run_stream(
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut output = AssistantMessage::builder()
-        .api(model.api.clone())
+        .api(model.api.clone().unwrap_or(Api::OpenAICompletions))
         .provider(model.provider.clone())
         .model(model.id.clone())
         .stop_reason(StopReason::Stop)

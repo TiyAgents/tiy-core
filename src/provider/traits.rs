@@ -1,15 +1,15 @@
 //! Provider trait definitions.
 
 use crate::stream::AssistantMessageEventStream;
-use crate::types::{Api, Context, Model, SimpleStreamOptions, StreamOptions};
+use crate::types::{Context, Model, Provider, SimpleStreamOptions, StreamOptions};
 use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Provider trait for LLM API implementations.
 #[async_trait]
 pub trait LLMProvider: Send + Sync {
-    /// Get the API type this provider handles.
-    fn api_type(&self) -> Api;
+    /// Get the provider type this implementation handles.
+    fn provider_type(&self) -> Provider;
 
     /// Stream completion with full options.
     fn stream(

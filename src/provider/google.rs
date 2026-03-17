@@ -57,8 +57,8 @@ impl Default for GoogleProvider {
 
 #[async_trait]
 impl LLMProvider for GoogleProvider {
-    fn api_type(&self) -> Api {
-        Api::GoogleGenerativeAi
+    fn provider_type(&self) -> Provider {
+        Provider::Google
     }
 
     fn stream(
@@ -718,9 +718,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_provider_api_type() {
+    fn test_provider_type() {
         let provider = GoogleProvider::new();
-        assert_eq!(provider.api_type(), Api::GoogleGenerativeAi);
+        assert_eq!(provider.provider_type(), Provider::Google);
     }
 
     #[test]

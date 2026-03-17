@@ -70,8 +70,8 @@ impl Default for ZAIProvider {
 
 #[async_trait]
 impl LLMProvider for ZAIProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::ZAI
     }
 
     fn stream(

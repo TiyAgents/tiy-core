@@ -75,8 +75,8 @@ impl Default for GroqProvider {
 
 #[async_trait]
 impl LLMProvider for GroqProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::Groq
     }
 
     fn stream(

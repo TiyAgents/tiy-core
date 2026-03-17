@@ -37,8 +37,8 @@ impl MockProvider {
 
 #[async_trait]
 impl LLMProvider for MockProvider {
-    fn api_type(&self) -> Api {
-        Api::OpenAICompletions
+    fn provider_type(&self) -> Provider {
+        Provider::OpenAI
     }
 
     fn stream(

@@ -50,8 +50,8 @@ impl Default for KimiCodingProvider {
 
 #[async_trait]
 impl LLMProvider for KimiCodingProvider {
-    fn api_type(&self) -> Api {
-        Api::AnthropicMessages
+    fn provider_type(&self) -> Provider {
+        Provider::KimiCoding
     }
 
     fn stream(

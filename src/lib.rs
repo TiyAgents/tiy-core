@@ -19,7 +19,7 @@
 //!     let model = Model {
 //!         id: "gpt-4o-mini".to_string(),
 //!         name: "GPT-4o Mini".to_string(),
-//!         api: Api::OpenAICompletions,
+//!         api: None,
 //!         provider: Provider::OpenAI,
 //!         base_url: "https://api.openai.com/v1".to_string(),
 //!         reasoning: false,
