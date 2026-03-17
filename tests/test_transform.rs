@@ -1,8 +1,8 @@
 //! Tests for transform module: messages and tool_calls.
 
 use serde_json::json;
+use tiy_core::transform::{normalize_tool_call_id, transform_messages, ToolCallIdMapper};
 use tiy_core::types::*;
-use tiy_core::transform::{transform_messages, normalize_tool_call_id, ToolCallIdMapper};
 
 // ============================================================================
 // Helper functions
@@ -111,7 +111,11 @@ fn test_transform_messages_keeps_valid_messages() {
 
 #[test]
 fn test_transform_thinking_same_model_preserved() {
-    let target = make_model(Provider::Anthropic, Api::AnthropicMessages, "claude-sonnet-4");
+    let target = make_model(
+        Provider::Anthropic,
+        Api::AnthropicMessages,
+        "claude-sonnet-4",
+    );
 
     let messages = vec![
         Message::User(UserMessage::text("Hello")),
@@ -136,7 +140,10 @@ fn test_transform_thinking_same_model_preserved() {
     if let Message::Assistant(ref a) = result[1] {
         // Thinking block should be preserved for same model
         assert!(a.content[0].is_thinking());
-        assert_eq!(a.content[0].as_thinking().unwrap().thinking, "Let me think...");
+        assert_eq!(
+            a.content[0].as_thinking().unwrap().thinking,
+            "Let me think..."
+        );
     } else {
         panic!("Expected assistant message");
     }
@@ -211,9 +218,11 @@ fn test_transform_orphan_tool_calls_get_synthetic_results() {
             Provider::OpenAI,
             Api::OpenAICompletions,
             "gpt-4o",
-            vec![
-                ContentBlock::ToolCall(ToolCall::new("call_1", "get_weather", json!({"city": "Tokyo"}))),
-            ],
+            vec![ContentBlock::ToolCall(ToolCall::new(
+                "call_1",
+                "get_weather",
+                json!({"city": "Tokyo"}),
+            ))],
             StopReason::ToolUse,
         )),
         // No ToolResult for call_1!
@@ -244,12 +253,19 @@ fn test_transform_matched_tool_calls_no_synthetic() {
             Provider::OpenAI,
             Api::OpenAICompletions,
             "gpt-4o",
-            vec![
-                ContentBlock::ToolCall(ToolCall::new("call_1", "get_weather", json!({"city": "Tokyo"}))),
-            ],
+            vec![ContentBlock::ToolCall(ToolCall::new(
+                "call_1",
+                "get_weather",
+                json!({"city": "Tokyo"}),
+            ))],
             StopReason::ToolUse,
         )),
-        Message::ToolResult(ToolResultMessage::text("call_1", "get_weather", "Sunny 25C", false)),
+        Message::ToolResult(ToolResultMessage::text(
+            "call_1",
+            "get_weather",
+            "Sunny 25C",
+            false,
+        )),
     ];
 
     let result = transform_messages(&messages, &target, None);
@@ -258,11 +274,21 @@ fn test_transform_matched_tool_calls_no_synthetic() {
 
 #[test]
 fn test_transform_with_tool_call_id_normalization() {
-    let target = make_model(Provider::Anthropic, Api::AnthropicMessages, "claude-sonnet-4");
+    let target = make_model(
+        Provider::Anthropic,
+        Api::AnthropicMessages,
+        "claude-sonnet-4",
+    );
 
     fn normalize(id: &str) -> String {
         id.chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .take(64)
             .collect()
     }
@@ -273,12 +299,19 @@ fn test_transform_with_tool_call_id_normalization() {
             Provider::OpenAI,
             Api::OpenAICompletions,
             "gpt-4o",
-            vec![
-                ContentBlock::ToolCall(ToolCall::new("call+special/chars", "tool", json!({}))),
-            ],
+            vec![ContentBlock::ToolCall(ToolCall::new(
+                "call+special/chars",
+                "tool",
+                json!({}),
+            ))],
             StopReason::ToolUse,
         )),
-        Message::ToolResult(ToolResultMessage::text("call+special/chars", "tool", "result", false)),
+        Message::ToolResult(ToolResultMessage::text(
+            "call+special/chars",
+            "tool",
+            "result",
+            false,
+        )),
     ];
 
     let result = transform_messages(&messages, &target, Some(normalize));
@@ -312,7 +345,9 @@ fn test_normalize_for_anthropic_basic() {
 fn test_normalize_for_anthropic_special_chars() {
     let id = "call_abc+def/ghi=jkl";
     let normalized = normalize_tool_call_id(id, &Provider::Anthropic);
-    assert!(normalized.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    assert!(normalized
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
     assert_eq!(normalized, "call_abc_def_ghi_jkl");
 }
 

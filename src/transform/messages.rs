@@ -28,7 +28,11 @@ pub fn transform_messages(
                     continue;
                 }
 
-                let transformed = transform_assistant_message(assistant_msg, target_model, normalize_tool_call_id);
+                let transformed = transform_assistant_message(
+                    assistant_msg,
+                    target_model,
+                    normalize_tool_call_id,
+                );
                 result.push(Message::Assistant(transformed));
             }
             Message::ToolResult(tool_result) => {
@@ -128,10 +132,8 @@ fn handle_orphan_tool_calls(messages: &mut Vec<Message>) {
     }
 
     // Find orphan IDs
-    let orphan_ids: std::collections::HashSet<String> = tool_call_ids
-        .difference(&result_ids)
-        .cloned()
-        .collect();
+    let orphan_ids: std::collections::HashSet<String> =
+        tool_call_ids.difference(&result_ids).cloned().collect();
 
     if orphan_ids.is_empty() {
         return;

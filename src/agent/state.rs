@@ -1,11 +1,12 @@
 //! Agent state management.
 
+use crate::agent::{AgentMessage, AgentTool};
 use crate::thinking::ThinkingLevel;
 use crate::types::Model;
-use crate::agent::{AgentMessage, AgentTool};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Agent state.
 #[derive(Debug)]
@@ -28,6 +29,9 @@ pub struct AgentState {
     pub pending_tool_calls: RwLock<HashSet<String>>,
     /// Last error.
     pub error: RwLock<Option<String>>,
+    /// Maximum number of messages in conversation history.
+    /// 0 = unlimited. When exceeded, oldest messages are drained.
+    pub max_messages: AtomicUsize,
 }
 
 impl AgentState {
@@ -35,15 +39,17 @@ impl AgentState {
     pub fn new() -> Self {
         Self {
             system_prompt: RwLock::new(String::new()),
-            model: RwLock::new(Model::builder()
-                .id("gpt-4o-mini")
-                .name("GPT-4o Mini")
-                .provider(crate::types::Provider::OpenAI)
-                .base_url("https://api.openai.com/v1")
-                .context_window(128000)
-                .max_tokens(16384)
-                .build()
-                .unwrap()),
+            model: RwLock::new(
+                Model::builder()
+                    .id("gpt-4o-mini")
+                    .name("GPT-4o Mini")
+                    .provider(crate::types::Provider::OpenAI)
+                    .base_url("https://api.openai.com/v1")
+                    .context_window(128000)
+                    .max_tokens(16384)
+                    .build()
+                    .unwrap(),
+            ),
             thinking_level: RwLock::new(ThinkingLevel::Off),
             tools: RwLock::new(Vec::new()),
             messages: RwLock::new(Vec::new()),
@@ -51,6 +57,7 @@ impl AgentState {
             stream_message: RwLock::new(None),
             pending_tool_calls: RwLock::new(HashSet::new()),
             error: RwLock::new(None),
+            max_messages: AtomicUsize::new(0), // 0 = unlimited
         }
     }
 
@@ -81,9 +88,35 @@ impl AgentState {
         *self.tools.write() = tools;
     }
 
-    /// Add a message.
+    /// Add a message, enforcing the max_messages limit.
+    /// When the limit is exceeded, oldest messages are drained (FIFO).
     pub fn add_message(&self, message: AgentMessage) {
-        self.messages.write().push(message);
+        let mut msgs = self.messages.write();
+        msgs.push(message);
+        let max = self.max_messages.load(Ordering::SeqCst);
+        if max > 0 && msgs.len() > max {
+            let excess = msgs.len() - max;
+            msgs.drain(..excess);
+        }
+    }
+
+    /// Set the maximum number of messages in conversation history.
+    /// 0 = unlimited.
+    pub fn set_max_messages(&self, max: usize) {
+        self.max_messages.store(max, Ordering::SeqCst);
+        // Immediately enforce if there are already too many messages
+        if max > 0 {
+            let mut msgs = self.messages.write();
+            if msgs.len() > max {
+                let excess = msgs.len() - max;
+                msgs.drain(..excess);
+            }
+        }
+    }
+
+    /// Get the current max_messages limit (0 = unlimited).
+    pub fn get_max_messages(&self) -> usize {
+        self.max_messages.load(Ordering::SeqCst)
     }
 
     /// Replace all messages.
@@ -130,6 +163,9 @@ impl Default for AgentState {
     }
 }
 
+/// NOTE: This `Clone` implementation acquires each lock independently,
+/// so the resulting clone is NOT a single atomic snapshot.
+/// For a consistent point-in-time snapshot, use [`AgentState::snapshot()`].
 impl Clone for AgentState {
     fn clone(&self) -> Self {
         Self {
@@ -142,6 +178,73 @@ impl Clone for AgentState {
             stream_message: RwLock::new(self.stream_message.read().clone()),
             pending_tool_calls: RwLock::new(self.pending_tool_calls.read().clone()),
             error: RwLock::new(self.error.read().clone()),
+            max_messages: AtomicUsize::new(self.max_messages.load(Ordering::SeqCst)),
+        }
+    }
+}
+
+// ============================================================================
+// AgentStateSnapshot — consistent point-in-time view
+// ============================================================================
+
+/// A consistent, lock-free snapshot of [`AgentState`].
+///
+/// Unlike `Clone` on `AgentState` (which acquires each lock independently),
+/// `snapshot()` acquires all locks simultaneously to produce a coherent
+/// point-in-time view of the state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStateSnapshot {
+    /// System prompt.
+    pub system_prompt: String,
+    /// Current model.
+    pub model: Model,
+    /// Thinking level.
+    pub thinking_level: ThinkingLevel,
+    /// Conversation messages.
+    pub messages: Vec<AgentMessage>,
+    /// Whether currently streaming.
+    pub is_streaming: bool,
+    /// Current streaming message.
+    pub stream_message: Option<AgentMessage>,
+    /// Pending tool call IDs.
+    pub pending_tool_calls: HashSet<String>,
+    /// Last error.
+    pub error: Option<String>,
+    /// Message count.
+    pub message_count: usize,
+    /// Max messages limit (0 = unlimited).
+    pub max_messages: usize,
+}
+
+impl AgentState {
+    /// Take a consistent point-in-time snapshot of the agent state.
+    ///
+    /// This acquires all locks to produce a coherent view, unlike `Clone`
+    /// which acquires locks one at a time and may see partial updates.
+    pub fn snapshot(&self) -> AgentStateSnapshot {
+        // Acquire all locks at once for consistency
+        let system_prompt = self.system_prompt.read().clone();
+        let model = self.model.read().clone();
+        let thinking_level = *self.thinking_level.read();
+        let messages = self.messages.read().clone();
+        let is_streaming = self.is_streaming.load(Ordering::SeqCst);
+        let stream_message = self.stream_message.read().clone();
+        let pending_tool_calls = self.pending_tool_calls.read().clone();
+        let error = self.error.read().clone();
+        let max_messages = self.max_messages.load(Ordering::SeqCst);
+        let message_count = messages.len();
+
+        AgentStateSnapshot {
+            system_prompt,
+            model,
+            thinking_level,
+            messages,
+            is_streaming,
+            stream_message,
+            pending_tool_calls,
+            error,
+            message_count,
+            max_messages,
         }
     }
 }

@@ -5,17 +5,12 @@
 
 use futures::StreamExt;
 use tiy_core::provider::{
-    minimax::MiniMaxProvider,
-    kimi_coding::KimiCodingProvider,
-    xai::XAIProvider,
-    groq::GroqProvider,
-    openrouter::OpenRouterProvider,
-    zai::ZAIProvider,
-    zenmux::ZenmuxProvider,
+    groq::GroqProvider, kimi_coding::KimiCodingProvider, minimax::MiniMaxProvider,
+    openrouter::OpenRouterProvider, xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
     LLMProvider,
 };
 use tiy_core::types::*;
-use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Helpers
@@ -34,55 +29,89 @@ fn make_model(api: Api, provider: Provider, base_url: &str) -> Model {
 }
 
 fn anthropic_sse(events: Vec<(&str, &str)>) -> String {
-    events.iter()
+    events
+        .iter()
         .map(|(event_type, data)| format!("event: {}\ndata: {}\n\n", event_type, data))
         .collect::<String>()
 }
 
 fn simple_anthropic_response(text: &str) -> String {
     anthropic_sse(vec![
-        ("message_start", &serde_json::json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_1", "type": "message", "role": "assistant",
-                "content": [], "model": "test",
-                "usage": {"input_tokens": 10, "output_tokens": 0}
-            }
-        }).to_string()),
-        ("content_block_start", &serde_json::json!({
-            "type": "content_block_start", "index": 0,
-            "content_block": {"type": "text", "text": ""}
-        }).to_string()),
-        ("content_block_delta", &serde_json::json!({
-            "type": "content_block_delta", "index": 0,
-            "delta": {"type": "text_delta", "text": text}
-        }).to_string()),
-        ("content_block_stop", &serde_json::json!({
-            "type": "content_block_stop", "index": 0
-        }).to_string()),
-        ("message_delta", &serde_json::json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 5}
-        }).to_string()),
-        ("message_stop", &serde_json::json!({"type": "message_stop"}).to_string()),
+        (
+            "message_start",
+            &serde_json::json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1", "type": "message", "role": "assistant",
+                    "content": [], "model": "test",
+                    "usage": {"input_tokens": 10, "output_tokens": 0}
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &serde_json::json!({
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &serde_json::json!({
+                "type": "content_block_stop", "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &serde_json::json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 5}
+            })
+            .to_string(),
+        ),
+        (
+            "message_stop",
+            &serde_json::json!({"type": "message_stop"}).to_string(),
+        ),
     ])
 }
 
 fn simple_openai_response(text: &str) -> String {
     [
-        format!("data: {}\n\n", serde_json::json!({
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]
-        })),
-        format!("data: {}\n\n", serde_json::json!({
-            "choices": [{"index": 0, "delta": {"content": text}}]
-        })),
-        format!("data: {}\n\n", serde_json::json!({
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
-        })),
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "choices": [{"index": 0, "delta": {"content": text}}]
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+            })
+        ),
         "data: [DONE]\n\n".to_string(),
-    ].join("")
+    ]
+    .join("")
 }
 
 async fn mock_anthropic_server(text: &str) -> MockServer {
@@ -143,8 +172,12 @@ async fn test_minimax_stream_delegates_to_anthropic() {
     let provider = MiniMaxProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -182,8 +215,12 @@ async fn test_kimi_coding_stream_delegates_to_anthropic() {
     let provider = KimiCodingProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -205,8 +242,14 @@ fn test_xai_api_type() {
 fn test_xai_default_compat() {
     let compat = XAIProvider::default_compat();
     assert!(!compat.supports_store, "xAI should not support store");
-    assert!(!compat.supports_developer_role, "xAI should not support developer role");
-    assert!(!compat.supports_reasoning_effort, "xAI should not support reasoning_effort");
+    assert!(
+        !compat.supports_developer_role,
+        "xAI should not support developer role"
+    );
+    assert!(
+        !compat.supports_reasoning_effort,
+        "xAI should not support reasoning_effort"
+    );
     assert_eq!(compat.thinking_format, "openai");
     assert!(compat.supports_strict_mode);
 }
@@ -219,8 +262,12 @@ async fn test_xai_stream_delegates_to_openai() {
     let provider = XAIProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -236,8 +283,12 @@ async fn test_xai_stream_events() {
     let provider = XAIProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let mut events = Vec::new();
@@ -284,8 +335,12 @@ async fn test_groq_stream_delegates_to_openai() {
     let provider = GroqProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -317,8 +372,12 @@ async fn test_openrouter_stream_delegates_to_openai() {
     let provider = OpenRouterProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -353,8 +412,12 @@ async fn test_zai_stream_delegates_to_openai() {
     let provider = ZAIProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;
@@ -427,8 +490,12 @@ async fn test_zenmux_adaptive_routes_to_anthropic() {
     // Directly test the Anthropic delegate (what Zenmux adaptive would call)
     let anthropic = tiy_core::provider::anthropic::AnthropicProvider::new();
     let stream = anthropic.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
@@ -441,27 +508,40 @@ async fn test_zenmux_adaptive_routes_to_openai_responses() {
 
     // OpenAI Responses API mock at /responses
     let sse_body = [
-        format!("event: response.output_item.added\ndata: {}\n\n", serde_json::json!({
-            "type": "response.output_item.added", "output_index": 0,
-            "item": {"type": "message", "id": "item_01", "role": "assistant", "content": []}
-        })),
-        format!("event: response.output_text.delta\ndata: {}\n\n", serde_json::json!({
-            "type": "response.output_text.delta", "output_index": 0,
-            "content_index": 0, "delta": "Zenmux-OpenAI"
-        })),
-        format!("event: response.output_item.done\ndata: {}\n\n", serde_json::json!({
-            "type": "response.output_item.done", "output_index": 0,
-            "item": {"type": "message", "id": "item_01"}
-        })),
-        format!("event: response.completed\ndata: {}\n\n", serde_json::json!({
-            "type": "response.completed",
-            "response": {
-                "id": "resp_01", "status": "completed",
-                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-                "output": [{"type": "message", "id": "item_01"}]
-            }
-        })),
-    ].join("");
+        format!(
+            "event: response.output_item.added\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.added", "output_index": 0,
+                "item": {"type": "message", "id": "item_01", "role": "assistant", "content": []}
+            })
+        ),
+        format!(
+            "event: response.output_text.delta\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_text.delta", "output_index": 0,
+                "content_index": 0, "delta": "Zenmux-OpenAI"
+            })
+        ),
+        format!(
+            "event: response.output_item.done\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done", "output_index": 0,
+                "item": {"type": "message", "id": "item_01"}
+            })
+        ),
+        format!(
+            "event: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_01", "status": "completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                    "output": [{"type": "message", "id": "item_01"}]
+                }
+            })
+        ),
+    ]
+    .join("");
 
     Mock::given(matchers::method("POST"))
         .and(matchers::path("/responses"))
@@ -480,8 +560,12 @@ async fn test_zenmux_adaptive_routes_to_openai_responses() {
 
     let responses_provider = tiy_core::provider::openai_responses::OpenAIResponsesProvider::new();
     let stream = responses_provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
@@ -509,7 +593,9 @@ async fn test_zenmux_adaptive_routes_to_google() {
 
     // Vertex AI URL format: /v1/publishers/google/models/{model}:streamGenerateContent
     Mock::given(matchers::method("POST"))
-        .and(matchers::path_regex(r"/v1/publishers/google/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(matchers::path_regex(
+            r"/v1/publishers/google/models/gemini-2.0-flash:streamGenerateContent",
+        ))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_string(format!("data: {}\n\n", google_chunk))
@@ -525,8 +611,12 @@ async fn test_zenmux_adaptive_routes_to_google() {
 
     let google_provider = tiy_core::provider::google::GoogleProvider::new();
     let stream = google_provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
@@ -543,8 +633,12 @@ async fn test_zenmux_custom_base_url_uses_openai_completions() {
     let provider = ZenmuxProvider::with_api_key("test-key");
 
     let stream = provider.stream(
-        &model, &context,
-        StreamOptions { api_key: Some("test-key".into()), ..Default::default() },
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
     );
 
     let result = stream.result().await;

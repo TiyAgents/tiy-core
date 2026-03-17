@@ -1,12 +1,12 @@
 //! Tests for Anthropic Messages provider using wiremock for HTTP mocking.
 
-use serde_json::json;
-use tiy_core::types::*;
-use tiy_core::provider::LLMProvider;
-use tiy_core::provider::anthropic::AnthropicProvider;
 use futures::StreamExt;
-use wiremock::{MockServer, Mock, ResponseTemplate};
+use serde_json::json;
+use tiy_core::provider::anthropic::AnthropicProvider;
+use tiy_core::provider::LLMProvider;
+use tiy_core::types::*;
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Helper functions
@@ -41,7 +41,8 @@ fn make_options(api_key: &str) -> StreamOptions {
 
 /// Build an Anthropic SSE response body from a list of (event_type, json_data) pairs.
 fn anthropic_sse(events: Vec<(&str, &str)>) -> String {
-    events.iter()
+    events
+        .iter()
         .map(|(event_type, data)| format!("event: {}\ndata: {}\n\n", event_type, data))
         .collect::<String>()
 }
@@ -65,46 +66,70 @@ async fn test_stream_simple_text_response() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_01",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_01",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
                 }
-            }
-        }).to_string()),
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""}
-        }).to_string()),
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""}
+            })
+            .to_string(),
+        ),
         ("ping", &json!({"type": "ping"}).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "Hello"}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": " world!"}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 0
-        }).to_string()),
-        ("message_delta", &json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 15}
-        }).to_string()),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hello"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": " world!"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 15}
+            })
+            .to_string(),
+        ),
         ("message_stop", &json!({"type": "message_stop"}).to_string()),
     ]);
 
@@ -137,7 +162,8 @@ async fn test_stream_simple_text_response() {
     assert!(matches!(&events[0], AssistantMessageEvent::Start { .. }));
 
     // Check that text deltas are present
-    let text_deltas: Vec<_> = events.iter()
+    let text_deltas: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextDelta { .. }))
         .collect();
     assert!(!text_deltas.is_empty());
@@ -153,49 +179,73 @@ async fn test_stream_with_tool_call() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_02",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 20,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_02",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
                 }
-            }
-        }).to_string()),
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {
-                "type": "tool_use",
-                "id": "toolu_01",
-                "name": "get_weather"
-            }
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": "{\"city\":"}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": " \"Tokyo\"}"}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 0
-        }).to_string()),
-        ("message_delta", &json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "tool_use"},
-            "usage": {"output_tokens": 25}
-        }).to_string()),
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "get_weather"
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"city\":"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": " \"Tokyo\"}"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 25}
+            })
+            .to_string(),
+        ),
         ("message_stop", &json!({"type": "message_stop"}).to_string()),
     ]);
 
@@ -212,9 +262,11 @@ async fn test_stream_with_tool_call() {
     let provider = AnthropicProvider::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
-    context.set_tools(vec![
-        Tool::new("get_weather", "Get weather", json!({"type": "object", "properties": {"city": {"type": "string"}}})),
-    ]);
+    context.set_tools(vec![Tool::new(
+        "get_weather",
+        "Get weather",
+        json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+    )]);
     let options = make_options("test-key");
 
     let stream = provider.stream(&model, &context, options);
@@ -235,10 +287,9 @@ async fn test_stream_http_error() {
 
     Mock::given(method("POST"))
         .and(path("/messages"))
-        .respond_with(
-            ResponseTemplate::new(401)
-                .set_body_string(r#"{"error": {"type": "authentication_error", "message": "Invalid API key"}}"#),
-        )
+        .respond_with(ResponseTemplate::new(401).set_body_string(
+            r#"{"error": {"type": "authentication_error", "message": "Invalid API key"}}"#,
+        ))
         .mount(&server)
         .await;
 
@@ -260,61 +311,97 @@ async fn test_stream_with_thinking() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_03",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 15,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_03",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 15,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
                 }
-            }
-        }).to_string()),
+            })
+            .to_string(),
+        ),
         // Thinking block
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "thinking", "thinking": ""}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "thinking_delta", "thinking": "Let me think"}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "thinking_delta", "thinking": " about this..."}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 0
-        }).to_string()),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Let me think"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": " about this..."}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
         // Text block
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 1,
-            "content_block": {"type": "text", "text": ""}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 1,
-            "delta": {"type": "text_delta", "text": "The answer is 42."}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 1
-        }).to_string()),
-        ("message_delta", &json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 30}
-        }).to_string()),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "The answer is 42."}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 1
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 30}
+            })
+            .to_string(),
+        ),
         ("message_stop", &json!({"type": "message_stop"}).to_string()),
     ]);
 
@@ -338,7 +425,9 @@ async fn test_stream_with_thinking() {
 
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "The answer is 42.");
-    assert!(result.thinking_content().contains("Let me think about this..."));
+    assert!(result
+        .thinking_content()
+        .contains("Let me think about this..."));
 }
 
 #[tokio::test]
@@ -346,40 +435,60 @@ async fn test_stream_usage_tracking() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_04",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 100,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 30,
-                    "cache_creation_input_tokens": 20
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_04",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 30,
+                        "cache_creation_input_tokens": 20
+                    }
                 }
-            }
-        }).to_string()),
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "Hi"}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 0
-        }).to_string()),
-        ("message_delta", &json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 50}
-        }).to_string()),
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hi"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 50}
+            })
+            .to_string(),
+        ),
         ("message_stop", &json!({"type": "message_stop"}).to_string()),
     ]);
 
@@ -417,40 +526,60 @@ async fn test_stream_length_stop_reason() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_05",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_05",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
                 }
-            }
-        }).to_string()),
-        ("content_block_start", &json!({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""}
-        }).to_string()),
-        ("content_block_delta", &json!({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "truncated"}
-        }).to_string()),
-        ("content_block_stop", &json!({
-            "type": "content_block_stop",
-            "index": 0
-        }).to_string()),
-        ("message_delta", &json!({
-            "type": "message_delta",
-            "delta": {"stop_reason": "max_tokens"},
-            "usage": {"output_tokens": 100}
-        }).to_string()),
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "truncated"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "max_tokens"},
+                "usage": {"output_tokens": 100}
+            })
+            .to_string(),
+        ),
         ("message_stop", &json!({"type": "message_stop"}).to_string()),
     ]);
 
@@ -481,28 +610,36 @@ async fn test_stream_sse_error_event() {
     let server = MockServer::start().await;
 
     let sse_body = anthropic_sse(vec![
-        ("message_start", &json!({
-            "type": "message_start",
-            "message": {
-                "id": "msg_06",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-3-5-sonnet",
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 0
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_06",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
                 }
-            }
-        }).to_string()),
-        ("error", &json!({
-            "type": "error",
-            "error": {
-                "type": "overloaded_error",
-                "message": "Overloaded"
-            }
-        }).to_string()),
+            })
+            .to_string(),
+        ),
+        (
+            "error",
+            &json!({
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "Overloaded"
+                }
+            })
+            .to_string(),
+        ),
     ]);
 
     Mock::given(method("POST"))

@@ -184,6 +184,8 @@ pub struct AgentConfig {
     pub thinking_level: ThinkingLevel,
     /// Tool execution mode.
     pub tool_execution: ToolExecutionMode,
+    /// Security and resource limits.
+    pub security: crate::types::SecurityConfig,
 }
 
 impl AgentConfig {
@@ -193,6 +195,7 @@ impl AgentConfig {
             model,
             thinking_level: ThinkingLevel::default(),
             tool_execution: ToolExecutionMode::default(),
+            security: crate::types::SecurityConfig::default(),
         }
     }
 }

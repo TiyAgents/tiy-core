@@ -6,7 +6,10 @@ use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 
 /// Validate tool call arguments against tool schema.
-pub fn validate_tool_call(tools: &[Tool], tool_call: &ToolCall) -> Result<Value, ToolValidationError> {
+pub fn validate_tool_call(
+    tools: &[Tool],
+    tool_call: &ToolCall,
+) -> Result<Value, ToolValidationError> {
     let tool = tools
         .iter()
         .find(|t| t.name == tool_call.name)
@@ -16,7 +19,10 @@ pub fn validate_tool_call(tools: &[Tool], tool_call: &ToolCall) -> Result<Value,
 }
 
 /// Validate arguments against a tool's schema.
-pub fn validate_tool_arguments(tool: &Tool, tool_call: &ToolCall) -> Result<Value, ToolValidationError> {
+pub fn validate_tool_arguments(
+    tool: &Tool,
+    tool_call: &ToolCall,
+) -> Result<Value, ToolValidationError> {
     let compiled = JSONSchema::options()
         .with_draft(Draft::Draft7)
         .compile(&tool.parameters)
@@ -31,7 +37,10 @@ pub fn validate_tool_arguments(tool: &Tool, tool_call: &ToolCall) -> Result<Valu
             .map(|e| format!("  - {}: {}", e.instance_path, e))
             .collect();
 
-        return Err(ToolValidationError::ValidationFailed(tool_name, error_messages));
+        return Err(ToolValidationError::ValidationFailed(
+            tool_name,
+            error_messages,
+        ));
     }
 
     // Return a new validated args (we already have a clone)
@@ -95,11 +104,7 @@ mod tests {
     #[test]
     fn test_missing_required_field() {
         let tool = create_test_tool();
-        let tool_call = ToolCall::new(
-            "call_1",
-            "get_weather",
-            json!({"units": "celsius"}),
-        );
+        let tool_call = ToolCall::new("call_1", "get_weather", json!({"units": "celsius"}));
 
         let result = validate_tool_call(&[tool], &tool_call);
         assert!(result.is_err());
@@ -121,11 +126,7 @@ mod tests {
     #[test]
     fn test_tool_not_found() {
         let tool = create_test_tool();
-        let tool_call = ToolCall::new(
-            "call_1",
-            "unknown_tool",
-            json!({}),
-        );
+        let tool_call = ToolCall::new("call_1", "unknown_tool", json!({}));
 
         let result = validate_tool_call(&[tool], &tool_call);
         assert!(matches!(result, Err(ToolValidationError::ToolNotFound(_))));

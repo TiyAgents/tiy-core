@@ -80,8 +80,10 @@ impl ToolCallIdMapper {
             counter += 1;
         }
 
-        self.to_normalized.insert(id.to_string(), final_normalized.clone());
-        self.from_normalized.insert(final_normalized.clone(), id.to_string());
+        self.to_normalized
+            .insert(id.to_string(), final_normalized.clone());
+        self.from_normalized
+            .insert(final_normalized.clone(), id.to_string());
 
         final_normalized
     }
@@ -101,7 +103,9 @@ mod tests {
         let id = "call_abc123+def/ghi=";
         let normalized = normalize_tool_call_id(id, &crate::types::Provider::Anthropic);
         assert!(normalized.len() <= 64);
-        assert!(normalized.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert!(normalized
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Tests for models/registry module and provider/registry module.
 
-use tiy_core::types::*;
 use tiy_core::models::ModelRegistry;
+use tiy_core::types::*;
 
 // ============================================================================
 // ModelRegistry tests
@@ -131,13 +131,17 @@ fn test_predefined_openai_models() {
 fn test_predefined_anthropic_models() {
     let registry = ModelRegistry::with_predefined();
 
-    let sonnet = registry.get(&Provider::Anthropic, "claude-sonnet-4-20250514").unwrap();
+    let sonnet = registry
+        .get(&Provider::Anthropic, "claude-sonnet-4-20250514")
+        .unwrap();
     assert_eq!(sonnet.api, None);
     assert!(sonnet.reasoning);
     assert_eq!(sonnet.cost.input, 3.0);
     assert_eq!(sonnet.cost.output, 15.0);
 
-    let opus = registry.get(&Provider::Anthropic, "claude-opus-4-20250514").unwrap();
+    let opus = registry
+        .get(&Provider::Anthropic, "claude-opus-4-20250514")
+        .unwrap();
     assert_eq!(opus.cost.input, 15.0);
     assert_eq!(opus.cost.output, 75.0);
 }
@@ -180,7 +184,7 @@ fn test_get_providers_function() {
 // ============================================================================
 
 use std::sync::Arc;
-use tiy_core::provider::{ProviderRegistry, LLMProvider};
+use tiy_core::provider::{LLMProvider, ProviderRegistry};
 use tiy_core::stream::AssistantMessageEventStream;
 
 struct MockProvider;

@@ -4,10 +4,10 @@
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 use crate::provider::LLMProvider;
-use crate::types::{StreamOptions, SimpleStreamOptions};
-use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
+use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::thinking::OpenAIThinkingOptions;
 use crate::types::*;
+use crate::types::{SimpleStreamOptions, StreamOptions};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
@@ -24,7 +24,10 @@ impl OpenAICompletionsProvider {
     /// Create a new OpenAI Completions provider.
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: None,
         }
     }
@@ -32,7 +35,10 @@ impl OpenAICompletionsProvider {
     /// Create a provider with a default API key.
     pub fn with_api_key(api_key: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: Some(api_key.into()),
         }
     }
@@ -92,7 +98,9 @@ impl LLMProvider for OpenAICompletionsProvider {
         let api_key = self.resolve_api_key(&options, &model.provider);
 
         tokio::spawn(async move {
-            if let Err(e) = run_stream(client, &model, &context, options, api_key, stream_clone).await {
+            if let Err(e) =
+                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            {
                 tracing::error!("Stream error: {}", e);
             }
         });
@@ -115,6 +123,7 @@ impl LLMProvider for OpenAICompletionsProvider {
             base_url: options.base.base_url,
             headers: options.base.headers,
             session_id: options.base.session_id,
+            security: options.base.security,
         };
 
         let stream = AssistantMessageEventStream::new_assistant_stream();
@@ -134,7 +143,9 @@ impl LLMProvider for OpenAICompletionsProvider {
                 api_key,
                 thinking_options,
                 stream_clone,
-            ).await {
+            )
+            .await
+            {
                 tracing::error!("Stream error: {}", e);
             }
         });
@@ -316,7 +327,10 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
     // Add system prompt
     if let Some(ref prompt) = context.system_prompt {
         let use_developer = model.reasoning
-            && model.compat.as_ref().map_or(false, |c| c.supports_developer_role);
+            && model
+                .compat
+                .as_ref()
+                .map_or(false, |c| c.supports_developer_role);
         let role = if use_developer { "developer" } else { "system" };
 
         messages.push(OpenAIMessage {
@@ -407,9 +421,14 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
     }
 }
 
-fn convert_assistant_message(assistant_msg: &AssistantMessage, _model: &Model) -> Option<OpenAIMessage> {
+fn convert_assistant_message(
+    assistant_msg: &AssistantMessage,
+    _model: &Model,
+) -> Option<OpenAIMessage> {
     // Skip error/aborted messages
-    if assistant_msg.stop_reason == StopReason::Error || assistant_msg.stop_reason == StopReason::Aborted {
+    if assistant_msg.stop_reason == StopReason::Error
+        || assistant_msg.stop_reason == StopReason::Aborted
+    {
         return None;
     }
 
@@ -461,7 +480,11 @@ fn convert_assistant_message(assistant_msg: &AssistantMessage, _model: &Model) -
     let msg = OpenAIMessage {
         role: "assistant".to_string(),
         content,
-        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
         tool_call_id: None,
         name: None,
     };
@@ -491,7 +514,10 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
         .collect::<Vec<_>>()
         .join("\n");
 
-    let requires_name = model.compat.as_ref().map_or(false, |c| c.requires_tool_result_name);
+    let requires_name = model
+        .compat
+        .as_ref()
+        .map_or(false, |c| c.requires_tool_result_name);
 
     OpenAIMessage {
         role: "tool".to_string(),
@@ -502,7 +528,11 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
         })),
         tool_calls: None,
         tool_call_id: Some(tool_result.tool_call_id.clone()),
-        name: if requires_name { Some(tool_result.tool_name.clone()) } else { None },
+        name: if requires_name {
+            Some(tool_result.tool_name.clone())
+        } else {
+            None
+        },
     }
 }
 
@@ -544,6 +574,8 @@ async fn run_stream(
     api_key: String,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let limits = options.security_config();
+
     let mut output = AssistantMessage::builder()
         .api(model.api.clone().unwrap_or(Api::OpenAICompletions))
         .provider(model.provider.clone())
@@ -556,7 +588,10 @@ async fn run_stream(
     let tools = context.tools.as_ref().map(|t| convert_tools(&t));
 
     // Determine which max tokens field to use
-    let max_tokens_field = model.compat.as_ref().and_then(|c| c.max_tokens_field.as_deref());
+    let max_tokens_field = model
+        .compat
+        .as_ref()
+        .and_then(|c| c.max_tokens_field.as_deref());
     let (max_tokens, max_completion_tokens) = match max_tokens_field {
         Some("max_tokens") => (options.max_tokens, None),
         _ => (None, options.max_tokens),
@@ -570,14 +605,31 @@ async fn run_stream(
         max_tokens,
         max_completion_tokens,
         tools,
-        stream_options: Some(StreamOptionsConfig { include_usage: true }),
+        stream_options: Some(StreamOptionsConfig {
+            include_usage: true,
+        }),
         reasoning_effort: None,
     };
 
-    let base = options.base_url.as_deref()
+    let base = options
+        .base_url
+        .as_deref()
         .or(model.base_url.as_deref())
         .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/chat/completions", base);
+
+    // H1: Validate base URL against security policy
+    if let Err(e) = limits.url.validate(base) {
+        tracing::error!(url = %base, error = %e, "Base URL validation failed");
+        output.stop_reason = StopReason::Error;
+        output.error_message = Some(format!("URL validation error: {}", e));
+        stream.push(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: output,
+        });
+        stream.end(None);
+        return Ok(());
+    }
 
     tracing::info!(
         url = %url,
@@ -587,7 +639,13 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending OpenAI Completions request"
     );
-    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
+    let debug_body = serde_json::to_string(&request).unwrap_or_default();
+    let debug_preview = if debug_body.len() > 500 {
+        &debug_body[..500]
+    } else {
+        &debug_body
+    };
+    tracing::debug!(request_body = %debug_preview, "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -596,9 +654,13 @@ async fn run_stream(
     );
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
 
-    // Add custom headers
+    // Add custom headers (H2: skip protected headers)
     if let Some(ref custom_headers) = options.headers {
         for (key, value) in custom_headers {
+            if limits.headers.is_protected(key) {
+                tracing::warn!(header = %key, "Skipping protected header override");
+                continue;
+            }
             if let Ok(header_name) = reqwest::header::HeaderName::try_from(key.clone()) {
                 if let Ok(header_value) = reqwest::header::HeaderValue::try_from(value.clone()) {
                     headers.insert(header_name, header_value);
@@ -609,6 +671,7 @@ async fn run_stream(
 
     let response = client
         .post(&url)
+        .timeout(limits.http.request_timeout())
         .headers(headers)
         .json(&request)
         .send()
@@ -616,7 +679,7 @@ async fn run_stream(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
         tracing::error!(
             url = %url,
             model = %model.id,
@@ -625,7 +688,10 @@ async fn run_stream(
             "OpenAI Completions request failed"
         );
         output.stop_reason = StopReason::Error;
-        output.error_message = Some(format!("HTTP {}: {}", status, body));
+        output.error_message = Some(crate::types::truncate_error_message(
+            &format!("HTTP {}: {}", status, body),
+            limits.http.max_error_message_chars,
+        ));
         stream.push(AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: output,
@@ -650,9 +716,28 @@ async fn run_stream(
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
 
+        // C2: Check SSE line buffer limit
+        if line_buffer.len() > limits.http.max_sse_line_buffer_bytes {
+            tracing::error!(
+                buffer_size = line_buffer.len(),
+                limit = limits.http.max_sse_line_buffer_bytes,
+                "SSE line buffer exceeded limit, aborting stream"
+            );
+            output.stop_reason = StopReason::Error;
+            output.error_message = Some("SSE line buffer exceeded maximum size".to_string());
+            stream.push(AssistantMessageEvent::Error {
+                reason: StopReason::Error,
+                error: output,
+            });
+            stream.end(None);
+            return Ok(());
+        }
+
         // Process only complete lines (ending with \n), keep partial line in buffer
         while let Some(newline_pos) = line_buffer.find('\n') {
-            let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if !line.starts_with("data: ") {
@@ -707,7 +792,8 @@ async fn run_stream(
                                     });
                                 }
 
-                                if let Some(ContentBlock::Text(ref mut text_block)) = current_block {
+                                if let Some(ContentBlock::Text(ref mut text_block)) = current_block
+                                {
                                     text_block.text.push_str(content);
                                     stream.push(AssistantMessageEvent::TextDelta {
                                         content_index: output.content.len(),
@@ -719,7 +805,9 @@ async fn run_stream(
                         }
 
                         // Handle reasoning/thinking
-                        let reasoning = delta.reasoning_content.as_ref()
+                        let reasoning = delta
+                            .reasoning_content
+                            .as_ref()
                             .or(delta.reasoning.as_ref())
                             .or(delta.reasoning_text.as_ref());
 
@@ -729,14 +817,17 @@ async fn run_stream(
                                     if let Some(block) = current_block.take() {
                                         output.content.push(block);
                                     }
-                                    current_block = Some(ContentBlock::Thinking(ThinkingContent::new("")));
+                                    current_block =
+                                        Some(ContentBlock::Thinking(ThinkingContent::new("")));
                                     stream.push(AssistantMessageEvent::ThinkingStart {
                                         content_index: output.content.len(),
                                         partial: output.clone(),
                                     });
                                 }
 
-                                if let Some(ContentBlock::Thinking(ref mut thinking_block)) = current_block {
+                                if let Some(ContentBlock::Thinking(ref mut thinking_block)) =
+                                    current_block
+                                {
                                     thinking_block.thinking.push_str(content);
                                     stream.push(AssistantMessageEvent::ThinkingDelta {
                                         content_index: output.content.len(),
@@ -761,7 +852,11 @@ async fn run_stream(
                                 }
 
                                 let id = tc.id.clone().unwrap_or_default();
-                                let name = tc.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default();
+                                let name = tc
+                                    .function
+                                    .as_ref()
+                                    .and_then(|f| f.name.clone())
+                                    .unwrap_or_default();
 
                                 current_block = Some(ContentBlock::ToolCall(ToolCall::new(
                                     id,
@@ -787,7 +882,9 @@ async fn run_stream(
                                         tool_call.name = name.clone();
                                     }
                                     if let Some(ref args) = func.arguments {
-                                        let partial = partial_tool_args.entry(index).or_insert_with(String::new);
+                                        let partial = partial_tool_args
+                                            .entry(index)
+                                            .or_insert_with(String::new);
                                         partial.push_str(args);
                                         tool_call.arguments = parse_streaming_json(partial);
 

@@ -7,7 +7,7 @@
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 
 use crate::provider::LLMProvider;
-use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
+use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -24,7 +24,10 @@ impl AnthropicProvider {
     /// Create a new Anthropic provider.
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: None,
         }
     }
@@ -32,7 +35,10 @@ impl AnthropicProvider {
     /// Create a provider with a default API key.
     pub fn with_api_key(api_key: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: Some(api_key.into()),
         }
     }
@@ -76,7 +82,9 @@ impl LLMProvider for AnthropicProvider {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) = run_stream(client, &model, &context, options, api_key, stream_clone).await {
+            if let Err(e) =
+                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            {
                 tracing::error!("Anthropic stream error: {}", e);
             }
         });
@@ -149,9 +157,7 @@ enum AnthropicContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image {
-        source: AnthropicImageSource,
-    },
+    Image { source: AnthropicImageSource },
     #[serde(rename = "thinking")]
     Thinking {
         thinking: String,
@@ -159,9 +165,7 @@ enum AnthropicContentBlock {
         signature: Option<String>,
     },
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -246,10 +250,7 @@ enum ContentBlockInfo {
     #[serde(rename = "redacted_thinking")]
     RedactedThinking {},
     #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-    },
+    ToolUse { id: String, name: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,7 +393,11 @@ fn convert_messages(context: &Context) -> Vec<AnthropicMessage> {
                 let block = AnthropicContentBlock::ToolResult {
                     tool_use_id: tool_result.tool_call_id.clone(),
                     content: if text.is_empty() { None } else { Some(text) },
-                    is_error: if tool_result.is_error { Some(true) } else { None },
+                    is_error: if tool_result.is_error {
+                        Some(true)
+                    } else {
+                        None
+                    },
                 };
 
                 // Check if the last message is a user message; merge if so
@@ -404,9 +409,7 @@ fn convert_messages(context: &Context) -> Vec<AnthropicMessage> {
                                 continue;
                             }
                             AnthropicContent::Text(text) => {
-                                let text_block = AnthropicContentBlock::Text {
-                                    text: text.clone(),
-                                };
+                                let text_block = AnthropicContentBlock::Text { text: text.clone() };
                                 last.content = AnthropicContent::Blocks(vec![text_block, block]);
                                 continue;
                             }
@@ -449,6 +452,8 @@ async fn run_stream(
     api_key: String,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let limits = options.security_config();
+
     let mut output = AssistantMessage::builder()
         .api(Api::AnthropicMessages)
         .provider(model.provider.clone())
@@ -471,10 +476,25 @@ async fn run_stream(
         thinking: None, // Thinking params can be set via SimpleStreamOptions
     };
 
-    let base = options.base_url.as_deref()
+    let base = options
+        .base_url
+        .as_deref()
         .or(model.base_url.as_deref())
         .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/messages", base);
+
+    // H1: Validate base URL against security policy
+    if let Err(e) = limits.url.validate(base) {
+        tracing::error!(url = %base, error = %e, "Base URL validation failed");
+        output.stop_reason = StopReason::Error;
+        output.error_message = Some(format!("URL validation error: {}", e));
+        stream.push(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: output,
+        });
+        stream.end(None);
+        return Ok(());
+    }
 
     tracing::info!(
         url = %url,
@@ -484,7 +504,13 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending Anthropic Messages request"
     );
-    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
+    let debug_body = serde_json::to_string(&request).unwrap_or_default();
+    let debug_preview = if debug_body.len() > 500 {
+        &debug_body[..500]
+    } else {
+        &debug_body
+    };
+    tracing::debug!(request_body = %debug_preview, "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("x-api-key", api_key.parse()?);
@@ -494,6 +520,10 @@ async fn run_stream(
     // Add custom headers
     if let Some(ref custom_headers) = options.headers {
         for (key, value) in custom_headers {
+            if limits.headers.is_protected(key) {
+                tracing::warn!(header = %key, "Skipping protected header override");
+                continue;
+            }
             if let Ok(header_name) = reqwest::header::HeaderName::try_from(key.clone()) {
                 if let Ok(header_value) = reqwest::header::HeaderValue::try_from(value.clone()) {
                     headers.insert(header_name, header_value);
@@ -506,12 +536,13 @@ async fn run_stream(
         .post(&url)
         .headers(headers)
         .json(&request)
+        .timeout(limits.http.request_timeout())
         .send()
         .await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
         tracing::error!(
             url = %url,
             model = %model.id,
@@ -520,7 +551,10 @@ async fn run_stream(
             "Anthropic Messages request failed"
         );
         output.stop_reason = StopReason::Error;
-        output.error_message = Some(format!("HTTP {}: {}", status, body));
+        output.error_message = Some(crate::types::truncate_error_message(
+            &format!("HTTP {}: {}", status, body),
+            limits.http.max_error_message_chars,
+        ));
         stream.push(AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: output,
@@ -536,7 +570,8 @@ async fn run_stream(
 
     // Track content blocks by index
     let mut block_types: Vec<BlockType> = Vec::new();
-    let mut partial_tool_args: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut partial_tool_args: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     let mut line_buffer = String::new();
     let mut current_event_type = String::new();
 
@@ -546,8 +581,27 @@ async fn run_stream(
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
 
+        // C2: Check SSE line buffer limit
+        if line_buffer.len() > limits.http.max_sse_line_buffer_bytes {
+            tracing::error!(
+                buffer_size = line_buffer.len(),
+                limit = limits.http.max_sse_line_buffer_bytes,
+                "SSE line buffer exceeded limit, aborting stream"
+            );
+            output.stop_reason = StopReason::Error;
+            output.error_message = Some("SSE line buffer exceeded maximum size".to_string());
+            stream.push(AssistantMessageEvent::Error {
+                reason: StopReason::Error,
+                error: output,
+            });
+            stream.end(None);
+            return Ok(());
+        }
+
         while let Some(newline_pos) = line_buffer.find('\n') {
-            let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if line.starts_with("event: ") {
@@ -573,8 +627,10 @@ async fn run_stream(
                             output.usage.output = usage.output_tokens;
                             output.usage.cache_read = usage.cache_read_input_tokens;
                             output.usage.cache_write = usage.cache_creation_input_tokens;
-                            output.usage.total_tokens = output.usage.input + output.usage.output
-                                + output.usage.cache_read + output.usage.cache_write;
+                            output.usage.total_tokens = output.usage.input
+                                + output.usage.output
+                                + output.usage.cache_read
+                                + output.usage.cache_write;
                         }
                     }
                 }
@@ -587,7 +643,9 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::Text;
-                                output.content.push(ContentBlock::Text(TextContent::new("")));
+                                output
+                                    .content
+                                    .push(ContentBlock::Text(TextContent::new("")));
                                 stream.push(AssistantMessageEvent::TextStart {
                                     content_index: idx,
                                     partial: output.clone(),
@@ -598,7 +656,9 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::Thinking;
-                                output.content.push(ContentBlock::Thinking(ThinkingContent::new("")));
+                                output
+                                    .content
+                                    .push(ContentBlock::Thinking(ThinkingContent::new("")));
                                 stream.push(AssistantMessageEvent::ThinkingStart {
                                     content_index: idx,
                                     partial: output.clone(),
@@ -637,7 +697,9 @@ async fn run_stream(
                         let idx = delta_data.index;
                         match delta_data.delta {
                             DeltaInfo::TextDelta { text } => {
-                                if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx) {
+                                if let Some(ContentBlock::Text(ref mut t)) =
+                                    output.content.get_mut(idx)
+                                {
                                     t.text.push_str(&text);
                                 }
                                 stream.push(AssistantMessageEvent::TextDelta {
@@ -647,7 +709,9 @@ async fn run_stream(
                                 });
                             }
                             DeltaInfo::ThinkingDelta { thinking } => {
-                                if let Some(ContentBlock::Thinking(ref mut t)) = output.content.get_mut(idx) {
+                                if let Some(ContentBlock::Thinking(ref mut t)) =
+                                    output.content.get_mut(idx)
+                                {
                                     t.thinking.push_str(&thinking);
                                 }
                                 stream.push(AssistantMessageEvent::ThinkingDelta {
@@ -660,7 +724,9 @@ async fn run_stream(
                                 if let Some(ref mut args_str) = partial_tool_args.get_mut(&idx) {
                                     args_str.push_str(&partial_json);
                                     let parsed = parse_streaming_json(args_str);
-                                    if let Some(ContentBlock::ToolCall(ref mut tc)) = output.content.get_mut(idx) {
+                                    if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                        output.content.get_mut(idx)
+                                    {
                                         tc.arguments = parsed;
                                     }
                                 }
@@ -672,8 +738,11 @@ async fn run_stream(
                             }
                             DeltaInfo::SignatureDelta { signature } => {
                                 // Store signature on thinking blocks
-                                if let Some(ContentBlock::Thinking(ref mut t)) = output.content.get_mut(idx) {
-                                    let existing = t.thinking_signature.get_or_insert_with(String::new);
+                                if let Some(ContentBlock::Thinking(ref mut t)) =
+                                    output.content.get_mut(idx)
+                                {
+                                    let existing =
+                                        t.thinking_signature.get_or_insert_with(String::new);
                                     existing.push_str(&signature);
                                 }
                             }
@@ -686,7 +755,9 @@ async fn run_stream(
                         if let Some(block_type) = block_types.get(idx) {
                             match block_type {
                                 BlockType::Text => {
-                                    let text = output.content.get(idx)
+                                    let text = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_text())
                                         .map(|t| t.text.clone())
                                         .unwrap_or_default();
@@ -697,7 +768,9 @@ async fn run_stream(
                                     });
                                 }
                                 BlockType::Thinking => {
-                                    let text = output.content.get(idx)
+                                    let text = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_thinking())
                                         .map(|t| t.thinking.clone())
                                         .unwrap_or_default();
@@ -710,16 +783,24 @@ async fn run_stream(
                                 BlockType::ToolUse => {
                                     // Finalize tool call args from the accumulated partial JSON
                                     if let Some(args_str) = partial_tool_args.get(&idx) {
-                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args_str) {
-                                            if let Some(ContentBlock::ToolCall(ref mut tc)) = output.content.get_mut(idx) {
+                                        if let Ok(parsed) =
+                                            serde_json::from_str::<serde_json::Value>(args_str)
+                                        {
+                                            if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                                output.content.get_mut(idx)
+                                            {
                                                 tc.arguments = parsed;
                                             }
                                         }
                                     }
-                                    let tool_call = output.content.get(idx)
+                                    let tool_call = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_tool_call())
                                         .cloned()
-                                        .unwrap_or_else(|| ToolCall::new("", "", serde_json::Value::Null));
+                                        .unwrap_or_else(|| {
+                                            ToolCall::new("", "", serde_json::Value::Null)
+                                        });
                                     stream.push(AssistantMessageEvent::ToolCallEnd {
                                         content_index: idx,
                                         tool_call,
@@ -744,8 +825,10 @@ async fn run_stream(
                         }
                         if let Some(usage) = delta_data.usage {
                             output.usage.output = usage.output_tokens;
-                            output.usage.total_tokens = output.usage.input + output.usage.output
-                                + output.usage.cache_read + output.usage.cache_write;
+                            output.usage.total_tokens = output.usage.input
+                                + output.usage.output
+                                + output.usage.cache_read
+                                + output.usage.cache_write;
                         }
                     }
                 }

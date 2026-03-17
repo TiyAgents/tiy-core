@@ -131,6 +131,7 @@ fn main() {
                 base_url,
                 headers: None,
                 session_id: None,
+                security: None,
             };
 
             // Process streaming response

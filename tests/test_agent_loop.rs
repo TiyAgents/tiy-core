@@ -2,9 +2,12 @@
 //!
 //! These tests verify the full agent loop: prompt → LLM call → tool execution → loop.
 
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use async_trait::async_trait;
 use serde_json::json;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tiy_core::agent::*;
 use tiy_core::provider::{ArcProvider, LLMProvider};
 use tiy_core::stream::AssistantMessageEventStream;
@@ -118,12 +121,18 @@ fn make_assistant_message(text: &str) -> AssistantMessage {
         .unwrap()
 }
 
-fn make_tool_call_message(tool_name: &str, tool_id: &str, args: serde_json::Value) -> AssistantMessage {
+fn make_tool_call_message(
+    tool_name: &str,
+    tool_id: &str,
+    args: serde_json::Value,
+) -> AssistantMessage {
     AssistantMessage::builder()
         .api(Api::OpenAICompletions)
         .provider(Provider::OpenAI)
         .model("mock-model")
-        .content(vec![ContentBlock::ToolCall(ToolCall::new(tool_id, tool_name, args))])
+        .content(vec![ContentBlock::ToolCall(ToolCall::new(
+            tool_id, tool_name, args,
+        ))])
         .stop_reason(StopReason::ToolUse)
         .build()
         .unwrap()
@@ -148,7 +157,9 @@ async fn test_agent_prompt_with_provider() {
     assert!(!messages.is_empty());
 
     // Should have at least the assistant response
-    let has_assistant = messages.iter().any(|m| matches!(m, AgentMessage::Assistant(_)));
+    let has_assistant = messages
+        .iter()
+        .any(|m| matches!(m, AgentMessage::Assistant(_)));
     assert!(has_assistant, "Expected an assistant message in results");
 
     // State should have user + assistant
@@ -164,11 +175,14 @@ async fn test_agent_prompt_text_content() {
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
 
-    let result = agent.prompt(UserMessage::text("What is the meaning of life?")).await;
+    let result = agent
+        .prompt(UserMessage::text("What is the meaning of life?"))
+        .await;
     assert!(result.is_ok());
 
     let messages = result.unwrap();
-    let assistant_msg = messages.iter()
+    let assistant_msg = messages
+        .iter()
         .find_map(|m| match m {
             AgentMessage::Assistant(a) => Some(a),
             _ => None,
@@ -212,18 +226,25 @@ async fn test_agent_tool_execution_loop() {
         }
     });
 
-    let result = agent.prompt(UserMessage::text("What's the weather in Tokyo?")).await;
+    let result = agent
+        .prompt(UserMessage::text("What's the weather in Tokyo?"))
+        .await;
     assert!(result.is_ok());
 
     let messages = result.unwrap();
 
     // Should have: assistant(tool_call) + tool_result + assistant(text)
-    let assistant_count = messages.iter()
+    let assistant_count = messages
+        .iter()
         .filter(|m| matches!(m, AgentMessage::Assistant(_)))
         .count();
-    assert_eq!(assistant_count, 2, "Expected 2 assistant messages (tool call + final)");
+    assert_eq!(
+        assistant_count, 2,
+        "Expected 2 assistant messages (tool call + final)"
+    );
 
-    let tool_result_count = messages.iter()
+    let tool_result_count = messages
+        .iter()
         .filter(|m| matches!(m, AgentMessage::ToolResult(_)))
         .count();
     assert_eq!(tool_result_count, 1, "Expected 1 tool result");
@@ -247,7 +268,8 @@ async fn test_agent_tool_execution_no_executor() {
     assert!(result.is_ok());
 
     let messages = result.unwrap();
-    let tool_results: Vec<_> = messages.iter()
+    let tool_results: Vec<_> = messages
+        .iter()
         .filter_map(|m| match m {
             AgentMessage::ToolResult(tr) => Some(tr),
             _ => None,
@@ -256,12 +278,18 @@ async fn test_agent_tool_execution_no_executor() {
 
     assert_eq!(tool_results.len(), 1);
     // The tool result should contain an error about no executor
-    let result_text: String = tool_results[0].content.iter()
+    let result_text: String = tool_results[0]
+        .content
+        .iter()
         .filter_map(|b| b.as_text())
         .map(|t| t.text.as_str())
         .collect::<Vec<_>>()
         .join("");
-    assert!(result_text.contains("No tool executor"), "Expected error about missing executor, got: {}", result_text);
+    assert!(
+        result_text.contains("No tool executor"),
+        "Expected error about missing executor, got: {}",
+        result_text
+    );
 }
 
 // ============================================================================
@@ -271,9 +299,9 @@ async fn test_agent_tool_execution_no_executor() {
 #[tokio::test]
 async fn test_agent_max_turns_limit() {
     // Create a provider that always returns tool calls (infinite loop)
-    let responses: Vec<AssistantMessage> = (0..30).map(|i| {
-        make_tool_call_message("loop_tool", &format!("call_{}", i), json!({}))
-    }).collect();
+    let responses: Vec<AssistantMessage> = (0..30)
+        .map(|i| make_tool_call_message("loop_tool", &format!("call_{}", i), json!({})))
+        .collect();
 
     let provider: ArcProvider = Arc::new(MockProvider::new(responses));
 
@@ -292,10 +320,15 @@ async fn test_agent_max_turns_limit() {
 
     // Should stop after max_turns
     let messages = result.unwrap();
-    let assistant_count = messages.iter()
+    let assistant_count = messages
+        .iter()
         .filter(|m| matches!(m, AgentMessage::Assistant(_)))
         .count();
-    assert!(assistant_count <= 3, "Should not exceed max_turns, got {}", assistant_count);
+    assert!(
+        assistant_count <= 3,
+        "Should not exceed max_turns, got {}",
+        assistant_count
+    );
 }
 
 // ============================================================================
@@ -323,9 +356,15 @@ async fn test_agent_events_emitted() {
     let _unsub = agent.subscribe(move |event| {
         ec.fetch_add(1, Ordering::SeqCst);
         match event {
-            AgentEvent::AgentStart => { asc.fetch_add(1, Ordering::SeqCst); }
-            AgentEvent::AgentEnd { .. } => { aec.fetch_add(1, Ordering::SeqCst); }
-            AgentEvent::TurnStart => { tsc.fetch_add(1, Ordering::SeqCst); }
+            AgentEvent::AgentStart => {
+                asc.fetch_add(1, Ordering::SeqCst);
+            }
+            AgentEvent::AgentEnd { .. } => {
+                aec.fetch_add(1, Ordering::SeqCst);
+            }
+            AgentEvent::TurnStart => {
+                tsc.fetch_add(1, Ordering::SeqCst);
+            }
             _ => {}
         }
     });
@@ -333,10 +372,24 @@ async fn test_agent_events_emitted() {
     let result = agent.prompt(UserMessage::text("Hello")).await;
     assert!(result.is_ok());
 
-    assert_eq!(agent_start_count.load(Ordering::SeqCst), 1, "Should emit exactly 1 AgentStart");
-    assert_eq!(agent_end_count.load(Ordering::SeqCst), 1, "Should emit exactly 1 AgentEnd");
-    assert!(turn_start_count.load(Ordering::SeqCst) >= 1, "Should emit at least 1 TurnStart");
-    assert!(event_count.load(Ordering::SeqCst) >= 3, "Should emit multiple events");
+    assert_eq!(
+        agent_start_count.load(Ordering::SeqCst),
+        1,
+        "Should emit exactly 1 AgentStart"
+    );
+    assert_eq!(
+        agent_end_count.load(Ordering::SeqCst),
+        1,
+        "Should emit exactly 1 AgentEnd"
+    );
+    assert!(
+        turn_start_count.load(Ordering::SeqCst) >= 1,
+        "Should emit at least 1 TurnStart"
+    );
+    assert!(
+        event_count.load(Ordering::SeqCst) >= 3,
+        "Should emit multiple events"
+    );
 }
 
 #[tokio::test]
@@ -355,25 +408,35 @@ async fn test_agent_tool_execution_events() {
     let tsc = tool_start_count.clone();
     let tec = tool_end_count.clone();
 
-    let _unsub = agent.subscribe(move |event| {
-        match event {
-            AgentEvent::ToolExecutionStart { .. } => { tsc.fetch_add(1, Ordering::SeqCst); }
-            AgentEvent::ToolExecutionEnd { .. } => { tec.fetch_add(1, Ordering::SeqCst); }
-            _ => {}
+    let _unsub = agent.subscribe(move |event| match event {
+        AgentEvent::ToolExecutionStart { .. } => {
+            tsc.fetch_add(1, Ordering::SeqCst);
         }
+        AgentEvent::ToolExecutionEnd { .. } => {
+            tec.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
     });
 
-    agent.set_tool_executor(|_name: &str, _id: &str, _args: &serde_json::Value| {
-        async move {
+    agent.set_tool_executor(
+        |_name: &str, _id: &str, _args: &serde_json::Value| async move {
             AgentToolResult::text("result")
-        }
-    });
+        },
+    );
 
     let result = agent.prompt(UserMessage::text("Do something")).await;
     assert!(result.is_ok());
 
-    assert_eq!(tool_start_count.load(Ordering::SeqCst), 1, "Should emit 1 ToolExecutionStart");
-    assert_eq!(tool_end_count.load(Ordering::SeqCst), 1, "Should emit 1 ToolExecutionEnd");
+    assert_eq!(
+        tool_start_count.load(Ordering::SeqCst),
+        1,
+        "Should emit 1 ToolExecutionStart"
+    );
+    assert_eq!(
+        tool_end_count.load(Ordering::SeqCst),
+        1,
+        "Should emit 1 ToolExecutionEnd"
+    );
 }
 
 // ============================================================================
@@ -390,16 +453,24 @@ async fn test_agent_continue_after_tool_result() {
 
     // Manually add a user message and tool result
     agent.append_message(AgentMessage::User(UserMessage::text("Do something")));
-    agent.append_message(AgentMessage::ToolResult(
-        ToolResultMessage::text("call_1", "my_tool", "some result", false),
-    ));
+    agent.append_message(AgentMessage::ToolResult(ToolResultMessage::text(
+        "call_1",
+        "my_tool",
+        "some result",
+        false,
+    )));
 
     let result = agent.continue_().await;
     assert!(result.is_ok());
 
     let messages = result.unwrap();
-    let has_assistant = messages.iter().any(|m| matches!(m, AgentMessage::Assistant(_)));
-    assert!(has_assistant, "Continue should produce an assistant message");
+    let has_assistant = messages
+        .iter()
+        .any(|m| matches!(m, AgentMessage::Assistant(_)));
+    assert!(
+        has_assistant,
+        "Continue should produce an assistant message"
+    );
 }
 
 #[tokio::test]
@@ -499,10 +570,15 @@ async fn test_agent_multiple_tool_calls() {
     assert!(result.is_ok());
 
     // Both tools should have been executed (parallel by default)
-    assert_eq!(execution_count.load(Ordering::SeqCst), 2, "Expected 2 tool executions");
+    assert_eq!(
+        execution_count.load(Ordering::SeqCst),
+        2,
+        "Expected 2 tool executions"
+    );
 
     let messages = result.unwrap();
-    let tool_result_count = messages.iter()
+    let tool_result_count = messages
+        .iter()
         .filter(|m| matches!(m, AgentMessage::ToolResult(_)))
         .count();
     assert_eq!(tool_result_count, 2, "Expected 2 tool results");
@@ -519,11 +595,11 @@ async fn test_agent_sequential_tool_execution() {
     agent.set_provider(provider);
     agent.set_tool_execution(ToolExecutionMode::Sequential);
 
-    agent.set_tool_executor(|_name: &str, _id: &str, _args: &serde_json::Value| {
-        async move {
+    agent.set_tool_executor(
+        |_name: &str, _id: &str, _args: &serde_json::Value| async move {
             AgentToolResult::text("sequential result")
-        }
-    });
+        },
+    );
 
     let result = agent.prompt(UserMessage::text("Do it")).await;
     assert!(result.is_ok());

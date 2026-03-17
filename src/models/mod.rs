@@ -87,7 +87,10 @@ fn get_openai_models() -> Vec<Model> {
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(0.15, 0.60, 0.075, 0.0))
             .context_window(128000)
             .max_tokens(16384)
@@ -99,7 +102,10 @@ fn get_openai_models() -> Vec<Model> {
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(2.50, 10.00, 1.25, 0.0))
             .context_window(128000)
             .max_tokens(16384)
@@ -111,7 +117,10 @@ fn get_openai_models() -> Vec<Model> {
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(false)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(2.0, 8.0, 0.5, 0.0))
             .context_window(1047576)
             .max_tokens(32768)
@@ -123,7 +132,10 @@ fn get_openai_models() -> Vec<Model> {
             .provider(Provider::OpenAI)
             .base_url("https://api.openai.com/v1")
             .reasoning(true)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(10.0, 40.0, 2.5, 0.0))
             .context_window(200000)
             .max_tokens(100000)
@@ -140,7 +152,10 @@ fn get_anthropic_models() -> Vec<Model> {
             .provider(Provider::Anthropic)
             .base_url("https://api.anthropic.com/v1")
             .reasoning(true)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(3.0, 15.0, 0.30, 3.75))
             .context_window(200000)
             .max_tokens(16000)
@@ -152,7 +167,10 @@ fn get_anthropic_models() -> Vec<Model> {
             .provider(Provider::Anthropic)
             .base_url("https://api.anthropic.com/v1")
             .reasoning(true)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
             .cost(crate::types::Cost::new(15.0, 75.0, 1.50, 18.75))
             .context_window(200000)
             .max_tokens(32000)
@@ -162,20 +180,21 @@ fn get_anthropic_models() -> Vec<Model> {
 }
 
 fn get_google_models() -> Vec<Model> {
-    vec![
-        Model::builder()
-            .id("gemini-2.5-flash")
-            .name("Gemini 2.5 Flash")
-            .provider(Provider::Google)
-            .base_url("https://generativelanguage.googleapis.com/v1beta")
-            .reasoning(true)
-            .input(vec![crate::types::InputType::Text, crate::types::InputType::Image])
-            .cost(crate::types::Cost::new(0.075, 0.30, 0.01875, 0.0))
-            .context_window(1048576)
-            .max_tokens(65536)
-            .build()
-            .unwrap(),
-    ]
+    vec![Model::builder()
+        .id("gemini-2.5-flash")
+        .name("Gemini 2.5 Flash")
+        .provider(Provider::Google)
+        .base_url("https://generativelanguage.googleapis.com/v1beta")
+        .reasoning(true)
+        .input(vec![
+            crate::types::InputType::Text,
+            crate::types::InputType::Image,
+        ])
+        .cost(crate::types::Cost::new(0.075, 0.30, 0.01875, 0.0))
+        .context_window(1048576)
+        .max_tokens(65536)
+        .build()
+        .unwrap()]
 }
 
 /// Global model registry (single instance shared by all functions).
@@ -190,7 +209,9 @@ pub fn get_model(provider: impl Into<String>, model_id: impl Into<String>) -> Op
     // Try to parse provider
     let provider_enum: Provider = provider.clone().into();
 
-    GLOBAL_MODEL_REGISTRY.get(&provider_enum, &model_id).cloned()
+    GLOBAL_MODEL_REGISTRY
+        .get(&provider_enum, &model_id)
+        .cloned()
 }
 
 /// Get all providers that have predefined models in the global model registry.

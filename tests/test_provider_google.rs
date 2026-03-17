@@ -1,12 +1,12 @@
 //! Tests for Google Generative AI provider using wiremock for HTTP mocking.
 
-use serde_json::json;
-use tiy_core::types::*;
-use tiy_core::provider::LLMProvider;
-use tiy_core::provider::google::GoogleProvider;
 use futures::StreamExt;
-use wiremock::{MockServer, Mock, ResponseTemplate};
+use serde_json::json;
+use tiy_core::provider::google::GoogleProvider;
+use tiy_core::provider::LLMProvider;
+use tiy_core::types::*;
 use wiremock::matchers::{header, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Helper functions
@@ -42,7 +42,8 @@ fn make_options(api_key: &str) -> StreamOptions {
 /// Build a Google SSE response body from JSON data chunks.
 /// Google SSE format is `data: {json}\n\n` (no `event:` prefix, no `[DONE]` sentinel).
 fn google_sse(chunks: Vec<&str>) -> String {
-    chunks.iter()
+    chunks
+        .iter()
         .map(|c| format!("data: {}\n\n", c))
         .collect::<String>()
 }
@@ -65,21 +66,20 @@ fn test_provider_type() {
 async fn test_stream_simple_text_response() {
     let server = MockServer::start().await;
 
-    let sse_body = google_sse(vec![
-        &json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Hello"}],
-                    "role": "model"
-                },
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 10,
-                "candidatesTokenCount": 5
-            }
-        }).to_string(),
-    ]);
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "Hello"}],
+                "role": "model"
+            },
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5
+        }
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -113,7 +113,8 @@ async fn test_stream_simple_text_response() {
     assert!(matches!(&events[0], AssistantMessageEvent::Start { .. }));
 
     // Check that text deltas are present
-    let text_deltas: Vec<_> = events.iter()
+    let text_deltas: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextDelta { .. }))
         .collect();
     assert!(!text_deltas.is_empty());
@@ -130,26 +131,25 @@ async fn test_stream_simple_text_response() {
 async fn test_stream_with_tool_call() {
     let server = MockServer::start().await;
 
-    let sse_body = google_sse(vec![
-        &json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{
-                        "functionCall": {
-                            "name": "get_weather",
-                            "args": {"city": "Tokyo"}
-                        }
-                    }],
-                    "role": "model"
-                },
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 20,
-                "candidatesTokenCount": 15
-            }
-        }).to_string(),
-    ]);
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "get_weather",
+                        "args": {"city": "Tokyo"}
+                    }
+                }],
+                "role": "model"
+            },
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 20,
+            "candidatesTokenCount": 15
+        }
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -166,13 +166,11 @@ async fn test_stream_with_tool_call() {
     let provider = GoogleProvider::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
-    context.set_tools(vec![
-        Tool::new(
-            "get_weather",
-            "Get weather for a city",
-            json!({"type": "object", "properties": {"city": {"type": "string"}}}),
-        ),
-    ]);
+    context.set_tools(vec![Tool::new(
+        "get_weather",
+        "Get weather for a city",
+        json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+    )]);
     let options = make_options("test-key");
 
     let stream = provider.stream(&model, &context, options);
@@ -194,10 +192,9 @@ async fn test_stream_http_error() {
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
         .and(header("x-goog-api-key", "invalid-key"))
         .and(query_param("alt", "sse"))
-        .respond_with(
-            ResponseTemplate::new(401)
-                .set_body_string(r#"{"error": {"message": "API key not valid. Please pass a valid API key."}}"#),
-        )
+        .respond_with(ResponseTemplate::new(401).set_body_string(
+            r#"{"error": {"message": "API key not valid. Please pass a valid API key."}}"#,
+        ))
         .mount(&server)
         .await;
 
@@ -230,7 +227,8 @@ async fn test_stream_with_thinking() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         // Second chunk: more thinking content
         &json!({
             "candidates": [{
@@ -242,7 +240,8 @@ async fn test_stream_with_thinking() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         // Third chunk: actual text response with finish reason
         &json!({
             "candidates": [{
@@ -256,7 +255,8 @@ async fn test_stream_with_thinking() {
                 "promptTokenCount": 10,
                 "candidatesTokenCount": 20
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -285,12 +285,17 @@ async fn test_stream_with_thinking() {
     }
 
     // Should have thinking events followed by text events
-    let thinking_deltas: Vec<_> = events.iter()
+    let thinking_deltas: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::ThinkingDelta { .. }))
         .collect();
-    assert!(!thinking_deltas.is_empty(), "Expected thinking delta events");
+    assert!(
+        !thinking_deltas.is_empty(),
+        "Expected thinking delta events"
+    );
 
-    let text_deltas: Vec<_> = events.iter()
+    let text_deltas: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextDelta { .. }))
         .collect();
     assert!(!text_deltas.is_empty(), "Expected text delta events");
@@ -299,29 +304,32 @@ async fn test_stream_with_thinking() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "The answer is 42.");
-    assert!(result.thinking_content().contains("Let me think about this..."));
-    assert!(result.thinking_content().contains("The answer involves computation."));
+    assert!(result
+        .thinking_content()
+        .contains("Let me think about this..."));
+    assert!(result
+        .thinking_content()
+        .contains("The answer involves computation."));
 }
 
 #[tokio::test]
 async fn test_stream_usage_tracking() {
     let server = MockServer::start().await;
 
-    let sse_body = google_sse(vec![
-        &json!({
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "Hi"}],
-                    "role": "model"
-                },
-                "finishReason": "STOP"
-            }],
-            "usageMetadata": {
-                "promptTokenCount": 100,
-                "candidatesTokenCount": 50
-            }
-        }).to_string(),
-    ]);
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "Hi"}],
+                "role": "model"
+            },
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 50
+        }
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -360,7 +368,8 @@ async fn test_stream_length_stop_reason() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "candidates": [{
                 "content": {
@@ -373,7 +382,8 @@ async fn test_stream_length_stop_reason() {
                 "promptTokenCount": 10,
                 "candidatesTokenCount": 100
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -416,7 +426,8 @@ async fn test_stream_multiple_text_chunks() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         // Second chunk: more text
         &json!({
             "candidates": [{
@@ -425,7 +436,8 @@ async fn test_stream_multiple_text_chunks() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         // Third chunk: more text
         &json!({
             "candidates": [{
@@ -434,7 +446,8 @@ async fn test_stream_multiple_text_chunks() {
                     "role": "model"
                 }
             }]
-        }).to_string(),
+        })
+        .to_string(),
         // Fourth chunk: final text with finish reason and usage
         &json!({
             "candidates": [{
@@ -448,7 +461,8 @@ async fn test_stream_multiple_text_chunks() {
                 "promptTokenCount": 8,
                 "candidatesTokenCount": 4
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -480,7 +494,8 @@ async fn test_stream_multiple_text_chunks() {
     assert!(matches!(&events[0], AssistantMessageEvent::Start { .. }));
 
     // Collect text deltas and verify incremental delivery
-    let text_deltas: Vec<String> = events.iter()
+    let text_deltas: Vec<String> = events
+        .iter()
         .filter_map(|e| match e {
             AssistantMessageEvent::TextDelta { delta, .. } => Some(delta.clone()),
             _ => None,
@@ -493,12 +508,18 @@ async fn test_stream_multiple_text_chunks() {
     assert_eq!(text_deltas[3], "!");
 
     // Check TextStart and TextEnd events
-    let text_starts: Vec<_> = events.iter()
+    let text_starts: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextStart { .. }))
         .collect();
-    assert_eq!(text_starts.len(), 1, "Should have exactly one TextStart event");
+    assert_eq!(
+        text_starts.len(),
+        1,
+        "Should have exactly one TextStart event"
+    );
 
-    let text_ends: Vec<_> = events.iter()
+    let text_ends: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextEnd { .. }))
         .collect();
     assert_eq!(text_ends.len(), 1, "Should have exactly one TextEnd event");

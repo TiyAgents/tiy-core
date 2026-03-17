@@ -1,12 +1,12 @@
 //! Tests for OpenAI Completions provider using wiremock for HTTP mocking.
 
-use serde_json::json;
-use tiy_core::types::*;
-use tiy_core::provider::LLMProvider;
-use tiy_core::provider::openai_completions::OpenAICompletionsProvider;
 use futures::StreamExt;
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, header};
+use serde_json::json;
+use tiy_core::provider::openai_completions::OpenAICompletionsProvider;
+use tiy_core::provider::LLMProvider;
+use tiy_core::types::*;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Helper functions
@@ -40,7 +40,8 @@ fn make_options(api_key: &str) -> StreamOptions {
 }
 
 fn sse_response(chunks: Vec<&str>) -> String {
-    chunks.iter()
+    chunks
+        .iter()
         .map(|c| format!("data: {}\n\n", c))
         .collect::<Vec<_>>()
         .join("")
@@ -78,14 +79,16 @@ async fn test_stream_simple_text_response() {
                 "delta": {"role": "assistant", "content": "Hello"},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
                 "delta": {"content": " world!"},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -96,7 +99,8 @@ async fn test_stream_simple_text_response() {
                 "prompt_tokens": 10,
                 "completion_tokens": 5
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -129,7 +133,8 @@ async fn test_stream_simple_text_response() {
     assert!(matches!(&events[0], AssistantMessageEvent::Start { .. }));
 
     // Check that text deltas are present
-    let text_deltas: Vec<_> = events.iter()
+    let text_deltas: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::TextDelta { .. }))
         .collect();
     assert!(!text_deltas.is_empty());
@@ -162,7 +167,8 @@ async fn test_stream_with_tool_call() {
                 },
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -176,7 +182,8 @@ async fn test_stream_with_tool_call() {
                 },
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -190,7 +197,8 @@ async fn test_stream_with_tool_call() {
                 },
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -201,7 +209,8 @@ async fn test_stream_with_tool_call() {
                 "prompt_tokens": 20,
                 "completion_tokens": 15
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -217,9 +226,11 @@ async fn test_stream_with_tool_call() {
     let provider = OpenAICompletionsProvider::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
-    context.set_tools(vec![
-        Tool::new("get_weather", "Get weather", json!({"type": "object", "properties": {"city": {"type": "string"}}})),
-    ]);
+    context.set_tools(vec![Tool::new(
+        "get_weather",
+        "Get weather",
+        json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+    )]);
     let options = make_options("test-key");
 
     let stream = provider.stream(&model, &context, options);
@@ -271,21 +282,24 @@ async fn test_stream_with_thinking() {
                 "delta": {"role": "assistant", "reasoning_content": "Let me think"},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
                 "delta": {"reasoning_content": " about this..."},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
                 "delta": {"content": "The answer is 42."},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -293,7 +307,8 @@ async fn test_stream_with_thinking() {
                 "finish_reason": "stop"
             }],
             "usage": {"prompt_tokens": 10, "completion_tokens": 20}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -316,7 +331,9 @@ async fn test_stream_with_thinking() {
 
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "The answer is 42.");
-    assert!(result.thinking_content().contains("Let me think about this..."));
+    assert!(result
+        .thinking_content()
+        .contains("Let me think about this..."));
 }
 
 #[tokio::test]
@@ -330,7 +347,8 @@ async fn test_stream_usage_tracking() {
                 "delta": {"role": "assistant", "content": "Hi"},
                 "finish_reason": null
             }]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{
                 "index": 0,
@@ -343,7 +361,8 @@ async fn test_stream_usage_tracking() {
                 "prompt_tokens_details": {"cached_tokens": 30},
                 "completion_tokens_details": {"reasoning_tokens": 10}
             }
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -373,12 +392,11 @@ async fn test_stream_usage_tracking() {
 async fn test_stream_with_custom_headers() {
     let server = MockServer::start().await;
 
-    let sse_body = sse_response(vec![
-        &json!({
-            "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
-        }).to_string(),
-    ]);
+    let sse_body = sse_response(vec![&json!({
+        "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -444,11 +462,13 @@ async fn test_stream_length_stop_reason() {
     let sse_body = sse_response(vec![
         &json!({
             "choices": [{"index": 0, "delta": {"content": "truncated"}, "finish_reason": null}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 100}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))

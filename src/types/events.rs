@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantMessageEvent {
     /// Stream started with partial message.
-    Start {
-        partial: AssistantMessage,
-    },
+    Start { partial: AssistantMessage },
     /// Text block started.
     TextStart {
         content_index: usize,
@@ -77,7 +75,10 @@ pub enum AssistantMessageEvent {
 impl AssistantMessageEvent {
     /// Check if this is a completion event (done or error).
     pub fn is_complete(&self) -> bool {
-        matches!(self, AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. })
+        matches!(
+            self,
+            AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. }
+        )
     }
 
     /// Check if this is a text event.

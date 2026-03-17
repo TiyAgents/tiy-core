@@ -1,9 +1,9 @@
 //! Tests for agent module: types, state, agent.
 
 use serde_json::json;
-use tiy_core::types::*;
 use tiy_core::agent::*;
 use tiy_core::thinking::ThinkingLevel;
+use tiy_core::types::*;
 
 // ============================================================================
 // AgentMessage tests
@@ -369,9 +369,7 @@ fn test_agent_set_thinking_level() {
 #[test]
 fn test_agent_set_tools() {
     let agent = Agent::new();
-    agent.set_tools(vec![
-        AgentTool::new("tool1", "Tool 1", "desc1", json!({})),
-    ]);
+    agent.set_tools(vec![AgentTool::new("tool1", "Tool 1", "desc1", json!({}))]);
     assert_eq!(agent.state().tools.read().len(), 1);
 }
 
@@ -503,16 +501,19 @@ async fn test_agent_continue_from_assistant() {
     agent.append_message(AgentMessage::Assistant(assistant));
 
     let result = agent.continue_().await;
-    assert!(matches!(result, Err(AgentError::CannotContinueFromAssistant)));
+    assert!(matches!(
+        result,
+        Err(AgentError::CannotContinueFromAssistant)
+    ));
 }
 
 #[tokio::test]
 async fn test_agent_continue_from_tool_result() {
     // Without a provider registered, continue_ should return a ProviderError
     let agent = Agent::new();
-    agent.append_message(AgentMessage::ToolResult(
-        ToolResultMessage::text("call_1", "tool", "result", false),
-    ));
+    agent.append_message(AgentMessage::ToolResult(ToolResultMessage::text(
+        "call_1", "tool", "result", false,
+    )));
 
     let result = agent.continue_().await;
     assert!(result.is_err());
@@ -524,7 +525,10 @@ async fn test_agent_continue_from_tool_result() {
 
 #[test]
 fn test_agent_subscribe_and_emit() {
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     let agent = Agent::new();
     let count = Arc::new(AtomicUsize::new(0));
@@ -550,10 +554,25 @@ fn test_agent_subscribe_and_emit() {
 
 #[test]
 fn test_agent_error_display() {
-    assert_eq!(format!("{}", AgentError::AlreadyStreaming), "Agent is already streaming");
-    assert_eq!(format!("{}", AgentError::NoMessages), "No messages in context");
-    assert_eq!(format!("{}", AgentError::CannotContinueFromAssistant), "Cannot continue from assistant message");
-    assert_eq!(format!("{}", AgentError::ToolNotFound("foo".into())), "Tool not found: foo");
-    assert_eq!(format!("{}", AgentError::ProviderError("bad".into())), "Provider error: bad");
+    assert_eq!(
+        format!("{}", AgentError::AlreadyStreaming),
+        "Agent is already streaming"
+    );
+    assert_eq!(
+        format!("{}", AgentError::NoMessages),
+        "No messages in context"
+    );
+    assert_eq!(
+        format!("{}", AgentError::CannotContinueFromAssistant),
+        "Cannot continue from assistant message"
+    );
+    assert_eq!(
+        format!("{}", AgentError::ToolNotFound("foo".into())),
+        "Tool not found: foo"
+    );
+    assert_eq!(
+        format!("{}", AgentError::ProviderError("bad".into())),
+        "Provider error: bad"
+    );
     assert_eq!(format!("{}", AgentError::Other("misc".into())), "misc");
 }

@@ -1,12 +1,12 @@
 //! Tests for OpenAI Responses API provider using wiremock for HTTP mocking.
 
-use serde_json::json;
-use tiy_core::types::*;
-use tiy_core::provider::LLMProvider;
-use tiy_core::provider::openai_responses::OpenAIResponsesProvider;
 use futures::StreamExt;
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, header};
+use serde_json::json;
+use tiy_core::provider::openai_responses::OpenAIResponsesProvider;
+use tiy_core::provider::LLMProvider;
+use tiy_core::types::*;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
 // Helper functions
@@ -443,22 +443,31 @@ async fn test_stream_with_thinking() {
         .iter()
         .filter(|e| matches!(e, AssistantMessageEvent::ThinkingDelta { .. }))
         .collect();
-    assert!(!thinking_deltas.is_empty(), "Should have thinking delta events");
+    assert!(
+        !thinking_deltas.is_empty(),
+        "Should have thinking delta events"
+    );
 
     // Verify thinking start/end events
     assert!(
-        events.iter().any(|e| matches!(e, AssistantMessageEvent::ThinkingStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AssistantMessageEvent::ThinkingStart { .. })),
         "Should have ThinkingStart event"
     );
     assert!(
-        events.iter().any(|e| matches!(e, AssistantMessageEvent::ThinkingEnd { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, AssistantMessageEvent::ThinkingEnd { .. })),
         "Should have ThinkingEnd event"
     );
 
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "The answer is 42.");
-    assert!(result.thinking_content().contains("Let me think about this..."));
+    assert!(result
+        .thinking_content()
+        .contains("Let me think about this..."));
 }
 
 #[tokio::test]
@@ -781,7 +790,8 @@ async fn test_stream_text_without_output_item_added() {
                 "output_index": 0,
                 "content_index": 0,
                 "delta": "Hello "
-            }).to_string(),
+            })
+            .to_string(),
         ),
         (
             "response.output_text.delta",
@@ -790,7 +800,8 @@ async fn test_stream_text_without_output_item_added() {
                 "output_index": 0,
                 "content_index": 0,
                 "delta": "world!"
-            }).to_string(),
+            })
+            .to_string(),
         ),
         (
             "response.output_item.done",
@@ -798,7 +809,8 @@ async fn test_stream_text_without_output_item_added() {
                 "type": "response.output_item.done",
                 "output_index": 0,
                 "item": { "type": "message", "id": "item_01" }
-            }).to_string(),
+            })
+            .to_string(),
         ),
         (
             "response.completed",
@@ -814,7 +826,8 @@ async fn test_stream_text_without_output_item_added() {
                     },
                     "output": []
                 }
-            }).to_string(),
+            })
+            .to_string(),
         ),
     ]);
 
@@ -839,8 +852,13 @@ async fn test_stream_text_without_output_item_added() {
     let events: Vec<_> = stream.clone().collect().await;
 
     // Should have auto-generated TextStart
-    let has_text_start = events.iter().any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
-    assert!(has_text_start, "Expected TextStart event from auto-registration");
+    let has_text_start = events
+        .iter()
+        .any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
+    assert!(
+        has_text_start,
+        "Expected TextStart event from auto-registration"
+    );
 
     // Should have both TextDelta events
     let text_deltas: Vec<String> = events
@@ -869,38 +887,54 @@ async fn test_stream_without_sse_event_lines() {
     // Build raw SSE body WITHOUT any "event:" lines — only "data:" lines.
     // Each data JSON has a "type" field that the parser should use.
     let sse_body = [
-        format!("data: {}\n\n", json!({
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": { "type": "message", "id": "item_01", "role": "assistant", "content": [] }
-        })),
-        format!("data: {}\n\n", json!({
-            "type": "response.output_text.delta",
-            "output_index": 0,
-            "content_index": 0,
-            "delta": "Hello from "
-        })),
-        format!("data: {}\n\n", json!({
-            "type": "response.output_text.delta",
-            "output_index": 0,
-            "content_index": 0,
-            "delta": "data-only SSE!"
-        })),
-        format!("data: {}\n\n", json!({
-            "type": "response.output_item.done",
-            "output_index": 0,
-            "item": { "type": "message", "id": "item_01" }
-        })),
-        format!("data: {}\n\n", json!({
-            "type": "response.completed",
-            "response": {
-                "id": "resp_01",
-                "status": "completed",
-                "usage": { "input_tokens": 12, "output_tokens": 8, "total_tokens": 20 },
-                "output": []
-            }
-        })),
-    ].join("");
+        format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": { "type": "message", "id": "item_01", "role": "assistant", "content": [] }
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello from "
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "data-only SSE!"
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": { "type": "message", "id": "item_01" }
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_01",
+                    "status": "completed",
+                    "usage": { "input_tokens": 12, "output_tokens": 8, "total_tokens": 20 },
+                    "output": []
+                }
+            })
+        ),
+    ]
+    .join("");
 
     Mock::given(method("POST"))
         .and(path("/responses"))
@@ -922,7 +956,9 @@ async fn test_stream_without_sse_event_lines() {
     let events: Vec<_> = stream.clone().collect().await;
 
     // Should have TextStart, TextDelta events even without SSE event: lines
-    let has_text_start = events.iter().any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
+    let has_text_start = events
+        .iter()
+        .any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
     assert!(has_text_start, "Expected TextStart from data-only SSE");
 
     let text_deltas: Vec<String> = events

@@ -1,6 +1,6 @@
 //! Tests for stream module: event_stream and json_parser.
 
-use tiy_core::stream::{EventStream, AssistantMessageEventStream, parse_streaming_json};
+use tiy_core::stream::{parse_streaming_json, AssistantMessageEventStream, EventStream};
 use tiy_core::types::*;
 
 // ============================================================================
@@ -99,19 +99,13 @@ fn test_parse_boolean_and_null() {
 
 #[test]
 fn test_event_stream_creation() {
-    let stream: EventStream<String, String> = EventStream::new(
-        |s| s == "done",
-        |s| s.clone(),
-    );
+    let stream: EventStream<String, String> = EventStream::new(|s| s == "done", |s| s.clone());
     assert!(!stream.is_done());
 }
 
 #[test]
 fn test_event_stream_push_and_done() {
-    let stream: EventStream<String, String> = EventStream::new(
-        |s| s == "done",
-        |s| s.clone(),
-    );
+    let stream: EventStream<String, String> = EventStream::new(|s| s == "done", |s| s.clone());
 
     stream.push("event1".to_string());
     stream.push("event2".to_string());
@@ -123,10 +117,7 @@ fn test_event_stream_push_and_done() {
 
 #[test]
 fn test_event_stream_end() {
-    let stream: EventStream<String, String> = EventStream::new(
-        |s| s == "done",
-        |s| s.clone(),
-    );
+    let stream: EventStream<String, String> = EventStream::new(|s| s == "done", |s| s.clone());
 
     stream.push("event1".to_string());
     stream.end(Some("final".to_string()));
@@ -135,10 +126,7 @@ fn test_event_stream_end() {
 
 #[test]
 fn test_event_stream_clone_shares_state() {
-    let stream: EventStream<String, String> = EventStream::new(
-        |s| s == "done",
-        |s| s.clone(),
-    );
+    let stream: EventStream<String, String> = EventStream::new(|s| s == "done", |s| s.clone());
     let clone = stream.clone();
 
     stream.push("event".to_string());
@@ -170,7 +158,9 @@ fn test_assistant_stream_done_event_completes() {
         .build()
         .unwrap();
 
-    stream.push(AssistantMessageEvent::Start { partial: msg.clone() });
+    stream.push(AssistantMessageEvent::Start {
+        partial: msg.clone(),
+    });
     assert!(!stream.is_done());
 
     stream.push(AssistantMessageEvent::Done {

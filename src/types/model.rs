@@ -66,10 +66,7 @@ impl Api {
     pub fn is_openai_compatible(&self) -> bool {
         matches!(
             self,
-            Api::OpenAICompletions
-                | Api::Ollama
-                | Api::MistralConversations
-                | Api::OpenAIResponses
+            Api::OpenAICompletions | Api::Ollama | Api::MistralConversations | Api::OpenAIResponses
         )
     }
 }

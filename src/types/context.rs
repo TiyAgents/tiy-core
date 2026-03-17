@@ -49,7 +49,8 @@ impl Context {
 
     /// Add a user message to the context.
     pub fn user(&mut self, content: impl Into<String>) {
-        self.messages.push(Message::User(crate::types::UserMessage::text(content)));
+        self.messages
+            .push(Message::User(crate::types::UserMessage::text(content)));
     }
 
     /// Set the system prompt.
@@ -96,7 +97,11 @@ pub struct Tool {
 
 impl Tool {
     /// Create a new tool.
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -144,7 +149,9 @@ impl ToolBuilder {
     pub fn build(self) -> Result<Tool, String> {
         let name = self.name.ok_or("name is required")?;
         let description = self.description.unwrap_or_default();
-        let parameters = self.parameters.unwrap_or(serde_json::json!({"type": "object", "properties": {}}));
+        let parameters = self
+            .parameters
+            .unwrap_or(serde_json::json!({"type": "object", "properties": {}}));
 
         Ok(Tool {
             name,
@@ -155,7 +162,7 @@ impl ToolBuilder {
 }
 
 /// Stream options.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamOptions {
     /// Temperature for sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,6 +182,33 @@ pub struct StreamOptions {
     /// Session ID for caching.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Security and resource limits. When None, uses SecurityConfig::default().
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security: Option<crate::types::SecurityConfig>,
+}
+
+/// Custom Debug implementation that redacts sensitive fields (api_key, headers).
+impl std::fmt::Debug for StreamOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamOptions")
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("base_url", &self.base_url)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .as_ref()
+                    .map(|h| h.keys().cloned().collect::<Vec<_>>()),
+            )
+            .field("session_id", &self.session_id)
+            .field(
+                "security",
+                &self.security.as_ref().map(|_| "SecurityConfig{...}"),
+            )
+            .finish()
+    }
 }
 
 impl Default for StreamOptions {
@@ -186,12 +220,23 @@ impl Default for StreamOptions {
             base_url: None,
             headers: None,
             session_id: None,
+            security: None,
+        }
+    }
+}
+
+impl StreamOptions {
+    /// Get the effective security config (provided or default).
+    pub fn security_config(&self) -> std::borrow::Cow<'_, crate::types::SecurityConfig> {
+        match &self.security {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(crate::types::SecurityConfig::default()),
         }
     }
 }
 
 /// Simple stream options with thinking support.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimpleStreamOptions {
     /// Base stream options.
     #[serde(flatten)]
@@ -202,6 +247,17 @@ pub struct SimpleStreamOptions {
     /// Custom thinking budget tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
+}
+
+/// Custom Debug implementation that delegates to StreamOptions (which redacts secrets).
+impl std::fmt::Debug for SimpleStreamOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimpleStreamOptions")
+            .field("base", &self.base)
+            .field("reasoning", &self.reasoning)
+            .field("thinking_budget_tokens", &self.thinking_budget_tokens)
+            .finish()
+    }
 }
 
 impl Default for SimpleStreamOptions {

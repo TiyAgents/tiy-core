@@ -55,6 +55,9 @@ once_cell = "1.19"
 # Async trait
 async-trait = "0.1"
 
+# URL parsing & validation
+url = "2"
+
 [dev-dependencies]
 tokio-test = "0.4"
 wiremock = "0.6"

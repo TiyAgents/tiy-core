@@ -8,7 +8,7 @@
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 use crate::provider::LLMProvider;
-use crate::stream::{AssistantMessageEventStream, parse_streaming_json};
+use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -26,7 +26,10 @@ impl OpenAIResponsesProvider {
     /// Create a new OpenAI Responses provider.
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: None,
         }
     }
@@ -34,7 +37,10 @@ impl OpenAIResponsesProvider {
     /// Create a provider with a default API key.
     pub fn with_api_key(api_key: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             default_api_key: Some(api_key.into()),
         }
     }
@@ -78,7 +84,9 @@ impl LLMProvider for OpenAIResponsesProvider {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) = run_stream(client, &model, &context, options, api_key, stream_clone).await {
+            if let Err(e) =
+                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            {
                 tracing::error!("OpenAI Responses stream error: {}", e);
             }
         });
@@ -135,10 +143,7 @@ enum ResponsesInputItem {
         arguments: String,
     },
     #[serde(rename = "function_call_output")]
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
+    FunctionCallOutput { call_id: String, output: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,9 +159,7 @@ enum ResponsesContentPart {
     #[serde(rename = "input_text")]
     InputText { text: String },
     #[serde(rename = "input_image")]
-    InputImage {
-        image_url: String,
-    },
+    InputImage { image_url: String },
     #[serde(rename = "output_text")]
     OutputText { text: String },
 }
@@ -249,9 +252,14 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                                 ContentBlock::Text(t) => Some(ResponsesContentPart::InputText {
                                     text: t.text.clone(),
                                 }),
-                                ContentBlock::Image(img) => Some(ResponsesContentPart::InputImage {
-                                    image_url: format!("data:{};base64,{}", img.mime_type, img.data),
-                                }),
+                                ContentBlock::Image(img) => {
+                                    Some(ResponsesContentPart::InputImage {
+                                        image_url: format!(
+                                            "data:{};base64,{}",
+                                            img.mime_type, img.data
+                                        ),
+                                    })
+                                }
                                 _ => None,
                             })
                             .collect();
@@ -283,11 +291,9 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                 if !text_content.is_empty() {
                     items.push(ResponsesInputItem::Message {
                         role: "assistant".to_string(),
-                        content: ResponsesContent::Parts(vec![
-                            ResponsesContentPart::OutputText {
-                                text: text_content,
-                            },
-                        ]),
+                        content: ResponsesContent::Parts(vec![ResponsesContentPart::OutputText {
+                            text: text_content,
+                        }]),
                     });
                 }
 
@@ -297,7 +303,10 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                         // Parse composite ID if present: "{call_id}|{item_id}"
                         let (call_id, item_id) = if tc.id.contains('|') {
                             let parts: Vec<&str> = tc.id.splitn(2, '|').collect();
-                            (parts[0].to_string(), parts.get(1).unwrap_or(&"").to_string())
+                            (
+                                parts[0].to_string(),
+                                parts.get(1).unwrap_or(&"").to_string(),
+                            )
                         } else {
                             (tc.id.clone(), format!("fc_{}", tc.id))
                         };
@@ -322,14 +331,23 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
 
                 // Parse composite ID
                 let call_id = if tool_result.tool_call_id.contains('|') {
-                    tool_result.tool_call_id.splitn(2, '|').next().unwrap_or(&tool_result.tool_call_id).to_string()
+                    tool_result
+                        .tool_call_id
+                        .splitn(2, '|')
+                        .next()
+                        .unwrap_or(&tool_result.tool_call_id)
+                        .to_string()
                 } else {
                     tool_result.tool_call_id.clone()
                 };
 
                 items.push(ResponsesInputItem::FunctionCallOutput {
                     call_id,
-                    output: if text.is_empty() { "(no output)".to_string() } else { text },
+                    output: if text.is_empty() {
+                        "(no output)".to_string()
+                    } else {
+                        text
+                    },
                 });
             }
         }
@@ -362,6 +380,8 @@ async fn run_stream(
     api_key: String,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let limits = options.security_config();
+
     let mut output = AssistantMessage::builder()
         .api(Api::OpenAIResponses)
         .provider(model.provider.clone())
@@ -384,10 +404,25 @@ async fn run_stream(
         reasoning: None,
     };
 
-    let base = options.base_url.as_deref()
+    let base = options
+        .base_url
+        .as_deref()
         .or(model.base_url.as_deref())
         .unwrap_or(DEFAULT_BASE_URL);
     let url = format!("{}/responses", base);
+
+    // H1: Validate base URL against security policy
+    if let Err(e) = limits.url.validate(base) {
+        tracing::error!(url = %base, error = %e, "Base URL validation failed");
+        output.stop_reason = StopReason::Error;
+        output.error_message = Some(format!("URL validation error: {}", e));
+        stream.push(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: output,
+        });
+        stream.end(None);
+        return Ok(());
+    }
 
     tracing::info!(
         url = %url,
@@ -397,7 +432,13 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending OpenAI Responses request"
     );
-    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
+    let debug_body = serde_json::to_string(&request).unwrap_or_default();
+    let debug_preview = if debug_body.len() > 500 {
+        &debug_body[..500]
+    } else {
+        &debug_body
+    };
+    tracing::debug!(request_body = %debug_preview, "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -409,6 +450,10 @@ async fn run_stream(
     // Add custom headers
     if let Some(ref custom_headers) = options.headers {
         for (key, value) in custom_headers {
+            if limits.headers.is_protected(key) {
+                tracing::warn!(header = %key, "Skipping protected header override");
+                continue;
+            }
             if let Ok(header_name) = reqwest::header::HeaderName::try_from(key.clone()) {
                 if let Ok(header_value) = reqwest::header::HeaderValue::try_from(value.clone()) {
                     headers.insert(header_name, header_value);
@@ -421,12 +466,13 @@ async fn run_stream(
         .post(&url)
         .headers(headers)
         .json(&request)
+        .timeout(limits.http.request_timeout())
         .send()
         .await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
         tracing::error!(
             url = %url,
             model = %model.id,
@@ -435,7 +481,10 @@ async fn run_stream(
             "OpenAI Responses request failed"
         );
         output.stop_reason = StopReason::Error;
-        output.error_message = Some(format!("HTTP {}: {}", status, body));
+        output.error_message = Some(crate::types::truncate_error_message(
+            &format!("HTTP {}: {}", status, body),
+            limits.http.max_error_message_chars,
+        ));
         stream.push(AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: output,
@@ -463,7 +512,9 @@ async fn run_stream(
         line_buffer.push_str(&text);
 
         while let Some(newline_pos) = line_buffer.find('\n') {
-            let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if line.starts_with("event: ") {
@@ -484,7 +535,9 @@ async fn run_stream(
             // Some proxies (e.g. Zenmux) may not forward the SSE "event:" line,
             // so we must always check the JSON "type" field as the primary source.
             let parsed = serde_json::from_str::<serde_json::Value>(data);
-            let event_type = parsed.as_ref().ok()
+            let event_type = parsed
+                .as_ref()
+                .ok()
                 .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
                 .unwrap_or_else(|| current_event_type.clone());
 
@@ -502,21 +555,28 @@ async fn run_stream(
                             .unwrap_or("")
                             .to_string();
 
-                        let output_index = val.get("output_index")
+                        let output_index = val
+                            .get("output_index")
                             .and_then(|i| i.as_u64())
-                            .unwrap_or(item_counter as u64) as usize;
+                            .unwrap_or(item_counter as u64)
+                            as usize;
 
                         match item_type {
                             "message" => {
                                 let content_idx = output.content.len();
-                                output.content.push(ContentBlock::Text(TextContent::new("")));
-                                item_content_map.insert(output_index, ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::Message,
-                                    item_id,
-                                    call_id: None,
-                                    name: None,
-                                });
+                                output
+                                    .content
+                                    .push(ContentBlock::Text(TextContent::new("")));
+                                item_content_map.insert(
+                                    output_index,
+                                    ItemInfo {
+                                        content_idx,
+                                        item_type: ItemType::Message,
+                                        item_id,
+                                        call_id: None,
+                                        name: None,
+                                    },
+                                );
                                 stream.push(AssistantMessageEvent::TextStart {
                                     content_index: content_idx,
                                     partial: output.clone(),
@@ -543,13 +603,16 @@ async fn run_stream(
                                     serde_json::Value::Object(serde_json::Map::new()),
                                 )));
                                 partial_tool_args.insert(output_index, String::new());
-                                item_content_map.insert(output_index, ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::FunctionCall,
-                                    item_id,
-                                    call_id: Some(call_id),
-                                    name: Some(name),
-                                });
+                                item_content_map.insert(
+                                    output_index,
+                                    ItemInfo {
+                                        content_idx,
+                                        item_type: ItemType::FunctionCall,
+                                        item_id,
+                                        call_id: Some(call_id),
+                                        name: Some(name),
+                                    },
+                                );
                                 stream.push(AssistantMessageEvent::ToolCallStart {
                                     content_index: content_idx,
                                     partial: output.clone(),
@@ -557,14 +620,19 @@ async fn run_stream(
                             }
                             "reasoning" => {
                                 let content_idx = output.content.len();
-                                output.content.push(ContentBlock::Thinking(ThinkingContent::new("")));
-                                item_content_map.insert(output_index, ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::Reasoning,
-                                    item_id,
-                                    call_id: None,
-                                    name: None,
-                                });
+                                output
+                                    .content
+                                    .push(ContentBlock::Thinking(ThinkingContent::new("")));
+                                item_content_map.insert(
+                                    output_index,
+                                    ItemInfo {
+                                        content_idx,
+                                        item_type: ItemType::Reasoning,
+                                        item_id,
+                                        call_id: None,
+                                        name: None,
+                                    },
+                                );
                                 stream.push(AssistantMessageEvent::ThinkingStart {
                                     content_index: content_idx,
                                     partial: output.clone(),
@@ -578,24 +646,28 @@ async fn run_stream(
 
                 "response.output_text.delta" => {
                     if let Ok(ref val) = parsed {
-                        let output_index = val.get("output_index")
+                        let output_index = val
+                            .get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
-                        let delta = val.get("delta")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
+                        let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
                         // Auto-register if output_item.added was never received for this index
                         if !item_content_map.contains_key(&output_index) {
                             let content_idx = output.content.len();
-                            output.content.push(ContentBlock::Text(TextContent::new("")));
-                            item_content_map.insert(output_index, ItemInfo {
-                                content_idx,
-                                item_type: ItemType::Message,
-                                item_id: String::new(),
-                                call_id: None,
-                                name: None,
-                            });
+                            output
+                                .content
+                                .push(ContentBlock::Text(TextContent::new("")));
+                            item_content_map.insert(
+                                output_index,
+                                ItemInfo {
+                                    content_idx,
+                                    item_type: ItemType::Message,
+                                    item_id: String::new(),
+                                    call_id: None,
+                                    name: None,
+                                },
+                            );
                             stream.push(AssistantMessageEvent::TextStart {
                                 content_index: content_idx,
                                 partial: output.clone(),
@@ -604,7 +676,8 @@ async fn run_stream(
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             let idx = info.content_idx;
-                            if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx) {
+                            if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx)
+                            {
                                 t.text.push_str(delta);
                             }
                             stream.push(AssistantMessageEvent::TextDelta {
@@ -618,42 +691,48 @@ async fn run_stream(
 
                 "response.function_call_arguments.delta" => {
                     if let Ok(ref val) = parsed {
-                        let output_index = val.get("output_index")
+                        let output_index = val
+                            .get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
-                        let delta = val.get("delta")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
+                        let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
                         // Auto-register if output_item.added was never received for this index
                         if !item_content_map.contains_key(&output_index) {
-                            let call_id = val.get("call_id")
+                            let call_id = val
+                                .get("call_id")
                                 .or_else(|| val.get("item_id"))
                                 .and_then(|c| c.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let name = val.get("name")
+                            let name = val
+                                .get("name")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let item_id = val.get("item_id")
+                            let item_id = val
+                                .get("item_id")
                                 .and_then(|i| i.as_str())
                                 .unwrap_or("")
                                 .to_string();
                             let composite_id = format!("{}|{}", call_id, item_id);
                             let content_idx = output.content.len();
                             output.content.push(ContentBlock::ToolCall(ToolCall::new(
-                                &composite_id, &name,
+                                &composite_id,
+                                &name,
                                 serde_json::Value::Object(serde_json::Map::new()),
                             )));
                             partial_tool_args.insert(output_index, String::new());
-                            item_content_map.insert(output_index, ItemInfo {
-                                content_idx,
-                                item_type: ItemType::FunctionCall,
-                                item_id,
-                                call_id: Some(call_id),
-                                name: Some(name),
-                            });
+                            item_content_map.insert(
+                                output_index,
+                                ItemInfo {
+                                    content_idx,
+                                    item_type: ItemType::FunctionCall,
+                                    item_id,
+                                    call_id: Some(call_id),
+                                    name: Some(name),
+                                },
+                            );
                             stream.push(AssistantMessageEvent::ToolCallStart {
                                 content_index: content_idx,
                                 partial: output.clone(),
@@ -662,10 +741,13 @@ async fn run_stream(
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             let idx = info.content_idx;
-                            if let Some(ref mut args_str) = partial_tool_args.get_mut(&output_index) {
+                            if let Some(ref mut args_str) = partial_tool_args.get_mut(&output_index)
+                            {
                                 args_str.push_str(delta);
                                 let parsed = parse_streaming_json(args_str);
-                                if let Some(ContentBlock::ToolCall(ref mut tc)) = output.content.get_mut(idx) {
+                                if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                    output.content.get_mut(idx)
+                                {
                                     tc.arguments = parsed;
                                 }
                             }
@@ -680,24 +762,28 @@ async fn run_stream(
 
                 "response.reasoning_summary_text.delta" => {
                     if let Ok(ref val) = parsed {
-                        let output_index = val.get("output_index")
+                        let output_index = val
+                            .get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
-                        let delta = val.get("delta")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
+                        let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
                         // Auto-register if output_item.added was never received for this index
                         if !item_content_map.contains_key(&output_index) {
                             let content_idx = output.content.len();
-                            output.content.push(ContentBlock::Thinking(ThinkingContent::new("")));
-                            item_content_map.insert(output_index, ItemInfo {
-                                content_idx,
-                                item_type: ItemType::Reasoning,
-                                item_id: String::new(),
-                                call_id: None,
-                                name: None,
-                            });
+                            output
+                                .content
+                                .push(ContentBlock::Thinking(ThinkingContent::new("")));
+                            item_content_map.insert(
+                                output_index,
+                                ItemInfo {
+                                    content_idx,
+                                    item_type: ItemType::Reasoning,
+                                    item_id: String::new(),
+                                    call_id: None,
+                                    name: None,
+                                },
+                            );
                             stream.push(AssistantMessageEvent::ThinkingStart {
                                 content_index: content_idx,
                                 partial: output.clone(),
@@ -707,7 +793,9 @@ async fn run_stream(
                         if let Some(info) = item_content_map.get(&output_index) {
                             if info.item_type == ItemType::Reasoning {
                                 let idx = info.content_idx;
-                                if let Some(ContentBlock::Thinking(ref mut t)) = output.content.get_mut(idx) {
+                                if let Some(ContentBlock::Thinking(ref mut t)) =
+                                    output.content.get_mut(idx)
+                                {
                                     t.thinking.push_str(delta);
                                 }
                                 stream.push(AssistantMessageEvent::ThinkingDelta {
@@ -722,7 +810,8 @@ async fn run_stream(
 
                 "response.output_item.done" => {
                     if let Ok(ref val) = parsed {
-                        let output_index = val.get("output_index")
+                        let output_index = val
+                            .get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
 
@@ -730,7 +819,9 @@ async fn run_stream(
                             let idx = info.content_idx;
                             match info.item_type {
                                 ItemType::Message => {
-                                    let content = output.content.get(idx)
+                                    let content = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_text())
                                         .map(|t| t.text.clone())
                                         .unwrap_or_default();
@@ -743,16 +834,24 @@ async fn run_stream(
                                 ItemType::FunctionCall => {
                                     // Finalize tool call args
                                     if let Some(args_str) = partial_tool_args.get(&output_index) {
-                                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args_str) {
-                                            if let Some(ContentBlock::ToolCall(ref mut tc)) = output.content.get_mut(idx) {
+                                        if let Ok(parsed) =
+                                            serde_json::from_str::<serde_json::Value>(args_str)
+                                        {
+                                            if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                                output.content.get_mut(idx)
+                                            {
                                                 tc.arguments = parsed;
                                             }
                                         }
                                     }
-                                    let tool_call = output.content.get(idx)
+                                    let tool_call = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_tool_call())
                                         .cloned()
-                                        .unwrap_or_else(|| ToolCall::new("", "", serde_json::Value::Null));
+                                        .unwrap_or_else(|| {
+                                            ToolCall::new("", "", serde_json::Value::Null)
+                                        });
                                     stream.push(AssistantMessageEvent::ToolCallEnd {
                                         content_index: idx,
                                         tool_call,
@@ -760,7 +859,9 @@ async fn run_stream(
                                     });
                                 }
                                 ItemType::Reasoning => {
-                                    let content = output.content.get(idx)
+                                    let content = output
+                                        .content
+                                        .get(idx)
                                         .and_then(|b| b.as_thinking())
                                         .map(|t| t.thinking.clone())
                                         .unwrap_or_default();
@@ -777,7 +878,9 @@ async fn run_stream(
 
                 "response.completed" | "response.done" | "response.incomplete" => {
                     // Try extracting from pre-parsed value, fall back to re-parsing data
-                    let completed = parsed.as_ref().ok()
+                    let completed = parsed
+                        .as_ref()
+                        .ok()
                         .and_then(|v| serde_json::from_value::<ResponseCompleted>(v.clone()).ok())
                         .or_else(|| serde_json::from_str::<ResponseCompleted>(data).ok());
                     if let Some(completed) = completed {
@@ -789,7 +892,8 @@ async fn run_stream(
                                 if let Some(ref details) = usage.input_tokens_details {
                                     output.usage.cache_read = details.cached_tokens;
                                 }
-                                output.usage.total_tokens = output.usage.input + output.usage.output;
+                                output.usage.total_tokens =
+                                    output.usage.input + output.usage.output;
                             }
 
                             // Update stop reason from status
@@ -813,7 +917,8 @@ async fn run_stream(
 
                 "error" | "response.failed" => {
                     if let Ok(ref val) = parsed {
-                        let error_msg = val.get("error")
+                        let error_msg = val
+                            .get("error")
                             .and_then(|e| e.get("message"))
                             .and_then(|m| m.as_str())
                             .or_else(|| val.get("message").and_then(|m| m.as_str()))
@@ -906,7 +1011,10 @@ mod tests {
 
         // Add tool result
         context.add_message(Message::ToolResult(ToolResultMessage::text(
-            "call_abc|item_123", "get_weather", "Sunny 25°C", false,
+            "call_abc|item_123",
+            "get_weather",
+            "Sunny 25°C",
+            false,
         )));
 
         let items = convert_messages(&context);

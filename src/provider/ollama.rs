@@ -1,9 +1,9 @@
 //! Ollama API provider (OpenAI compatible).
 
 use crate::provider::LLMProvider;
-use crate::types::{StreamOptions, SimpleStreamOptions};
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
+use crate::types::{SimpleStreamOptions, StreamOptions};
 use async_trait::async_trait;
 
 /// Ollama API provider.

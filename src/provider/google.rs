@@ -82,7 +82,9 @@ impl LLMProvider for GoogleProvider {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) = run_stream(client, &model, &context, options, api_key, stream_clone).await {
+            if let Err(e) =
+                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            {
                 tracing::error!("Google stream error: {}", e);
             }
         });
@@ -271,8 +273,9 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
             Message::User(user_msg) => {
                 let parts = match &user_msg.content {
                     UserContent::Text(text) => vec![GooglePart::text(text)],
-                    UserContent::Blocks(blocks) => {
-                        blocks.iter().filter_map(|b| match b {
+                    UserContent::Blocks(blocks) => blocks
+                        .iter()
+                        .filter_map(|b| match b {
                             ContentBlock::Text(t) => Some(GooglePart::text(&t.text)),
                             ContentBlock::Image(img) => Some(GooglePart {
                                 text: None,
@@ -286,8 +289,8 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
                                 }),
                             }),
                             _ => None,
-                        }).collect()
-                    }
+                        })
+                        .collect(),
                 };
                 contents.push(GoogleContent {
                     role: "user".to_string(),
@@ -414,6 +417,8 @@ async fn run_stream(
     api_key: String,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let limits = options.security_config();
+
     let mut output = AssistantMessage::builder()
         .api(Api::GoogleGenerativeAi)
         .provider(model.provider.clone())
@@ -425,11 +430,12 @@ async fn run_stream(
     let contents = convert_messages(context);
     let tools = context.tools.as_ref().map(|t| convert_tools(t));
 
-    let system_instruction = context.system_prompt.as_ref().map(|prompt| {
-        GoogleSystemInstruction {
+    let system_instruction = context
+        .system_prompt
+        .as_ref()
+        .map(|prompt| GoogleSystemInstruction {
             parts: vec![GooglePart::text(prompt)],
-        }
-    });
+        });
 
     let request = GoogleRequest {
         contents,
@@ -442,13 +448,34 @@ async fn run_stream(
     };
 
     // Determine if this is a Vertex AI request
-    let is_vertex = model.api.as_ref()
+    let is_vertex = model
+        .api
+        .as_ref()
         .map(|api| matches!(api, Api::GoogleVertex))
         .unwrap_or(false);
 
-    let base = options.base_url.as_deref()
+    let base = options
+        .base_url
+        .as_deref()
         .or(model.base_url.as_deref())
-        .unwrap_or(if is_vertex { DEFAULT_VERTEX_BASE_URL } else { DEFAULT_BASE_URL });
+        .unwrap_or(if is_vertex {
+            DEFAULT_VERTEX_BASE_URL
+        } else {
+            DEFAULT_BASE_URL
+        });
+
+    // H1: Validate base URL against security policy
+    if let Err(e) = limits.url.validate(base) {
+        tracing::error!(url = %base, error = %e, "Base URL validation failed");
+        output.stop_reason = StopReason::Error;
+        output.error_message = Some(format!("URL validation error: {}", e));
+        stream.push(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: output,
+        });
+        stream.end(None);
+        return Ok(());
+    }
 
     // Vertex AI URL: {base}/v1/publishers/google/models/{model}:streamGenerateContent?alt=sse
     // Generative AI URL: {base}/models/{model}:streamGenerateContent?alt=sse
@@ -458,10 +485,7 @@ async fn run_stream(
             base, model.id
         )
     } else {
-        format!(
-            "{}/models/{}:streamGenerateContent?alt=sse",
-            base, model.id
-        )
+        format!("{}/models/{}:streamGenerateContent?alt=sse", base, model.id)
     };
 
     tracing::info!(
@@ -472,7 +496,13 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending Google GenerativeAI request"
     );
-    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
+    let debug_body = serde_json::to_string(&request).unwrap_or_default();
+    let debug_preview = if debug_body.len() > 500 {
+        &debug_body[..500]
+    } else {
+        &debug_body
+    };
+    tracing::debug!(request_body = %debug_preview, "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
@@ -490,6 +520,10 @@ async fn run_stream(
     // Add custom headers
     if let Some(ref custom_headers) = options.headers {
         for (key, value) in custom_headers {
+            if limits.headers.is_protected(key) {
+                tracing::warn!(header = %key, "Skipping protected header override");
+                continue;
+            }
             if let Ok(header_name) = reqwest::header::HeaderName::try_from(key.clone()) {
                 if let Ok(header_value) = reqwest::header::HeaderValue::try_from(value.clone()) {
                     headers.insert(header_name, header_value);
@@ -502,12 +536,13 @@ async fn run_stream(
         .post(&url)
         .headers(headers)
         .json(&request)
+        .timeout(limits.http.request_timeout())
         .send()
         .await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
         tracing::error!(
             model = %model.id,
             status = %status,
@@ -515,7 +550,10 @@ async fn run_stream(
             "Google GenerativeAI request failed"
         );
         output.stop_reason = StopReason::Error;
-        output.error_message = Some(format!("HTTP {}: {}", status, body));
+        output.error_message = Some(crate::types::truncate_error_message(
+            &format!("HTTP {}: {}", status, body),
+            limits.http.max_error_message_chars,
+        ));
         stream.push(AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: output,
@@ -539,8 +577,27 @@ async fn run_stream(
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
 
+        // C2: Check SSE line buffer limit
+        if line_buffer.len() > limits.http.max_sse_line_buffer_bytes {
+            tracing::error!(
+                buffer_size = line_buffer.len(),
+                limit = limits.http.max_sse_line_buffer_bytes,
+                "SSE line buffer exceeded limit, aborting stream"
+            );
+            output.stop_reason = StopReason::Error;
+            output.error_message = Some("SSE line buffer exceeded maximum size".to_string());
+            stream.push(AssistantMessageEvent::Error {
+                reason: StopReason::Error,
+                error: output,
+            });
+            stream.end(None);
+            return Ok(());
+        }
+
         while let Some(newline_pos) = line_buffer.find('\n') {
-            let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
             if !line.starts_with("data: ") {
@@ -553,121 +610,74 @@ async fn run_stream(
             }
 
             let parsed: Result<GoogleStreamChunk, _> = serde_json::from_str(data);
-            if let Ok(chunk_data) = parsed {
-                // Handle usage metadata
-                if let Some(ref usage) = chunk_data.usage_metadata {
-                    output.usage.input = usage.prompt_token_count;
-                    output.usage.output = usage.candidates_token_count;
-                    output.usage.total_tokens = output.usage.input + output.usage.output;
-                }
+            match parsed {
+                Ok(chunk_data) => {
+                    // Handle usage metadata
+                    if let Some(ref usage) = chunk_data.usage_metadata {
+                        output.usage.input = usage.prompt_token_count;
+                        output.usage.output = usage.candidates_token_count;
+                        output.usage.total_tokens = output.usage.input + output.usage.output;
+                    }
 
-                if let Some(candidates) = chunk_data.candidates {
-                    for candidate in &candidates {
-                        // Handle finish reason
-                        if let Some(ref reason) = candidate.finish_reason {
-                            output.stop_reason = match reason.as_str() {
-                                "STOP" => StopReason::Stop,
-                                "MAX_TOKENS" => StopReason::Length,
-                                "SAFETY" | "RECITATION" | "BLOCKLIST" => StopReason::Error,
-                                _ => StopReason::Stop,
-                            };
-                        }
+                    if let Some(candidates) = chunk_data.candidates {
+                        for candidate in &candidates {
+                            // Handle finish reason
+                            if let Some(ref reason) = candidate.finish_reason {
+                                output.stop_reason = match reason.as_str() {
+                                    "STOP" => StopReason::Stop,
+                                    "MAX_TOKENS" => StopReason::Length,
+                                    "SAFETY" | "RECITATION" | "BLOCKLIST" => StopReason::Error,
+                                    _ => StopReason::Stop,
+                                };
+                            }
 
-                        if let Some(ref content) = candidate.content {
-                            for part in &content.parts {
-                                // Handle thinking content
-                                if part.thought == Some(true) {
-                                    if let Some(ref thinking_text) = part.text {
-                                        if !thinking_text.is_empty() {
-                                            if current_thinking_index.is_none() {
-                                                let idx = output.content.len();
-                                                output.content.push(ContentBlock::Thinking(
-                                                    ThinkingContent::new(""),
-                                                ));
-                                                current_thinking_index = Some(idx);
-                                                stream.push(AssistantMessageEvent::ThinkingStart {
+                            if let Some(ref content) = candidate.content {
+                                for part in &content.parts {
+                                    // Handle thinking content
+                                    if part.thought == Some(true) {
+                                        if let Some(ref thinking_text) = part.text {
+                                            if !thinking_text.is_empty() {
+                                                if current_thinking_index.is_none() {
+                                                    let idx = output.content.len();
+                                                    output.content.push(ContentBlock::Thinking(
+                                                        ThinkingContent::new(""),
+                                                    ));
+                                                    current_thinking_index = Some(idx);
+                                                    stream.push(
+                                                        AssistantMessageEvent::ThinkingStart {
+                                                            content_index: idx,
+                                                            partial: output.clone(),
+                                                        },
+                                                    );
+                                                }
+
+                                                let idx = current_thinking_index.unwrap();
+                                                if let Some(ContentBlock::Thinking(ref mut t)) =
+                                                    output.content.get_mut(idx)
+                                                {
+                                                    t.thinking.push_str(thinking_text);
+                                                    // Store thought signature if present
+                                                    if let Some(ref sig) = part.thought_signature {
+                                                        t.thinking_signature = Some(sig.clone());
+                                                    }
+                                                }
+                                                stream.push(AssistantMessageEvent::ThinkingDelta {
                                                     content_index: idx,
+                                                    delta: thinking_text.clone(),
                                                     partial: output.clone(),
                                                 });
                                             }
-
-                                            let idx = current_thinking_index.unwrap();
-                                            if let Some(ContentBlock::Thinking(ref mut t)) =
-                                                output.content.get_mut(idx)
-                                            {
-                                                t.thinking.push_str(thinking_text);
-                                                // Store thought signature if present
-                                                if let Some(ref sig) = part.thought_signature {
-                                                    t.thinking_signature = Some(sig.clone());
-                                                }
-                                            }
-                                            stream.push(AssistantMessageEvent::ThinkingDelta {
-                                                content_index: idx,
-                                                delta: thinking_text.clone(),
-                                                partial: output.clone(),
-                                            });
                                         }
-                                    }
-                                    continue;
-                                }
-
-                                // Handle function call (arrives complete, not streamed)
-                                if let Some(ref fc) = part.function_call {
-                                    // End current thinking block if active
-                                    if let Some(idx) = current_thinking_index.take() {
-                                        let content = output.content.get(idx)
-                                            .and_then(|b| b.as_thinking())
-                                            .map(|t| t.thinking.clone())
-                                            .unwrap_or_default();
-                                        stream.push(AssistantMessageEvent::ThinkingEnd {
-                                            content_index: idx,
-                                            content,
-                                            partial: output.clone(),
-                                        });
-                                    }
-                                    // End current text block if active
-                                    if let Some(idx) = current_text_index.take() {
-                                        let content = output.content.get(idx)
-                                            .and_then(|b| b.as_text())
-                                            .map(|t| t.text.clone())
-                                            .unwrap_or_default();
-                                        stream.push(AssistantMessageEvent::TextEnd {
-                                            content_index: idx,
-                                            content,
-                                            partial: output.clone(),
-                                        });
+                                        continue;
                                     }
 
-                                    let tool_call_id = generate_tool_call_id(&fc.name);
-                                    let mut tool_call = ToolCall::new(
-                                        &tool_call_id,
-                                        &fc.name,
-                                        fc.args.clone(),
-                                    );
-                                    tool_call.thought_signature = part.thought_signature.clone();
-
-                                    let idx = output.content.len();
-                                    output.content.push(ContentBlock::ToolCall(tool_call.clone()));
-                                    output.stop_reason = StopReason::ToolUse;
-
-                                    stream.push(AssistantMessageEvent::ToolCallStart {
-                                        content_index: idx,
-                                        partial: output.clone(),
-                                    });
-                                    stream.push(AssistantMessageEvent::ToolCallEnd {
-                                        content_index: idx,
-                                        tool_call,
-                                        partial: output.clone(),
-                                    });
-                                    continue;
-                                }
-
-                                // Handle text content
-                                if let Some(ref text_content) = part.text {
-                                    if !text_content.is_empty() {
-                                        // End thinking block if transitioning to text
+                                    // Handle function call (arrives complete, not streamed)
+                                    if let Some(ref fc) = part.function_call {
+                                        // End current thinking block if active
                                         if let Some(idx) = current_thinking_index.take() {
-                                            let content = output.content.get(idx)
+                                            let content = output
+                                                .content
+                                                .get(idx)
                                                 .and_then(|b| b.as_thinking())
                                                 .map(|t| t.thinking.clone())
                                                 .unwrap_or_default();
@@ -677,35 +687,96 @@ async fn run_stream(
                                                 partial: output.clone(),
                                             });
                                         }
-
-                                        if current_text_index.is_none() {
-                                            let idx = output.content.len();
-                                            output.content.push(ContentBlock::Text(
-                                                TextContent::new(""),
-                                            ));
-                                            current_text_index = Some(idx);
-                                            stream.push(AssistantMessageEvent::TextStart {
+                                        // End current text block if active
+                                        if let Some(idx) = current_text_index.take() {
+                                            let content = output
+                                                .content
+                                                .get(idx)
+                                                .and_then(|b| b.as_text())
+                                                .map(|t| t.text.clone())
+                                                .unwrap_or_default();
+                                            stream.push(AssistantMessageEvent::TextEnd {
                                                 content_index: idx,
+                                                content,
                                                 partial: output.clone(),
                                             });
                                         }
 
-                                        let idx = current_text_index.unwrap();
-                                        if let Some(ContentBlock::Text(ref mut t)) =
-                                            output.content.get_mut(idx)
-                                        {
-                                            t.text.push_str(text_content);
-                                        }
-                                        stream.push(AssistantMessageEvent::TextDelta {
+                                        let tool_call_id = generate_tool_call_id(&fc.name);
+                                        let mut tool_call =
+                                            ToolCall::new(&tool_call_id, &fc.name, fc.args.clone());
+                                        tool_call.thought_signature =
+                                            part.thought_signature.clone();
+
+                                        let idx = output.content.len();
+                                        output
+                                            .content
+                                            .push(ContentBlock::ToolCall(tool_call.clone()));
+                                        output.stop_reason = StopReason::ToolUse;
+
+                                        stream.push(AssistantMessageEvent::ToolCallStart {
                                             content_index: idx,
-                                            delta: text_content.clone(),
                                             partial: output.clone(),
                                         });
+                                        stream.push(AssistantMessageEvent::ToolCallEnd {
+                                            content_index: idx,
+                                            tool_call,
+                                            partial: output.clone(),
+                                        });
+                                        continue;
+                                    }
+
+                                    // Handle text content
+                                    if let Some(ref text_content) = part.text {
+                                        if !text_content.is_empty() {
+                                            // End thinking block if transitioning to text
+                                            if let Some(idx) = current_thinking_index.take() {
+                                                let content = output
+                                                    .content
+                                                    .get(idx)
+                                                    .and_then(|b| b.as_thinking())
+                                                    .map(|t| t.thinking.clone())
+                                                    .unwrap_or_default();
+                                                stream.push(AssistantMessageEvent::ThinkingEnd {
+                                                    content_index: idx,
+                                                    content,
+                                                    partial: output.clone(),
+                                                });
+                                            }
+
+                                            if current_text_index.is_none() {
+                                                let idx = output.content.len();
+                                                output
+                                                    .content
+                                                    .push(ContentBlock::Text(TextContent::new("")));
+                                                current_text_index = Some(idx);
+                                                stream.push(AssistantMessageEvent::TextStart {
+                                                    content_index: idx,
+                                                    partial: output.clone(),
+                                                });
+                                            }
+
+                                            let idx = current_text_index.unwrap();
+                                            if let Some(ContentBlock::Text(ref mut t)) =
+                                                output.content.get_mut(idx)
+                                            {
+                                                t.text.push_str(text_content);
+                                            }
+                                            stream.push(AssistantMessageEvent::TextDelta {
+                                                content_index: idx,
+                                                delta: text_content.clone(),
+                                                partial: output.clone(),
+                                            });
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                }
+                Err(e) => {
+                    let preview = if data.len() > 200 { &data[..200] } else { data };
+                    tracing::warn!(error = %e, data_preview = %preview, "Failed to parse Google SSE JSON data");
                 }
             }
         }
@@ -713,7 +784,9 @@ async fn run_stream(
 
     // End any active blocks
     if let Some(idx) = current_thinking_index {
-        let content = output.content.get(idx)
+        let content = output
+            .content
+            .get(idx)
             .and_then(|b| b.as_thinking())
             .map(|t| t.thinking.clone())
             .unwrap_or_default();
@@ -724,7 +797,9 @@ async fn run_stream(
         });
     }
     if let Some(idx) = current_text_index {
-        let content = output.content.get(idx)
+        let content = output
+            .content
+            .get(idx)
             .and_then(|b| b.as_text())
             .map(|t| t.text.clone())
             .unwrap_or_default();

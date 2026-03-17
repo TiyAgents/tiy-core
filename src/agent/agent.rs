@@ -1,21 +1,72 @@
 //! Agent implementation with full conversation loop.
 
-use crate::agent::{AgentConfig, AgentEvent, AgentMessage, AgentState, AgentTool, AgentToolResult, ToolExecutionMode};
-use crate::provider::{ArcProvider, get_provider};
+use crate::agent::{
+    AgentConfig, AgentEvent, AgentMessage, AgentState, AgentTool, AgentToolResult,
+    ToolExecutionMode,
+};
+use crate::provider::{get_provider, ArcProvider};
 use crate::stream::AssistantMessageEventStream;
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Default maximum number of turns (LLM calls) per prompt.
 const DEFAULT_MAX_TURNS: usize = 25;
 
 /// Tool executor function type.
-pub type ToolExecutor = Arc<dyn Fn(&str, &str, &serde_json::Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>> + Send + Sync>;
+pub type ToolExecutor = Arc<
+    dyn Fn(
+            &str,
+            &str,
+            &serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Subscriber ID for unsubscription.
+pub type SubscriberId = u64;
+
+/// Thread-safe subscriber storage using HashMap to avoid tombstone leaks.
+struct Subscribers {
+    callbacks: RwLock<HashMap<u64, Arc<dyn Fn(&AgentEvent) + Send + Sync>>>,
+    next_id: AtomicU64,
+}
+
+impl Subscribers {
+    fn new() -> Self {
+        Self {
+            callbacks: RwLock::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
+        }
+    }
+
+    fn subscribe(&self, callback: Arc<dyn Fn(&AgentEvent) + Send + Sync>) -> SubscriberId {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.callbacks.write().insert(id, callback);
+        id
+    }
+
+    fn unsubscribe(&self, id: SubscriberId) {
+        self.callbacks.write().remove(&id);
+    }
+
+    /// Emit an event to all subscribers.
+    /// Clones Arcs under read lock, then calls callbacks outside the lock
+    /// to prevent blocking subscribe/unsubscribe operations.
+    fn emit(&self, event: &AgentEvent) {
+        let snapshot: Vec<Arc<dyn Fn(&AgentEvent) + Send + Sync>> =
+            { self.callbacks.read().values().cloned().collect() };
+        // Lock released — call callbacks without holding any lock.
+        for cb in &snapshot {
+            cb(event);
+        }
+    }
+}
 
 /// Agent for managing stateful conversations with LLM providers.
 pub struct Agent {
@@ -33,8 +84,8 @@ pub struct Agent {
     steering_queue: Mutex<VecDeque<AgentMessage>>,
     /// Follow-up message queue.
     follow_up_queue: Mutex<VecDeque<AgentMessage>>,
-    /// Event subscribers (shared via Arc for safe unsubscribe).
-    subscribers: Arc<RwLock<Vec<Option<Box<dyn Fn(&AgentEvent) + Send + Sync>>>>>,
+    /// Event subscribers (M7: HashMap-based, no tombstone leak).
+    subscribers: Arc<Subscribers>,
     /// Abort flag.
     abort_flag: Arc<AtomicBool>,
     /// API key for the provider.
@@ -46,21 +97,23 @@ impl Agent {
     pub fn new() -> Self {
         Self {
             state: Arc::new(AgentState::new()),
-            config: RwLock::new(AgentConfig::new(Model::builder()
-                .id("gpt-4o-mini")
-                .name("GPT-4o Mini")
-                .provider(Provider::OpenAI)
-                .base_url("https://api.openai.com/v1")
-                .context_window(128000)
-                .max_tokens(16384)
-                .build()
-                .unwrap())),
+            config: RwLock::new(AgentConfig::new(
+                Model::builder()
+                    .id("gpt-4o-mini")
+                    .name("GPT-4o Mini")
+                    .provider(Provider::OpenAI)
+                    .base_url("https://api.openai.com/v1")
+                    .context_window(128000)
+                    .max_tokens(16384)
+                    .build()
+                    .unwrap(),
+            )),
             provider: RwLock::new(None),
             tool_executor: RwLock::new(None),
             max_turns: RwLock::new(DEFAULT_MAX_TURNS),
             steering_queue: Mutex::new(VecDeque::new()),
             follow_up_queue: Mutex::new(VecDeque::new()),
-            subscribers: Arc::new(RwLock::new(Vec::new())),
+            subscribers: Arc::new(Subscribers::new()),
             abort_flag: Arc::new(AtomicBool::new(false)),
             api_key: RwLock::new(None),
         }
@@ -94,7 +147,8 @@ impl Agent {
     {
         let executor = Arc::new(move |name: &str, id: &str, args: &serde_json::Value| {
             let fut = executor(name, id, args);
-            Box::pin(fut) as std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
         });
         *self.tool_executor.write() = Some(executor);
     }
@@ -104,31 +158,31 @@ impl Agent {
         *self.max_turns.write() = max;
     }
 
+    /// Set the security configuration.
+    pub fn set_security_config(&self, config: crate::types::SecurityConfig) {
+        self.config.write().security = config;
+    }
+
+    /// Get the current security configuration.
+    pub fn security_config(&self) -> crate::types::SecurityConfig {
+        self.config.read().security.clone()
+    }
+
     /// Subscribe to agent events. Returns an unsubscribe closure.
     pub fn subscribe<F>(&self, callback: F) -> impl Fn()
     where
         F: Fn(&AgentEvent) + Send + Sync + 'static,
     {
-        let mut subscribers = self.subscribers.write();
-        let index = subscribers.len();
-        subscribers.push(Some(Box::new(callback)));
-        drop(subscribers);
-
+        let id = self.subscribers.subscribe(Arc::new(callback));
         let subs = Arc::clone(&self.subscribers);
         move || {
-            let mut guard = subs.write();
-            if index < guard.len() {
-                guard[index] = None; // Mark slot as removed (tombstone)
-            }
+            subs.unsubscribe(id);
         }
     }
 
-    /// Emit an event to all subscribers.
+    /// Emit an event to all subscribers (M2: lock-free callback invocation).
     fn emit(&self, event: AgentEvent) {
-        let subscribers = self.subscribers.read();
-        for callback in subscribers.iter().flatten() {
-            callback(&event);
-        }
+        self.subscribers.emit(&event);
     }
 
     // State management
@@ -280,8 +334,10 @@ impl Agent {
 
     /// Build stream options.
     fn build_stream_options(&self) -> StreamOptions {
+        let security = self.config.read().security.clone();
         StreamOptions {
             api_key: self.api_key.read().clone(),
+            security: Some(security),
             ..Default::default()
         }
     }
@@ -291,6 +347,7 @@ impl Agent {
         let context = self.build_context();
         let model = self.config.read().model.clone();
         let options = self.build_stream_options();
+        let stream_timeout = self.config.read().security.stream.result_timeout();
 
         // Call provider to create a stream
         let mut stream: AssistantMessageEventStream = provider.stream(&model, &context, options);
@@ -316,7 +373,8 @@ impl Agent {
             // Forward stream event to subscribers
             match &event {
                 AssistantMessageEvent::Start { partial } => {
-                    *self.state.stream_message.write() = Some(AgentMessage::Assistant(partial.clone()));
+                    *self.state.stream_message.write() =
+                        Some(AgentMessage::Assistant(partial.clone()));
                     self.emit(AgentEvent::MessageUpdate {
                         message: AgentMessage::Assistant(partial.clone()),
                         assistant_event: event.clone(),
@@ -326,7 +384,8 @@ impl Agent {
                 | AssistantMessageEvent::ThinkingDelta { .. }
                 | AssistantMessageEvent::ToolCallDelta { .. } => {
                     if let Some(partial) = event.partial_message() {
-                        *self.state.stream_message.write() = Some(AgentMessage::Assistant(partial.clone()));
+                        *self.state.stream_message.write() =
+                            Some(AgentMessage::Assistant(partial.clone()));
                         self.emit(AgentEvent::MessageUpdate {
                             message: AgentMessage::Assistant(partial.clone()),
                             assistant_event: event.clone(),
@@ -345,14 +404,25 @@ impl Agent {
             }
         }
 
-        // Get the final result
-        let result = stream.result().await;
+        // Get the final result (H4: with timeout to prevent infinite blocking)
+        let result = match stream.try_result(stream_timeout).await {
+            Some(r) => r,
+            None => {
+                return Err(AgentError::Other(format!(
+                    "Stream result timed out after {:?}",
+                    stream_timeout
+                )));
+            }
+        };
 
         // Clear streaming message
         *self.state.stream_message.write() = None;
 
         if result.stop_reason == StopReason::Error {
-            let error_msg = result.error_message.clone().unwrap_or_else(|| "Unknown error".to_string());
+            let error_msg = result
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "Unknown error".to_string());
             return Err(AgentError::ProviderError(error_msg));
         }
 
@@ -360,10 +430,10 @@ impl Agent {
     }
 
     /// Execute tool calls from an assistant message.
-    async fn execute_tool_calls(
-        &self,
-        assistant_msg: &AssistantMessage,
-    ) -> Vec<ToolResultMessage> {
+    ///
+    /// Includes C5 (tool validation), H3 (bounded parallel exec + timeout),
+    /// and M3 (abort-aware execution).
+    async fn execute_tool_calls(&self, assistant_msg: &AssistantMessage) -> Vec<ToolResultMessage> {
         let tool_calls = assistant_msg.tool_calls();
         if tool_calls.is_empty() {
             return Vec::new();
@@ -371,12 +441,22 @@ impl Agent {
 
         let executor = self.tool_executor.read().clone();
         let execution_mode = self.config.read().tool_execution;
+        let security = self.config.read().security.clone();
+        let tool_timeout = security.agent.tool_execution_timeout();
+
+        // C5: Build Tool list for validation
+        let agent_tools = self.state.tools.read().clone();
+        let tool_defs: Vec<Tool> = agent_tools.iter().map(|t| t.as_tool()).collect();
 
         let mut results = Vec::new();
 
         match execution_mode {
             ToolExecutionMode::Parallel => {
-                let mut futures = Vec::new();
+                let max_parallel = security.agent.max_parallel_tool_calls;
+                let abort_flag = Arc::clone(&self.abort_flag);
+
+                // Collect validated tool calls as futures
+                let mut tool_futures = Vec::new();
 
                 for tc in &tool_calls {
                     let tc_id = tc.id.clone();
@@ -393,10 +473,49 @@ impl Agent {
                     // Track pending
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
+                    // C5: Validate tool call before execution
+                    if security.agent.validate_tool_calls && !tool_defs.is_empty() {
+                        let tc_ref = ToolCall::new(&tc_id, &tc_name, tc_args.clone());
+                        if let Err(validation_err) =
+                            crate::validation::validate_tool_call(&tool_defs, &tc_ref)
+                        {
+                            let error_msg = format!("Tool validation failed: {}", validation_err);
+                            tracing::warn!(tool = %tc_name, error = %error_msg, "Tool call validation failed");
+                            self.emit(AgentEvent::ToolExecutionEnd {
+                                tool_call_id: tc_id.clone(),
+                                tool_name: tc_name.clone(),
+                                result: serde_json::json!({"error": error_msg}),
+                                is_error: true,
+                            });
+                            self.state.pending_tool_calls.write().remove(&tc_id);
+                            results.push(ToolResultMessage::new(
+                                tc_id,
+                                tc_name,
+                                vec![ContentBlock::Text(TextContent::new(&error_msg))],
+                                true,
+                            ));
+                            continue;
+                        }
+                    }
+
                     let executor = executor.clone();
-                    futures.push(async move {
+                    let abort = abort_flag.clone();
+                    tool_futures.push(async move {
                         let result = if let Some(ref exec) = executor {
-                            exec(&tc_name, &tc_id, &tc_args).await
+                            // M3 + H3: timeout and abort-aware execution
+                            tokio::select! {
+                                res = tokio::time::timeout(tool_timeout, exec(&tc_name, &tc_id, &tc_args)) => {
+                                    match res {
+                                        Ok(r) => r,
+                                        Err(_) => AgentToolResult::error(
+                                            format!("Tool '{}' timed out after {:?}", tc_name, tool_timeout)
+                                        ),
+                                    }
+                                }
+                                _ = wait_for_abort(abort) => {
+                                    AgentToolResult::error(format!("Tool '{}' aborted", tc_name))
+                                }
+                            }
                         } else {
                             AgentToolResult::error(format!("No tool executor registered for '{}'", tc_name))
                         };
@@ -404,14 +523,24 @@ impl Agent {
                     });
                 }
 
-                let results_vec = futures::future::join_all(futures).await;
+                // H3: Use buffer_unordered for bounded parallel execution
+                let mut buffered =
+                    futures::stream::iter(tool_futures).buffer_unordered(max_parallel);
 
-                for (tc_id, tc_name, result) in results_vec {
+                while let Some((tc_id, tc_name, result)) = buffered.next().await {
                     let is_error = result.content.iter().any(|b| {
-                        b.as_text().map(|t| t.text.starts_with("No tool executor")).unwrap_or(false)
+                        b.as_text()
+                            .map(|t| {
+                                t.text.starts_with("No tool executor")
+                                    || t.text.contains("timed out")
+                                    || t.text.contains("aborted")
+                                    || t.text.starts_with("Tool validation failed")
+                            })
+                            .unwrap_or(false)
                     });
 
-                    let result_json = serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
+                    let result_json =
+                        serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
                     self.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
@@ -422,7 +551,10 @@ impl Agent {
                     self.state.pending_tool_calls.write().remove(&tc_id);
 
                     results.push(ToolResultMessage::new(
-                        tc_id, tc_name, result.content, is_error,
+                        tc_id,
+                        tc_name,
+                        result.content,
+                        is_error,
                     ));
                 }
             }
@@ -444,17 +576,67 @@ impl Agent {
 
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
+                    // C5: Validate tool call before execution
+                    if security.agent.validate_tool_calls && !tool_defs.is_empty() {
+                        let tc_ref = ToolCall::new(&tc_id, &tc_name, tc_args.clone());
+                        if let Err(validation_err) =
+                            crate::validation::validate_tool_call(&tool_defs, &tc_ref)
+                        {
+                            let error_msg = format!("Tool validation failed: {}", validation_err);
+                            tracing::warn!(tool = %tc_name, error = %error_msg, "Tool call validation failed");
+                            self.emit(AgentEvent::ToolExecutionEnd {
+                                tool_call_id: tc_id.clone(),
+                                tool_name: tc_name.clone(),
+                                result: serde_json::json!({"error": error_msg}),
+                                is_error: true,
+                            });
+                            self.state.pending_tool_calls.write().remove(&tc_id);
+                            results.push(ToolResultMessage::new(
+                                tc_id,
+                                tc_name,
+                                vec![ContentBlock::Text(TextContent::new(&error_msg))],
+                                true,
+                            ));
+                            continue;
+                        }
+                    }
+
+                    // H3 + M3: timeout and abort-aware execution
+                    let abort_flag = Arc::clone(&self.abort_flag);
                     let result = if let Some(ref exec) = executor {
-                        exec(&tc_name, &tc_id, &tc_args).await
+                        tokio::select! {
+                            res = tokio::time::timeout(tool_timeout, exec(&tc_name, &tc_id, &tc_args)) => {
+                                match res {
+                                    Ok(r) => r,
+                                    Err(_) => AgentToolResult::error(
+                                        format!("Tool '{}' timed out after {:?}", tc_name, tool_timeout)
+                                    ),
+                                }
+                            }
+                            _ = wait_for_abort(abort_flag) => {
+                                AgentToolResult::error(format!("Tool '{}' aborted", tc_name))
+                            }
+                        }
                     } else {
-                        AgentToolResult::error(format!("No tool executor registered for '{}'", tc_name))
+                        AgentToolResult::error(format!(
+                            "No tool executor registered for '{}'",
+                            tc_name
+                        ))
                     };
 
                     let is_error = result.content.iter().any(|b| {
-                        b.as_text().map(|t| t.text.starts_with("No tool executor")).unwrap_or(false)
+                        b.as_text()
+                            .map(|t| {
+                                t.text.starts_with("No tool executor")
+                                    || t.text.contains("timed out")
+                                    || t.text.contains("aborted")
+                                    || t.text.starts_with("Tool validation failed")
+                            })
+                            .unwrap_or(false)
                     });
 
-                    let result_json = serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
+                    let result_json =
+                        serde_json::to_value(&result.content).unwrap_or(serde_json::Value::Null);
                     self.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
@@ -465,7 +647,10 @@ impl Agent {
                     self.state.pending_tool_calls.write().remove(&tc_id);
 
                     results.push(ToolResultMessage::new(
-                        tc_id, tc_name, result.content, is_error,
+                        tc_id,
+                        tc_name,
+                        result.content,
+                        is_error,
                     ));
                 }
             }
@@ -481,10 +666,16 @@ impl Agent {
         let mut new_messages = Vec::new();
         let mut turn_count = 0;
 
+        // M1: Sync message limit from security config
+        let max_messages = self.config.read().security.agent.max_messages;
+        self.state.set_max_messages(max_messages);
+
         loop {
             // Check abort
             if self.abort_flag.load(Ordering::SeqCst) {
-                self.emit(AgentEvent::AgentEnd { messages: new_messages.clone() });
+                self.emit(AgentEvent::AgentEnd {
+                    messages: new_messages.clone(),
+                });
                 return Err(AgentError::Other("Aborted".to_string()));
             }
 
@@ -505,11 +696,17 @@ impl Agent {
                     self.state.add_message(agent_msg.clone());
                     new_messages.push(agent_msg.clone());
 
-                    self.emit(AgentEvent::MessageStart { message: agent_msg.clone() });
-                    self.emit(AgentEvent::MessageEnd { message: agent_msg.clone() });
+                    self.emit(AgentEvent::MessageStart {
+                        message: agent_msg.clone(),
+                    });
+                    self.emit(AgentEvent::MessageEnd {
+                        message: agent_msg.clone(),
+                    });
 
                     // Check if there are tool calls
-                    if assistant_msg.has_tool_calls() && assistant_msg.stop_reason == StopReason::ToolUse {
+                    if assistant_msg.has_tool_calls()
+                        && assistant_msg.stop_reason == StopReason::ToolUse
+                    {
                         // Execute tools
                         let tool_results = self.execute_tool_calls(&assistant_msg).await;
 
@@ -574,13 +771,23 @@ impl Agent {
     // ============================================================================
 
     /// Send a prompt to the agent.
-    pub async fn prompt(&self, message: impl Into<AgentMessage>) -> Result<Vec<AgentMessage>, AgentError> {
-        if self.state.is_streaming() {
+    ///
+    /// C4: Uses atomic compare_exchange to prevent TOCTOU race condition.
+    pub async fn prompt(
+        &self,
+        message: impl Into<AgentMessage>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        // Atomic CAS: only one caller wins the race
+        if self
+            .state
+            .is_streaming
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Err(AgentError::AlreadyStreaming);
         }
 
         let message = message.into();
-        self.state.set_streaming(true);
         self.abort_flag.store(false, Ordering::SeqCst);
 
         // Add user message to state
@@ -596,33 +803,47 @@ impl Agent {
 
         match result {
             Ok(messages) => {
-                self.emit(AgentEvent::AgentEnd { messages: messages.clone() });
+                self.emit(AgentEvent::AgentEnd {
+                    messages: messages.clone(),
+                });
                 Ok(messages)
             }
             Err(e) => {
-                self.emit(AgentEvent::AgentEnd { messages: Vec::new() });
+                self.emit(AgentEvent::AgentEnd {
+                    messages: Vec::new(),
+                });
                 Err(e)
             }
         }
     }
 
     /// Continue from current state (e.g., after adding tool results externally).
+    ///
+    /// C4: Uses atomic compare_exchange to prevent TOCTOU race condition.
     pub async fn continue_(&self) -> Result<Vec<AgentMessage>, AgentError> {
-        if self.state.is_streaming() {
+        // Atomic CAS first: only one caller wins the race (C4 TOCTOU fix)
+        if self
+            .state
+            .is_streaming
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Err(AgentError::AlreadyStreaming);
         }
 
-        let messages = self.state.messages.read();
-        if messages.is_empty() {
-            return Err(AgentError::NoMessages);
+        // Check messages (release streaming flag on early return)
+        {
+            let messages = self.state.messages.read();
+            if messages.is_empty() {
+                self.state.set_streaming(false);
+                return Err(AgentError::NoMessages);
+            }
+            if let Some(AgentMessage::Assistant(_)) = messages.last() {
+                self.state.set_streaming(false);
+                return Err(AgentError::CannotContinueFromAssistant);
+            }
         }
 
-        if let Some(AgentMessage::Assistant(_)) = messages.last() {
-            return Err(AgentError::CannotContinueFromAssistant);
-        }
-        drop(messages);
-
-        self.state.set_streaming(true);
         self.abort_flag.store(false, Ordering::SeqCst);
 
         self.emit(AgentEvent::AgentStart);
@@ -633,11 +854,15 @@ impl Agent {
 
         match result {
             Ok(messages) => {
-                self.emit(AgentEvent::AgentEnd { messages: messages.clone() });
+                self.emit(AgentEvent::AgentEnd {
+                    messages: messages.clone(),
+                });
                 Ok(messages)
             }
             Err(e) => {
-                self.emit(AgentEvent::AgentEnd { messages: Vec::new() });
+                self.emit(AgentEvent::AgentEnd {
+                    messages: Vec::new(),
+                });
                 Err(e)
             }
         }
@@ -660,6 +885,16 @@ impl Agent {
     /// Get the current state.
     pub fn state(&self) -> &Arc<AgentState> {
         &self.state
+    }
+}
+
+/// Helper: wait until the abort flag is set.
+async fn wait_for_abort(flag: Arc<AtomicBool>) {
+    loop {
+        if flag.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 

@@ -26,9 +26,18 @@ fn test_api_custom_variant() {
 
 #[test]
 fn test_api_from_string_known() {
-    assert_eq!(Api::from("openai-completions".to_string()), Api::OpenAICompletions);
-    assert_eq!(Api::from("anthropic-messages".to_string()), Api::AnthropicMessages);
-    assert_eq!(Api::from("google-generative-ai".to_string()), Api::GoogleGenerativeAi);
+    assert_eq!(
+        Api::from("openai-completions".to_string()),
+        Api::OpenAICompletions
+    );
+    assert_eq!(
+        Api::from("anthropic-messages".to_string()),
+        Api::AnthropicMessages
+    );
+    assert_eq!(
+        Api::from("google-generative-ai".to_string()),
+        Api::GoogleGenerativeAi
+    );
     assert_eq!(Api::from("ollama".to_string()), Api::Ollama);
 }
 
@@ -105,7 +114,10 @@ fn test_provider_from_string() {
     assert_eq!(Provider::from("google".to_string()), Provider::Google);
     assert_eq!(Provider::from("groq".to_string()), Provider::Groq);
     assert_eq!(Provider::from("ollama".to_string()), Provider::Ollama);
-    assert_eq!(Provider::from("unknown".to_string()), Provider::Custom("unknown".to_string()));
+    assert_eq!(
+        Provider::from("unknown".to_string()),
+        Provider::Custom("unknown".to_string())
+    );
 }
 
 #[test]
@@ -401,9 +413,7 @@ fn test_user_message_text() {
 
 #[test]
 fn test_user_message_blocks() {
-    let msg = UserMessage::blocks(vec![
-        ContentBlock::Text(TextContent::new("hello")),
-    ]);
+    let msg = UserMessage::blocks(vec![ContentBlock::Text(TextContent::new("hello"))]);
     assert_eq!(msg.role, Role::User);
     assert!(matches!(msg.content, UserContent::Blocks(_)));
 }
@@ -435,7 +445,11 @@ fn test_assistant_message_with_tool_calls() {
         .model("gpt-4o")
         .content(vec![
             ContentBlock::Text(TextContent::new("Let me check...")),
-            ContentBlock::ToolCall(ToolCall::new("call_1", "get_weather", json!({"city": "Tokyo"}))),
+            ContentBlock::ToolCall(ToolCall::new(
+                "call_1",
+                "get_weather",
+                json!({"city": "Tokyo"}),
+            )),
             ContentBlock::ToolCall(ToolCall::new("call_2", "get_time", json!({"tz": "JST"}))),
         ])
         .stop_reason(StopReason::ToolUse)
@@ -463,15 +477,16 @@ fn test_assistant_message_thinking_content() {
         .build()
         .unwrap();
 
-    assert_eq!(msg.thinking_content(), "First, let me consider...\nAlso, I should check...");
+    assert_eq!(
+        msg.thinking_content(),
+        "First, let me consider...\nAlso, I should check..."
+    );
     assert_eq!(msg.text_content(), "Here's my answer.");
 }
 
 #[test]
 fn test_assistant_message_builder_missing_fields() {
-    let result = AssistantMessage::builder()
-        .model("test")
-        .build();
+    let result = AssistantMessage::builder().model("test").build();
     assert!(result.is_err()); // missing api and provider
 }
 
@@ -514,7 +529,7 @@ fn test_message_enum_variants() {
             .provider(Provider::OpenAI)
             .model("gpt-4o")
             .build()
-            .unwrap()
+            .unwrap(),
     );
     assert!(assistant.is_assistant());
     assert_eq!(assistant.role(), Role::Assistant);
@@ -624,9 +639,7 @@ fn test_context_clear() {
 #[test]
 fn test_context_set_tools() {
     let mut ctx = Context::new();
-    ctx.set_tools(vec![
-        Tool::new("tool1", "desc1", json!({"type": "object"})),
-    ]);
+    ctx.set_tools(vec![Tool::new("tool1", "desc1", json!({"type": "object"}))]);
     assert!(ctx.tools.is_some());
     assert_eq!(ctx.tools.as_ref().unwrap().len(), 1);
 }
@@ -728,7 +741,7 @@ fn test_usage_from_tokens() {
 #[test]
 fn test_usage_add() {
     let mut u1 = Usage::from_tokens(100, 200); // total_tokens = 300
-    let u2 = Usage::from_tokens(50, 100);      // total_tokens = 150
+    let u2 = Usage::from_tokens(50, 100); // total_tokens = 150
     u1.add(&u2);
     assert_eq!(u1.input, 150);
     assert_eq!(u1.output, 300);
@@ -829,7 +842,9 @@ fn test_event_partial_message() {
         .build()
         .unwrap();
 
-    let start = AssistantMessageEvent::Start { partial: msg.clone() };
+    let start = AssistantMessageEvent::Start {
+        partial: msg.clone(),
+    };
     assert!(start.partial_message().is_some());
 
     let done = AssistantMessageEvent::Done {

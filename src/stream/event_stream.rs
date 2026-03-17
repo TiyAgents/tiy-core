@@ -101,6 +101,15 @@ where
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
+
+    /// Get the final result with a timeout.
+    /// Returns `Some(result)` on success, `None` if the timeout expires.
+    pub async fn try_result(&self, timeout: std::time::Duration) -> Option<R> {
+        match tokio::time::timeout(timeout, self.result()).await {
+            Ok(r) => Some(r),
+            Err(_) => None,
+        }
+    }
 }
 
 impl<T, R> Stream for EventStream<T, R>
@@ -154,19 +163,18 @@ impl<T, R> Clone for EventStream<T, R> {
 }
 
 /// Assistant message event stream type alias.
-pub type AssistantMessageEventStream = EventStream<crate::types::AssistantMessageEvent, crate::types::AssistantMessage>;
+pub type AssistantMessageEventStream =
+    EventStream<crate::types::AssistantMessageEvent, crate::types::AssistantMessage>;
 
 impl AssistantMessageEventStream {
     /// Create a new assistant message event stream.
     pub fn new_assistant_stream() -> Self {
         Self::new(
             |event| event.is_complete(),
-            |event| {
-                match event {
-                    crate::types::AssistantMessageEvent::Done { message, .. } => message.clone(),
-                    crate::types::AssistantMessageEvent::Error { error, .. } => error.clone(),
-                    _ => unreachable!("is_complete should only return true for Done/Error"),
-                }
+            |event| match event {
+                crate::types::AssistantMessageEvent::Done { message, .. } => message.clone(),
+                crate::types::AssistantMessageEvent::Error { error, .. } => error.clone(),
+                _ => unreachable!("is_complete should only return true for Done/Error"),
             },
         )
     }

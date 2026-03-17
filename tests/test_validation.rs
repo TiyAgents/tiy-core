@@ -56,7 +56,11 @@ fn calculator_tool() -> Tool {
 #[test]
 fn test_validate_valid_call_all_fields() {
     let tool = weather_tool();
-    let call = ToolCall::new("call_1", "get_weather", json!({"location": "Tokyo", "units": "celsius"}));
+    let call = ToolCall::new(
+        "call_1",
+        "get_weather",
+        json!({"location": "Tokyo", "units": "celsius"}),
+    );
     let result = validate_tool_call(&[tool], &call);
     assert!(result.is_ok());
     let args = result.unwrap();
@@ -90,7 +94,11 @@ fn test_validate_missing_required_field() {
 #[test]
 fn test_validate_invalid_enum_value() {
     let tool = weather_tool();
-    let call = ToolCall::new("call_1", "get_weather", json!({"location": "Tokyo", "units": "kelvin"}));
+    let call = ToolCall::new(
+        "call_1",
+        "get_weather",
+        json!({"location": "Tokyo", "units": "kelvin"}),
+    );
     let result = validate_tool_call(&[tool], &call);
     assert!(result.is_err());
 }
@@ -108,7 +116,9 @@ fn test_validate_tool_not_found() {
     let tool = weather_tool();
     let call = ToolCall::new("call_1", "nonexistent_tool", json!({}));
     let result = validate_tool_call(&[tool], &call);
-    assert!(matches!(result, Err(ToolValidationError::ToolNotFound(name)) if name == "nonexistent_tool"));
+    assert!(
+        matches!(result, Err(ToolValidationError::ToolNotFound(name)) if name == "nonexistent_tool")
+    );
 }
 
 #[test]
@@ -129,7 +139,11 @@ fn test_validate_multiple_tools_finds_correct() {
 #[test]
 fn test_validate_integer_bounds() {
     let tool = calculator_tool();
-    let call = ToolCall::new("call_1", "calculator", json!({"expression": "1+1", "precision": 15}));
+    let call = ToolCall::new(
+        "call_1",
+        "calculator",
+        json!({"expression": "1+1", "precision": 15}),
+    );
     let result = validate_tool_call(&[tool], &call);
     assert!(result.is_err()); // precision > 10
 }
@@ -138,7 +152,11 @@ fn test_validate_integer_bounds() {
 fn test_validate_extra_properties_allowed_by_default() {
     // JSON Schema draft7 allows additional properties unless additionalProperties: false
     let tool = weather_tool();
-    let call = ToolCall::new("call_1", "get_weather", json!({"location": "Tokyo", "extra": "field"}));
+    let call = ToolCall::new(
+        "call_1",
+        "get_weather",
+        json!({"location": "Tokyo", "extra": "field"}),
+    );
     let result = validate_tool_call(&[tool], &call);
     assert!(result.is_ok());
 }
@@ -173,7 +191,11 @@ fn test_validate_nested_object_schema() {
     );
 
     // Valid nested
-    let call = ToolCall::new("c1", "nested_tool", json!({"config": {"key": "foo", "value": 42}}));
+    let call = ToolCall::new(
+        "c1",
+        "nested_tool",
+        json!({"config": {"key": "foo", "value": 42}}),
+    );
     assert!(validate_tool_call(&[tool.clone()], &call).is_ok());
 
     // Missing nested required
