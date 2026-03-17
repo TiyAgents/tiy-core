@@ -53,25 +53,6 @@ fn main() {
     // ============================================
     println!("--- Custom Models ---");
 
-    // Example: Groq model
-    let groq_model = Model::builder()
-        .id("llama-3.3-70b-versatile")
-        .name("Llama 3.3 70B (Groq)")
-        .api(Api::OpenAICompletions)
-        .provider(Provider::Groq)
-        .base_url("https://api.groq.com/openai/v1")
-        .reasoning(false)
-        .input(vec![InputType::Text])
-        .cost(Cost::free())
-        .context_window(32768)
-        .max_tokens(4096)
-        .build()
-        .unwrap();
-    println!(
-        "  Groq: id={}, base_url={}",
-        groq_model.id, groq_model.base_url
-    );
-
     // Example: OpenAI (local)
     let openai_model = Model::builder()
         .id("kimi-k2.5")
@@ -118,7 +99,7 @@ fn main() {
     let provider = OpenAICompletionsProvider::new();
 
     // Set API key from environment or hardcode (for demo purposes)
-    // In production, use: std::env::var("GROQ_API_KEY").unwrap()
+    // In production, use: std::env::var("OPENAI_API_KEY").unwrap()
     let api_key = std::env::var("OPENAI_API_KEY");
 
     match api_key {
@@ -178,10 +159,10 @@ fn main() {
             }
         }
         _ => {
-            println!("\n  Note: GROQ_API_KEY not set, skipping actual API call.");
+            println!("\n  Note: OPENAI_API_KEY not set, skipping actual API call.");
             println!("  To make actual requests:");
-            println!("    1. Get an API key from https://console.groq.com");
-            println!("    2. Set it: export GROQ_API_KEY=your_key");
+            println!("    1. Get an API key from https://platform.openai.com");
+            println!("    2. Set it: export OPENAI_API_KEY=your_key");
             println!("    3. Or modify this example to use another provider");
         }
     }
