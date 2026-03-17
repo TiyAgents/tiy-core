@@ -87,6 +87,11 @@ pub fn get_provider(provider: &Provider) -> Option<ArcProvider> {
     GLOBAL_REGISTRY.get(provider)
 }
 
+/// Get all registered provider type names from the global registry.
+pub fn get_registered_providers() -> Vec<String> {
+    GLOBAL_REGISTRY.provider_types()
+}
+
 /// Clear all providers from the global registry.
 pub fn clear_providers() {
     GLOBAL_REGISTRY.clear();

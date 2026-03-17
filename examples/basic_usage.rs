@@ -63,7 +63,7 @@ fn main() {
         Model::builder()
             .id(&model_id)
             .name(&model_id)
-            .provider(Provider::Anthropic)
+            .provider(Provider::Zenmux)
             .context_window(128000)
             .max_tokens(4096)
             .build()
@@ -106,10 +106,10 @@ fn main() {
     register_provider(Arc::new(ZenmuxProvider::new()));
 
     // ============================================
-    // List all supported Providers
+    // List all registered Providers
     // ============================================
-    println!("--- Supported Providers ---");
-    let providers = tiy_core::models::get_providers();
+    println!("--- Registered Providers ---");
+    let providers = tiy_core::provider::get_registered_providers();
     for provider in &providers {
         println!("  - {}", provider);
     }

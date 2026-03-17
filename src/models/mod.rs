@@ -41,7 +41,7 @@ impl ModelRegistry {
         self.models.get(provider.as_str())?.get(model_id)
     }
 
-    /// Get all providers.
+    /// Get all providers that have predefined models registered.
     pub fn providers(&self) -> Vec<String> {
         self.models.keys().cloned().collect()
     }
@@ -193,7 +193,7 @@ pub fn get_model(provider: impl Into<String>, model_id: impl Into<String>) -> Op
     GLOBAL_MODEL_REGISTRY.get(&provider_enum, &model_id).cloned()
 }
 
-/// Get all providers.
+/// Get all providers that have predefined models in the global model registry.
 pub fn get_providers() -> Vec<String> {
     GLOBAL_MODEL_REGISTRY.providers()
 }
