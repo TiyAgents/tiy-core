@@ -480,9 +480,17 @@ async fn run_stream(
                 continue;
             }
 
-            match current_event_type.as_str() {
+            // Determine event type: prefer JSON "type" field, fall back to SSE event: line.
+            // Some proxies (e.g. Zenmux) may not forward the SSE "event:" line,
+            // so we must always check the JSON "type" field as the primary source.
+            let parsed = serde_json::from_str::<serde_json::Value>(data);
+            let event_type = parsed.as_ref().ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
+                .unwrap_or_else(|| current_event_type.clone());
+
+            match event_type.as_str() {
                 "response.output_item.added" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Ok(ref val) = parsed {
                         let item = val.get("item");
                         let item_type = item
                             .and_then(|i| i.get("type"))
@@ -569,13 +577,30 @@ async fn run_stream(
                 }
 
                 "response.output_text.delta" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Ok(ref val) = parsed {
                         let output_index = val.get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
                         let delta = val.get("delta")
                             .and_then(|d| d.as_str())
                             .unwrap_or("");
+
+                        // Auto-register if output_item.added was never received for this index
+                        if !item_content_map.contains_key(&output_index) {
+                            let content_idx = output.content.len();
+                            output.content.push(ContentBlock::Text(TextContent::new("")));
+                            item_content_map.insert(output_index, ItemInfo {
+                                content_idx,
+                                item_type: ItemType::Message,
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
+                            stream.push(AssistantMessageEvent::TextStart {
+                                content_index: content_idx,
+                                partial: output.clone(),
+                            });
+                        }
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             let idx = info.content_idx;
@@ -592,13 +617,48 @@ async fn run_stream(
                 }
 
                 "response.function_call_arguments.delta" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Ok(ref val) = parsed {
                         let output_index = val.get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
                         let delta = val.get("delta")
                             .and_then(|d| d.as_str())
                             .unwrap_or("");
+
+                        // Auto-register if output_item.added was never received for this index
+                        if !item_content_map.contains_key(&output_index) {
+                            let call_id = val.get("call_id")
+                                .or_else(|| val.get("item_id"))
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let name = val.get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let item_id = val.get("item_id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let composite_id = format!("{}|{}", call_id, item_id);
+                            let content_idx = output.content.len();
+                            output.content.push(ContentBlock::ToolCall(ToolCall::new(
+                                &composite_id, &name,
+                                serde_json::Value::Object(serde_json::Map::new()),
+                            )));
+                            partial_tool_args.insert(output_index, String::new());
+                            item_content_map.insert(output_index, ItemInfo {
+                                content_idx,
+                                item_type: ItemType::FunctionCall,
+                                item_id,
+                                call_id: Some(call_id),
+                                name: Some(name),
+                            });
+                            stream.push(AssistantMessageEvent::ToolCallStart {
+                                content_index: content_idx,
+                                partial: output.clone(),
+                            });
+                        }
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             let idx = info.content_idx;
@@ -619,13 +679,30 @@ async fn run_stream(
                 }
 
                 "response.reasoning_summary_text.delta" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Ok(ref val) = parsed {
                         let output_index = val.get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
                         let delta = val.get("delta")
                             .and_then(|d| d.as_str())
                             .unwrap_or("");
+
+                        // Auto-register if output_item.added was never received for this index
+                        if !item_content_map.contains_key(&output_index) {
+                            let content_idx = output.content.len();
+                            output.content.push(ContentBlock::Thinking(ThinkingContent::new("")));
+                            item_content_map.insert(output_index, ItemInfo {
+                                content_idx,
+                                item_type: ItemType::Reasoning,
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
+                            stream.push(AssistantMessageEvent::ThinkingStart {
+                                content_index: content_idx,
+                                partial: output.clone(),
+                            });
+                        }
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             if info.item_type == ItemType::Reasoning {
@@ -644,7 +721,7 @@ async fn run_stream(
                 }
 
                 "response.output_item.done" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Ok(ref val) = parsed {
                         let output_index = val.get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
@@ -698,8 +775,12 @@ async fn run_stream(
                     }
                 }
 
-                "response.completed" => {
-                    if let Ok(completed) = serde_json::from_str::<ResponseCompleted>(data) {
+                "response.completed" | "response.done" | "response.incomplete" => {
+                    // Try extracting from pre-parsed value, fall back to re-parsing data
+                    let completed = parsed.as_ref().ok()
+                        .and_then(|v| serde_json::from_value::<ResponseCompleted>(v.clone()).ok())
+                        .or_else(|| serde_json::from_str::<ResponseCompleted>(data).ok());
+                    if let Some(completed) = completed {
                         if let Some(ref resp) = completed.response {
                             // Update usage
                             if let Some(ref usage) = resp.usage {
@@ -730,8 +811,8 @@ async fn run_stream(
                     }
                 }
 
-                "error" => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                "error" | "response.failed" => {
+                    if let Ok(ref val) = parsed {
                         let error_msg = val.get("error")
                             .and_then(|e| e.get("message"))
                             .and_then(|m| m.as_str())

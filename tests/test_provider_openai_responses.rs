@@ -764,3 +764,181 @@ async fn test_stream_multiple_text_deltas() {
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "Hello world!");
 }
+
+/// Some providers/proxies skip `response.output_item.added` and start directly
+/// with `response.output_text.delta`. The parser must auto-register the item
+/// and still emit TextStart + TextDelta events.
+#[tokio::test]
+async fn test_stream_text_without_output_item_added() {
+    let server = MockServer::start().await;
+
+    // SSE stream that skips response.output_item.added entirely
+    let sse_body = responses_sse(vec![
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello "
+            }).to_string(),
+        ),
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "world!"
+            }).to_string(),
+        ),
+        (
+            "response.output_item.done",
+            &json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": { "type": "message", "id": "item_01" }
+            }).to_string(),
+        ),
+        (
+            "response.completed",
+            &json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_01",
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 15
+                    },
+                    "output": []
+                }
+            }).to_string(),
+        ),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let model = make_model(&server.uri());
+    let context = make_context("You are a test assistant.", "Hi");
+    let options = make_options("test-key");
+    let provider = OpenAIResponsesProvider::new();
+
+    let stream = provider.stream(&model, &context, options);
+
+    // Collect all events (clone so we can still call result())
+    let events: Vec<_> = stream.clone().collect().await;
+
+    // Should have auto-generated TextStart
+    let has_text_start = events.iter().any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
+    assert!(has_text_start, "Expected TextStart event from auto-registration");
+
+    // Should have both TextDelta events
+    let text_deltas: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            AssistantMessageEvent::TextDelta { delta, .. } => Some(delta.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas.len(), 2);
+    assert_eq!(text_deltas[0], "Hello ");
+    assert_eq!(text_deltas[1], "world!");
+
+    // Verify final result
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Hello world!");
+}
+
+/// Some proxies strip the SSE `event:` line and only forward `data:` lines.
+/// The parser must extract the event type from the JSON `type` field.
+#[tokio::test]
+async fn test_stream_without_sse_event_lines() {
+    let server = MockServer::start().await;
+
+    // Build raw SSE body WITHOUT any "event:" lines — only "data:" lines.
+    // Each data JSON has a "type" field that the parser should use.
+    let sse_body = [
+        format!("data: {}\n\n", json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": { "type": "message", "id": "item_01", "role": "assistant", "content": [] }
+        })),
+        format!("data: {}\n\n", json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello from "
+        })),
+        format!("data: {}\n\n", json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "data-only SSE!"
+        })),
+        format!("data: {}\n\n", json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": { "type": "message", "id": "item_01" }
+        })),
+        format!("data: {}\n\n", json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_01",
+                "status": "completed",
+                "usage": { "input_tokens": 12, "output_tokens": 8, "total_tokens": 20 },
+                "output": []
+            }
+        })),
+    ].join("");
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let model = make_model(&server.uri());
+    let context = make_context("You are a test assistant.", "Hi");
+    let options = make_options("test-key");
+    let provider = OpenAIResponsesProvider::new();
+
+    let stream = provider.stream(&model, &context, options);
+
+    let events: Vec<_> = stream.clone().collect().await;
+
+    // Should have TextStart, TextDelta events even without SSE event: lines
+    let has_text_start = events.iter().any(|e| matches!(e, AssistantMessageEvent::TextStart { .. }));
+    assert!(has_text_start, "Expected TextStart from data-only SSE");
+
+    let text_deltas: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            AssistantMessageEvent::TextDelta { delta, .. } => Some(delta.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas.len(), 2);
+    assert_eq!(text_deltas[0], "Hello from ");
+    assert_eq!(text_deltas[1], "data-only SSE!");
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Hello from data-only SSE!");
+    assert_eq!(result.usage.input, 12);
+    assert_eq!(result.usage.output, 8);
+}
