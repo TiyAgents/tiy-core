@@ -435,14 +435,26 @@ async fn run_stream(
         tools,
     };
 
-    // Google API URL: {base_url}/models/{model_id}:streamGenerateContent?key={api_key}&alt=sse
+    // Google API URL: {base_url}/models/{model_id}:streamGenerateContent?alt=sse
+    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
     let url = format!(
-        "{}/models/{}:streamGenerateContent?key={}&alt=sse",
-        model.base_url, model.id, api_key
+        "{}/models/{}:streamGenerateContent?alt=sse",
+        base, model.id
     );
+
+    tracing::info!(
+        url = %url,
+        model = %model.id,
+        provider = %model.provider,
+        content_count = request.contents.len(),
+        has_tools = request.tools.is_some(),
+        "Sending Google GenerativeAI request"
+    );
+    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
+    headers.insert("x-goog-api-key", api_key.parse()?);
 
     // Add custom headers
     if let Some(ref custom_headers) = options.headers {
@@ -465,6 +477,12 @@ async fn run_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            model = %model.id,
+            status = %status,
+            response_body = %body,
+            "Google GenerativeAI request failed"
+        );
         output.stop_reason = StopReason::Error;
         output.error_message = Some(format!("HTTP {}: {}", status, body));
         stream.push(AssistantMessageEvent::Error {

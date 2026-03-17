@@ -468,7 +468,18 @@ async fn run_stream(
         thinking: None, // Thinking params can be set via SimpleStreamOptions
     };
 
-    let url = format!("{}/messages", model.base_url);
+    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let url = format!("{}/messages", base);
+
+    tracing::info!(
+        url = %url,
+        model = %model.id,
+        provider = %model.provider,
+        message_count = request.messages.len(),
+        has_tools = request.tools.is_some(),
+        "Sending Anthropic Messages request"
+    );
+    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("x-api-key", api_key.parse()?);
@@ -496,6 +507,13 @@ async fn run_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            status = %status,
+            response_body = %body,
+            "Anthropic Messages request failed"
+        );
         output.stop_reason = StopReason::Error;
         output.error_message = Some(format!("HTTP {}: {}", status, body));
         stream.push(AssistantMessageEvent::Error {

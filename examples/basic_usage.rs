@@ -5,16 +5,37 @@
 //! - All supported API types
 //! - Creating models with custom API BASE, KEY, and MODEL ID
 //! - Making actual LLM API requests
+//!
+//! Environment variables (in priority order):
+//!   LLM_API_KEY    > OPENAI_API_KEY         — API key
+//!   LLM_BASE_URL   > OPENAI_BASE_URL        — Base URL override
+//!   LLM_MODEL      > (default: gpt-4o-mini) — Model ID
+//!
+//! Run with logging: RUST_LOG=info cargo run --example basic_usage
+//! For request body:  RUST_LOG=debug cargo run --example basic_usage
 
 use futures::StreamExt;
 use tiy_core::{
     models::get_model,
     provider::{openai_completions::OpenAICompletionsProvider, LLMProvider},
     stream::AssistantMessageEventStream,
-    types::{Api, Context, Cost, InputType, Model, Provider, StreamOptions, UserMessage},
+    types::{Api, Context, Model, Provider, StreamOptions, UserMessage},
 };
 
+/// Resolve an env var with fallback: try `primary`, then `fallback`.
+fn env_or(primary: &str, fallback: &str) -> Option<String> {
+    std::env::var(primary)
+        .or_else(|_| std::env::var(fallback))
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
 fn main() {
+    // Initialize tracing subscriber (controlled by RUST_LOG env var)
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     println!("=== tiy-core Basic Usage Example ===\n");
 
     // ============================================
@@ -28,58 +49,31 @@ fn main() {
     println!();
 
     // ============================================
-    // Part 2: Predefined Models
-    // ============================================
-    println!("--- Predefined Models ---");
-    if let Some(model) = get_model("openai", "gpt-4o-mini") {
-        println!(
-            "  OpenAI gpt-4o-mini: {} tokens (${:.4}/1M in)",
-            model.context_window, model.cost.input
-        );
-    }
-    if let Some(model) = get_model("anthropic", "claude-sonnet-4-20250514") {
-        println!(
-            "  Anthropic claude-sonnet-4: {} tokens",
-            model.context_window
-        );
-    }
-    if let Some(model) = get_model("google", "gemini-2.5-flash") {
-        println!("  Google gemini-2.5-flash: {} tokens", model.context_window);
-    }
-    println!();
-
-    // ============================================
-    // Part 3: Custom Models with API BASE, KEY, MODEL ID
-    // ============================================
-    println!("--- Custom Models ---");
-
-    // Example: OpenAI (local)
-    let openai_model = Model::builder()
-        .id("kimi-k2.5")
-        .name("Kimi K2.5")
-        .api(Api::OpenAICompletions)
-        .provider(Provider::OpenAI)
-        .base_url("https://api.lkeap.cloud.tencent.com/v3")
-        .reasoning(false)
-        .input(vec![InputType::Text])
-        .cost(Cost::free())
-        .context_window(128000)
-        .max_tokens(4096)
-        .build()
-        .unwrap();
-    println!(
-        "  OpenAI: id={}, base_url={}",
-        openai_model.id, openai_model.base_url
-    );
-    println!();
-
-    // ============================================
-    // Part 4: Make Actual LLM Request
+    // Part 2: Make Actual LLM Request
     // ============================================
     println!("--- Making LLM Request ---");
 
-    // Use Groq as example (fast and has free tier)
-    let model = openai_model;
+    // Resolve configuration from environment variables
+    let api_key = env_or("LLM_API_KEY", "OPENAI_API_KEY");
+    let base_url = env_or("LLM_BASE_URL", "OPENAI_BASE_URL");
+    let model_id = std::env::var("LLM_MODEL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+
+    // Look up predefined model, or fall back to a custom model definition
+    let model = get_model("openai", &model_id).unwrap_or_else(|| {
+        Model::builder()
+            .id(&model_id)
+            .name(&model_id)
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .base_url(base_url.as_deref().unwrap_or("https://api.openai.com/v1"))
+            .context_window(128000)
+            .max_tokens(4096)
+            .build()
+            .expect("Failed to build custom model")
+    });
 
     // Create context with messages
     let context = Context {
@@ -92,39 +86,41 @@ fn main() {
 
     println!("  Model: {} ({})", model.name, model.id);
     println!("  Provider: {}", model.provider);
-    println!("  Base URL: {}", model.base_url);
+    println!(
+        "  Base URL: {}",
+        base_url.as_deref().unwrap_or(&model.base_url)
+    );
     println!("  Prompt: \"{}\"", "What is the capital of France?");
 
     // Create provider
     let provider = OpenAICompletionsProvider::new();
 
-    // Set API key from environment or hardcode (for demo purposes)
-    // In production, use: std::env::var("OPENAI_API_KEY").unwrap()
-    let api_key = std::env::var("OPENAI_API_KEY");
-
     match api_key {
-        Ok(key) if !key.is_empty() => {
-            println!("\n  Making request to OPENAI API...");
+        Some(key) => {
+            println!("\n  Making request...");
 
-            // Create stream options with API key
+            // base_url in StreamOptions overrides model.base_url
             let options = StreamOptions {
                 temperature: Some(0.7),
                 max_tokens: Some(100),
                 api_key: Some(key),
+                base_url,
                 headers: None,
                 session_id: None,
             };
-
-            // Make the request
-            let stream = provider.stream(&model, &context, options);
 
             // Process streaming response
             println!("\n  Response:");
             println!("  --------");
 
             // Use blocking async runtime for simplicity
+            // NOTE: provider.stream() calls tokio::spawn internally,
+            // so it must be called within an active Tokio runtime.
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(async {
+                // Make the request (must be inside async block for tokio::spawn)
+                let stream = provider.stream(&model, &context, options);
+
                 let mut full_response = String::new();
 
                 // Collect events from stream
@@ -158,12 +154,15 @@ fn main() {
                 println!("  Request error: {}", e);
             }
         }
-        _ => {
-            println!("\n  Note: OPENAI_API_KEY not set, skipping actual API call.");
-            println!("  To make actual requests:");
-            println!("    1. Get an API key from https://platform.openai.com");
-            println!("    2. Set it: export OPENAI_API_KEY=your_key");
-            println!("    3. Or modify this example to use another provider");
+        None => {
+            println!("\n  Note: No API key set, skipping actual API call.");
+            println!("  To make actual requests, set environment variables:");
+            println!("    export LLM_API_KEY=your_key");
+            println!("    export LLM_BASE_URL=https://your-proxy.com/v1  # optional");
+            println!("    export LLM_MODEL=gpt-4o-mini                   # optional");
+            println!("  Or use provider-specific variables:");
+            println!("    export OPENAI_API_KEY=your_key");
+            println!("    export OPENAI_BASE_URL=https://your-proxy.com/v1");
         }
     }
 

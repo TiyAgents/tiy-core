@@ -381,7 +381,18 @@ async fn run_stream(
         reasoning: None,
     };
 
-    let url = format!("{}/responses", model.base_url);
+    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let url = format!("{}/responses", base);
+
+    tracing::info!(
+        url = %url,
+        model = %model.id,
+        provider = %model.provider,
+        input_count = request.input.len(),
+        has_tools = request.tools.is_some(),
+        "Sending OpenAI Responses request"
+    );
+    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -411,6 +422,13 @@ async fn run_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            status = %status,
+            response_body = %body,
+            "OpenAI Responses request failed"
+        );
         output.stop_reason = StopReason::Error;
         output.error_message = Some(format!("HTTP {}: {}", status, body));
         stream.push(AssistantMessageEvent::Error {

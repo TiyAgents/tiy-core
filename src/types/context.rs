@@ -166,6 +166,9 @@ pub struct StreamOptions {
     /// API key override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Base URL override. When set, takes priority over model.base_url.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     /// Custom headers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<std::collections::HashMap<String, String>>,
@@ -180,6 +183,7 @@ impl Default for StreamOptions {
             temperature: None,
             max_tokens: None,
             api_key: None,
+            base_url: None,
             headers: None,
             session_id: None,
         }

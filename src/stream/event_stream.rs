@@ -29,7 +29,7 @@ pub struct EventStream<T, R = T> {
 
 impl<T, R> EventStream<T, R>
 where
-    T: Send + 'static,
+    T: Clone + Send + 'static,
     R: Send + 'static,
 {
     /// Create a new event stream.
@@ -62,7 +62,10 @@ where
 
         let is_complete = (self.is_complete)(&event);
         if is_complete {
-            // Extract the result and store it for result() callers
+            // Push the completion event to the queue so Stream
+            // consumers can observe Done/Error before the stream ends.
+            self.inner.events.lock().push_back(event.clone());
+            // Extract the result and store it for result() callers.
             let result = (self.extract_result)(event);
             *self.inner.result.lock() = Some(result);
             self.inner.done.store(true, Ordering::SeqCst);

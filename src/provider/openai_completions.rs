@@ -109,6 +109,7 @@ impl LLMProvider for OpenAICompletionsProvider {
             temperature: options.base.temperature,
             max_tokens: options.base.max_tokens,
             api_key: options.base.api_key,
+            base_url: options.base.base_url,
             headers: options.base.headers,
             session_id: options.base.session_id,
         };
@@ -570,7 +571,18 @@ async fn run_stream(
         reasoning_effort: None,
     };
 
-    let url = format!("{}/chat/completions", model.base_url);
+    let base = options.base_url.as_deref().unwrap_or(&model.base_url);
+    let url = format!("{}/chat/completions", base);
+
+    tracing::info!(
+        url = %url,
+        model = %model.id,
+        provider = %model.provider,
+        message_count = request.messages.len(),
+        has_tools = request.tools.is_some(),
+        "Sending OpenAI Completions request"
+    );
+    tracing::debug!(request_body = %serde_json::to_string(&request).unwrap_or_default(), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -600,6 +612,13 @@ async fn run_stream(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            status = %status,
+            response_body = %body,
+            "OpenAI Completions request failed"
+        );
         output.stop_reason = StopReason::Error;
         output.error_message = Some(format!("HTTP {}: {}", status, body));
         stream.push(AssistantMessageEvent::Error {

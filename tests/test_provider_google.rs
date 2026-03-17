@@ -6,7 +6,7 @@ use tiy_core::provider::LLMProvider;
 use tiy_core::provider::google::GoogleProvider;
 use futures::StreamExt;
 use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{header, method, path, query_param};
 
 // ============================================================================
 // Helper functions
@@ -83,7 +83,7 @@ async fn test_stream_simple_text_response() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -153,7 +153,7 @@ async fn test_stream_with_tool_call() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -192,7 +192,7 @@ async fn test_stream_http_error() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "invalid-key"))
+        .and(header("x-goog-api-key", "invalid-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(401)
@@ -261,7 +261,7 @@ async fn test_stream_with_thinking() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -325,7 +325,7 @@ async fn test_stream_usage_tracking() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -378,7 +378,7 @@ async fn test_stream_length_stop_reason() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -453,7 +453,7 @@ async fn test_stream_multiple_text_chunks() {
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
-        .and(query_param("key", "test-key"))
+        .and(header("x-goog-api-key", "test-key"))
         .and(query_param("alt", "sse"))
         .respond_with(
             ResponseTemplate::new(200)
