@@ -6,6 +6,9 @@
 /// Default base URL for Google Generative AI API.
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// Default base URL for Google Vertex AI API.
+const DEFAULT_VERTEX_BASE_URL: &str = "https://us-central1-aiplatform.googleapis.com";
+
 use crate::provider::LLMProvider;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
@@ -438,14 +441,28 @@ async fn run_stream(
         tools,
     };
 
-    // Google API URL: {base_url}/models/{model_id}:streamGenerateContent?alt=sse
+    // Determine if this is a Vertex AI request
+    let is_vertex = model.api.as_ref()
+        .map(|api| matches!(api, Api::GoogleVertex))
+        .unwrap_or(false);
+
     let base = options.base_url.as_deref()
         .or(model.base_url.as_deref())
-        .unwrap_or(DEFAULT_BASE_URL);
-    let url = format!(
-        "{}/models/{}:streamGenerateContent?alt=sse",
-        base, model.id
-    );
+        .unwrap_or(if is_vertex { DEFAULT_VERTEX_BASE_URL } else { DEFAULT_BASE_URL });
+
+    // Vertex AI URL: {base}/v1/publishers/google/models/{model}:streamGenerateContent?alt=sse
+    // Generative AI URL: {base}/models/{model}:streamGenerateContent?alt=sse
+    let url = if is_vertex {
+        format!(
+            "{}/v1/publishers/google/models/{}:streamGenerateContent?alt=sse",
+            base, model.id
+        )
+    } else {
+        format!(
+            "{}/models/{}:streamGenerateContent?alt=sse",
+            base, model.id
+        )
+    };
 
     tracing::info!(
         url = %url,
@@ -459,7 +476,16 @@ async fn run_stream(
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
-    headers.insert("x-goog-api-key", api_key.parse()?);
+
+    // Vertex AI uses Authorization: Bearer header; Generative AI uses x-goog-api-key
+    if is_vertex {
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", api_key).parse()?,
+        );
+    } else {
+        headers.insert("x-goog-api-key", api_key.parse()?);
+    }
 
     // Add custom headers
     if let Some(ref custom_headers) = options.headers {
