@@ -978,3 +978,403 @@ async fn test_stream_without_sse_event_lines() {
     assert_eq!(result.usage.input, 12);
     assert_eq!(result.usage.output, 8);
 }
+
+// ============================================================================
+// Additional coverage: with_api_key, default, stream_simple, failed status,
+// text + tool_call combined, multiple tool calls
+// ============================================================================
+
+#[test]
+fn test_provider_with_api_key() {
+    let provider = OpenAIResponsesProvider::with_api_key("sk-test");
+    assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
+}
+
+#[test]
+fn test_provider_default() {
+    let provider = OpenAIResponsesProvider::default();
+    assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
+}
+
+#[tokio::test]
+async fn test_stream_simple_delegates_correctly() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_s","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"simple"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_s"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+            thinking_budget_tokens: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "simple");
+}
+
+#[tokio::test]
+async fn test_stream_failed_status() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"failed","usage":{"input_tokens":5,"output_tokens":0,"total_tokens":5},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn test_stream_text_then_tool_call() {
+    let server = MockServer::start().await;
+
+    // Message item with text, then function_call item
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_t","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Searching..."}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_t"}}).to_string()),
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"item_fc","call_id":"call_1","name":"search","arguments":""}}).to_string()),
+        ("response.function_call_arguments.delta", &json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\": \"test\"}"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"item_fc","call_id":"call_1","name":"search"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20},"output":[{"type":"message","id":"item_t"},{"type":"function_call","id":"item_fc","call_id":"call_1","name":"search"}]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("test", "find info");
+    context.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert_eq!(result.text_content(), "Searching...");
+    assert_eq!(result.tool_calls().len(), 1);
+    assert_eq!(result.tool_calls()[0].name, "search");
+}
+
+#[tokio::test]
+async fn test_stream_multiple_function_calls() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        // First function call
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"fn_a","arguments":""}}).to_string()),
+        ("response.function_call_arguments.delta", &json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"x\":1}"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"fn_a"}}).to_string()),
+        // Second function call
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc2","call_id":"c2","name":"fn_b","arguments":""}}).to_string()),
+        ("response.function_call_arguments.delta", &json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"y\":2}"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc2","call_id":"c2","name":"fn_b"}}).to_string()),
+        // Completed
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "use tools");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    let tcs = result.tool_calls();
+    assert_eq!(tcs.len(), 2);
+    assert_eq!(tcs[0].name, "fn_a");
+    assert_eq!(tcs[1].name, "fn_b");
+}
+
+// ============================================================================
+// Message conversion coverage: multi-turn, images, tool results, error events
+// ============================================================================
+
+#[tokio::test]
+async fn test_stream_multiturn_with_tool_calls_and_results() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_r","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"continued"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_r"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":50,"output_tokens":5,"total_tokens":55},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("search for info")));
+    // Assistant with text + tool call (composite ID)
+    let asst = AssistantMessage::builder()
+        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
+        .content(vec![
+            ContentBlock::Text(TextContent { text: "Searching".to_string(), text_signature: None }),
+            ContentBlock::ToolCall(ToolCall {
+                id: "call_1|fc_item1".to_string(), name: "search".to_string(),
+                arguments: json!({"q": "test"}), thought_signature: None,
+            }),
+        ])
+        .stop_reason(StopReason::ToolUse)
+        .build().unwrap();
+    ctx.add_message(Message::Assistant(asst));
+    // Tool result with composite ID
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text("call_1|fc_item1", "search", "found data", false)));
+    // Errored assistant (should be skipped)
+    let asst_err = AssistantMessage::builder()
+        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
+        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .stop_reason(StopReason::Error)
+        .build().unwrap();
+    ctx.add_message(Message::Assistant(asst_err));
+    ctx.add_message(Message::User(UserMessage::text("go on")));
+    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let options = make_options("key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "continued");
+}
+
+#[tokio::test]
+async fn test_stream_with_image_user_content() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_img","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"I see a picture"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_img"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":30,"output_tokens":3,"total_tokens":33},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage {
+        role: Role::User,
+        content: UserContent::Blocks(vec![
+            ContentBlock::Text(TextContent { text: "What is this?".to_string(), text_signature: None }),
+            ContentBlock::Image(ImageContent {
+                mime_type: "image/jpeg".to_string(),
+                data: "/9j/4AA=".to_string(),
+            }),
+        ]),
+        timestamp: 0,
+    }));
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let options = make_options("key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "I see a picture");
+}
+
+#[tokio::test]
+async fn test_stream_non_composite_tool_call_id() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_nc","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_nc"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":20,"output_tokens":1,"total_tokens":21},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage::text("use tool")));
+    // Assistant with non-composite tool call ID (no "|")
+    let asst = AssistantMessage::builder()
+        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
+        .content(vec![ContentBlock::ToolCall(ToolCall {
+            id: "simple_id".to_string(), name: "fn_a".to_string(),
+            arguments: json!({"x": 1}), thought_signature: None,
+        })])
+        .stop_reason(StopReason::ToolUse)
+        .build().unwrap();
+    ctx.add_message(Message::Assistant(asst));
+    // Tool result with non-composite ID
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text("simple_id", "fn_a", "result", false)));
+    ctx.add_message(Message::User(UserMessage::text("continue")));
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let options = make_options("key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_stream_cancelled_status() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"cancelled","usage":{"input_tokens":5,"output_tokens":0,"total_tokens":5},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn test_stream_http_error_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_string("Internal server error"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn test_stream_usage_with_cached_tokens() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"item_c","role":"assistant","content":[]}}).to_string()),
+        ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"cached"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"item_c"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":80}},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.usage.input, 100);
+    assert_eq!(result.usage.output, 5);
+    assert_eq!(result.usage.cache_read, 80);
+}

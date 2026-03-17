@@ -129,6 +129,7 @@ async fn test_zenmux_non_adaptive_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;

@@ -532,3 +532,581 @@ async fn test_stream_multiple_text_chunks() {
     assert_eq!(result.usage.output, 4);
     assert_eq!(result.usage.total_tokens, 12);
 }
+
+// ============================================================================
+// Additional coverage: with_api_key, default, stream_simple, safety reasons,
+// thinking with signature, function call after text, DONE handling
+// ============================================================================
+
+#[test]
+fn test_provider_with_api_key() {
+    let provider = GoogleProvider::with_api_key("test-api-key");
+    assert_eq!(provider.provider_type(), Provider::Google);
+}
+
+#[test]
+fn test_provider_default() {
+    let provider = GoogleProvider::default();
+    assert_eq!(provider.provider_type(), Provider::Google);
+}
+
+#[tokio::test]
+async fn test_stream_simple_delegates_correctly() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"simple"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+            thinking_budget_tokens: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "simple");
+}
+
+#[tokio::test]
+async fn test_stream_safety_finish_reason() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "partial"}], "role": "model"},
+            "finishReason": "SAFETY"
+        }],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "something");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn test_stream_recitation_finish_reason() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "copied"}], "role": "model"},
+            "finishReason": "RECITATION"
+        }],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "something");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn test_stream_thinking_with_signature() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![
+        &json!({
+            "candidates": [{"content": {"parts": [{
+                "text": "deep thinking...",
+                "thought": true,
+                "thoughtSignature": "sig_xyz"
+            }], "role": "model"}}]
+        }).to_string(),
+        &json!({
+            "candidates": [{"content": {"parts": [{"text": "final answer"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 5}
+        }).to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "think about it");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "final answer");
+    assert!(result.thinking_content().contains("deep thinking..."));
+}
+
+#[tokio::test]
+async fn test_stream_function_call_after_text() {
+    let server = MockServer::start().await;
+
+    // Text first, then a function call in same response — should close text block
+    let sse_body = google_sse(vec![
+        &json!({
+            "candidates": [{"content": {"parts": [{"text": "Let me search"}], "role": "model"}}]
+        }).to_string(),
+        &json!({
+            "candidates": [{"content": {"parts": [{
+                "functionCall": {"name": "search", "args": {"q": "test"}}
+            }], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 10}
+        }).to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("test", "find info");
+    context.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+    )]);
+    let options = make_options("test-key");
+
+    let mut stream = provider.stream(&model, &context, options);
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert_eq!(result.text_content(), "Let me search");
+    assert_eq!(result.tool_calls().len(), 1);
+    assert_eq!(result.tool_calls()[0].name, "search");
+
+    // Verify TextEnd was emitted before tool call
+    let text_ends: Vec<_> = events.iter().filter(|e| matches!(e, AssistantMessageEvent::TextEnd { .. })).collect();
+    assert!(!text_ends.is_empty(), "TextEnd should be emitted when function call arrives");
+}
+
+#[tokio::test]
+async fn test_stream_function_call_after_thinking() {
+    let server = MockServer::start().await;
+
+    // Thinking then function call — should close thinking block
+    let sse_body = google_sse(vec![
+        &json!({
+            "candidates": [{"content": {"parts": [{
+                "text": "reasoning...",
+                "thought": true
+            }], "role": "model"}}]
+        }).to_string(),
+        &json!({
+            "candidates": [{"content": {"parts": [{
+                "functionCall": {"name": "calc", "args": {"expr": "1+1"}}
+            }], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 10}
+        }).to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("test", "calculate");
+    context.set_tools(vec![Tool::new(
+        "calc",
+        "Calculate",
+        json!({"type": "object", "properties": {"expr": {"type": "string"}}}),
+    )]);
+    let options = make_options("test-key");
+
+    let mut stream = provider.stream(&model, &context, options);
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert!(result.thinking_content().contains("reasoning..."));
+    assert_eq!(result.tool_calls().len(), 1);
+
+    // Verify ThinkingEnd was emitted
+    let thinking_ends: Vec<_> = events.iter().filter(|e| matches!(e, AssistantMessageEvent::ThinkingEnd { .. })).collect();
+    assert!(!thinking_ends.is_empty(), "ThinkingEnd should be emitted when function call arrives");
+}
+
+#[tokio::test]
+async fn test_stream_done_line_ignored() {
+    let server = MockServer::start().await;
+
+    // Append [DONE] line which Google shouldn't normally send but should handle
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1}
+    }).to_string()]) + "data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
+}
+
+#[tokio::test]
+async fn test_stream_blocklist_finish_reason() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "blocked"}], "role": "model"},
+            "finishReason": "BLOCKLIST"
+        }],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}
+
+// ============================================================================
+// Message conversion coverage: multi-turn with assistant/tool messages
+// ============================================================================
+
+#[tokio::test]
+async fn test_stream_with_rich_context_multiturn() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"continued"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":5}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+    let asst = AssistantMessage::builder()
+        .api(Api::GoogleGenerativeAi)
+        .provider(Provider::Google)
+        .model("gemini-2.0-flash")
+        .content(vec![
+            ContentBlock::Thinking(ThinkingContent {
+                thinking: "Thinking...".to_string(),
+                thinking_signature: Some("sig1".to_string()),
+                redacted: false,
+            }),
+            ContentBlock::Text(TextContent { text: "response".to_string(), text_signature: None }),
+        ])
+        .stop_reason(StopReason::Stop)
+        .build().unwrap();
+    ctx.add_message(Message::Assistant(asst));
+    ctx.add_message(Message::User(UserMessage::text("now use a tool")));
+    let asst2 = AssistantMessage::builder()
+        .api(Api::GoogleGenerativeAi)
+        .provider(Provider::Google)
+        .model("gemini-2.0-flash")
+        .content(vec![ContentBlock::ToolCall(ToolCall {
+            id: "tc_1".to_string(), name: "search".to_string(),
+            arguments: json!({"q": "test"}), thought_signature: Some("sig2".to_string()),
+        })])
+        .stop_reason(StopReason::ToolUse).build().unwrap();
+    ctx.add_message(Message::Assistant(asst2));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_1", "search", "result data", false)));
+    let asst_err = AssistantMessage::builder()
+        .api(Api::GoogleGenerativeAi)
+        .provider(Provider::Google)
+        .model("gemini-2.0-flash")
+        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .stop_reason(StopReason::Error).build().unwrap();
+    ctx.add_message(Message::Assistant(asst_err));
+    ctx.add_message(Message::User(UserMessage::text("continue")));
+    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+
+    let model = make_model(&server.uri());
+    let provider = GoogleProvider::new();
+    let options = make_options("test-key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "continued");
+}
+
+#[tokio::test]
+async fn test_stream_with_error_tool_result() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"error handled"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":5}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage::text("use tool")));
+    let asst = AssistantMessage::builder()
+        .api(Api::GoogleGenerativeAi)
+        .provider(Provider::Google)
+        .model("gemini-2.0-flash")
+        .content(vec![ContentBlock::ToolCall(ToolCall {
+            id: "tc_e".to_string(), name: "fn1".to_string(),
+            arguments: json!({}), thought_signature: None,
+        })]).stop_reason(StopReason::ToolUse).build().unwrap();
+    ctx.add_message(Message::Assistant(asst));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_e", "fn1", "error occurred", true)));
+    ctx.add_message(Message::User(UserMessage::text("retry")));
+
+    let model = make_model(&server.uri());
+    let provider = GoogleProvider::new();
+    let options = make_options("test-key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "error handled");
+}
+
+#[tokio::test]
+async fn test_stream_vertex_ai_mode() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"vertex response"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}
+    }).to_string()]);
+
+    // Vertex AI URL format: /v1/publishers/google/models/{model}:streamGenerateContent
+    Mock::given(method("POST"))
+        .and(path("/v1/publishers/google/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .and(header("authorization", "Bearer vertex-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let model = Model::builder()
+        .id("gemini-2.0-flash")
+        .name("Gemini 2.0 Flash (Vertex)")
+        .api(Api::GoogleVertex)
+        .provider(Provider::Google)
+        .base_url(&server.uri())
+        .context_window(1048576)
+        .max_tokens(8192)
+        .build()
+        .unwrap();
+
+    let context = make_context("test", "hello");
+    let options = StreamOptions {
+        api_key: Some("vertex-key".to_string()),
+        ..Default::default()
+    };
+    let provider = GoogleProvider::new();
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "vertex response");
+}
+
+#[tokio::test]
+async fn test_stream_with_image_user_content() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"I see an image"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3}
+    }).to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage {
+        role: Role::User,
+        content: UserContent::Blocks(vec![
+            ContentBlock::Text(TextContent { text: "Describe this".to_string(), text_signature: None }),
+            ContentBlock::Image(ImageContent {
+                mime_type: "image/png".to_string(),
+                data: "iVBORw0KGgo=".to_string(),
+            }),
+        ]),
+        timestamp: 0,
+    }));
+
+    let provider = GoogleProvider::new();
+    let model = Model::builder()
+        .id("gemini-2.0-flash")
+        .name("Gemini 2.0 Flash")
+        .api(Api::GoogleGenerativeAi)
+        .provider(Provider::Google)
+        .base_url(&server.uri())
+        .input(vec![InputType::Text, InputType::Image])
+        .context_window(1048576)
+        .max_tokens(8192)
+        .build()
+        .unwrap();
+
+    let options = make_options("test-key");
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "I see an image");
+}
+
+#[tokio::test]
+async fn test_stream_http_error_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .set_body_string("Service unavailable"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}

@@ -664,3 +664,473 @@ async fn test_stream_sse_error_event() {
     assert!(result.error_message.is_some());
     assert!(result.error_message.unwrap().contains("Overloaded"));
 }
+
+// ============================================================================
+// Additional coverage: with_api_key, default, redacted thinking, signature delta,
+// stop_sequence, unknown event type, stream_simple, DONE handling
+// ============================================================================
+
+#[test]
+fn test_provider_with_api_key() {
+    let provider = AnthropicProvider::with_api_key("sk-ant-test");
+    assert_eq!(provider.provider_type(), Provider::Anthropic);
+}
+
+#[test]
+fn test_provider_default() {
+    let provider = AnthropicProvider::default();
+    assert_eq!(provider.provider_type(), Provider::Anthropic);
+}
+
+#[tokio::test]
+async fn test_stream_simple_delegates_correctly() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_s","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"simple"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+            thinking_budget_tokens: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "simple");
+}
+
+#[tokio::test]
+async fn test_stream_stop_sequence_reason() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_sq","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"stopped"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"stop_sequence"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "stopped");
+}
+
+#[tokio::test]
+async fn test_stream_redacted_thinking() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_rt","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":1}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "think about it");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "answer");
+}
+
+#[tokio::test]
+async fn test_stream_with_signature_delta() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_sig","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"deep thought"}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_abc123"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"result"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":1}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "think deeply");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "result");
+    assert!(result.thinking_content().contains("deep thought"));
+}
+
+#[tokio::test]
+async fn test_stream_unknown_event_type_ignored() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_unk","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("custom_unknown_event", &json!({"type":"custom_unknown","data":"ignored"}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
+}
+
+#[tokio::test]
+async fn test_stream_done_in_data() {
+    let server = MockServer::start().await;
+
+    // Some implementations send [DONE] in data field
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_d","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+    // Append a [DONE] line
+    let sse_body = sse_body + "data: [DONE]\n\n";
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "hi");
+}
+
+// ============================================================================
+// Message conversion coverage: multi-turn conversations
+// ============================================================================
+
+#[tokio::test]
+async fn test_stream_multiturn_with_tool_calls_and_results() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_mt","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":50,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"continued"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+
+    // Previous assistant with thinking + text
+    let asst = AssistantMessage::builder()
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .model("claude-3-5-sonnet")
+        .content(vec![
+            ContentBlock::Thinking(ThinkingContent {
+                thinking: "Let me consider...".to_string(),
+                thinking_signature: Some("sig_1".to_string()),
+                redacted: false,
+            }),
+            ContentBlock::Text(TextContent { text: "response".to_string(), text_signature: None }),
+        ])
+        .stop_reason(StopReason::Stop)
+        .build()
+        .unwrap();
+    ctx.add_message(Message::Assistant(asst));
+
+    ctx.add_message(Message::User(UserMessage::text("now search")));
+
+    // Assistant with tool call
+    let asst2 = AssistantMessage::builder()
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .model("claude-3-5-sonnet")
+        .content(vec![ContentBlock::ToolCall(ToolCall {
+            id: "tc_1".to_string(),
+            name: "search".to_string(),
+            arguments: json!({"q": "test"}),
+            thought_signature: None,
+        })])
+        .stop_reason(StopReason::ToolUse)
+        .build()
+        .unwrap();
+    ctx.add_message(Message::Assistant(asst2));
+
+    // Tool result
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_1", "search", "found result", false)));
+
+    // Errored assistant (should be skipped)
+    let asst_err = AssistantMessage::builder()
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .model("claude-3-5-sonnet")
+        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .stop_reason(StopReason::Error)
+        .build()
+        .unwrap();
+    ctx.add_message(Message::Assistant(asst_err));
+
+    // Aborted assistant (should also be skipped)
+    let asst_abort = AssistantMessage::builder()
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .model("claude-3-5-sonnet")
+        .content(vec![ContentBlock::Text(TextContent { text: "abort".to_string(), text_signature: None })])
+        .stop_reason(StopReason::Aborted)
+        .build()
+        .unwrap();
+    ctx.add_message(Message::Assistant(asst_abort));
+
+    ctx.add_message(Message::User(UserMessage::text("continue")));
+    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+
+    let model = make_model(&server.uri());
+    let provider = AnthropicProvider::new();
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "continued");
+}
+
+#[tokio::test]
+async fn test_stream_with_redacted_thinking_in_context() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_rd","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":20,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+
+    // Previous assistant with redacted thinking
+    let asst = AssistantMessage::builder()
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .model("claude-3-5-sonnet")
+        .content(vec![
+            ContentBlock::Thinking(ThinkingContent {
+                thinking: "redacted_data".to_string(),
+                thinking_signature: None,
+                redacted: true,
+            }),
+            ContentBlock::Text(TextContent { text: "prev response".to_string(), text_signature: None }),
+        ])
+        .stop_reason(StopReason::Stop)
+        .build()
+        .unwrap();
+    ctx.add_message(Message::Assistant(asst));
+    ctx.add_message(Message::User(UserMessage::text("go on")));
+
+    let model = make_model(&server.uri());
+    let provider = AnthropicProvider::new();
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
+}
+
+#[tokio::test]
+async fn test_stream_with_image_user_content() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_img","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":30,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I see an image"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    // User message with blocks including an image
+    ctx.add_message(Message::User(UserMessage {
+        role: Role::User,
+        content: UserContent::Blocks(vec![
+            ContentBlock::Text(TextContent { text: "What is this?".to_string(), text_signature: None }),
+            ContentBlock::Image(ImageContent {
+                mime_type: "image/png".to_string(),
+                data: "iVBORw0KGgo=".to_string(),
+            }),
+        ]),
+        timestamp: 0,
+    }));
+
+    let model = make_model(&server.uri());
+    let provider = AnthropicProvider::new();
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "I see an image");
+}
+
+#[tokio::test]
+async fn test_stream_http_error_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(529)
+                .set_body_string(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Error);
+}

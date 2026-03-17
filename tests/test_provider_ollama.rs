@@ -125,6 +125,7 @@ async fn test_ollama_stream_simple_delegates_to_openai_completions() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;

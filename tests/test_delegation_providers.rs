@@ -687,6 +687,7 @@ async fn test_minimax_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -709,6 +710,7 @@ async fn test_kimi_coding_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -731,6 +733,7 @@ async fn test_xai_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -753,6 +756,7 @@ async fn test_groq_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -775,6 +779,7 @@ async fn test_openrouter_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -797,6 +802,7 @@ async fn test_zai_stream_simple() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -889,6 +895,7 @@ async fn test_xai_stream_simple_preserves_compat() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -911,6 +918,7 @@ async fn test_groq_stream_simple_preserves_compat() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
@@ -933,6 +941,7 @@ async fn test_zai_stream_simple_preserves_compat() {
                 ..Default::default()
             },
             reasoning: None,
+            thinking_budget_tokens: None,
         },
     );
     let result = stream.result().await;
