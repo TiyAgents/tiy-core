@@ -243,6 +243,7 @@ struct ChatCompletionChunk {
 #[derive(Debug, Deserialize)]
 struct ChunkChoice {
     #[serde(default)]
+    #[allow(dead_code)]
     index: u32,
     delta: Option<ChunkDelta>,
     finish_reason: Option<String>,
@@ -252,6 +253,7 @@ struct ChunkChoice {
 
 #[derive(Debug, Deserialize, Default)]
 struct ChunkDelta {
+    #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
     #[serde(default)]
@@ -281,17 +283,21 @@ struct ChunkFunction {
 struct ChunkUsage {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
+    #[allow(dead_code)]
     prompt_tokens_details: Option<PromptTokensDetails>,
+    #[allow(dead_code)]
     completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PromptTokensDetails {
+    #[allow(dead_code)]
     cached_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CompletionTokensDetails {
+    #[allow(dead_code)]
     reasoning_tokens: Option<u64>,
 }
 
@@ -397,7 +403,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
     }
 }
 
-fn convert_assistant_message(assistant_msg: &AssistantMessage, model: &Model) -> Option<OpenAIMessage> {
+fn convert_assistant_message(assistant_msg: &AssistantMessage, _model: &Model) -> Option<OpenAIMessage> {
     // Skip error/aborted messages
     if assistant_msg.stop_reason == StopReason::Error || assistant_msg.stop_reason == StopReason::Aborted {
         return None;
@@ -448,7 +454,7 @@ fn convert_assistant_message(assistant_msg: &AssistantMessage, model: &Model) ->
     };
 
     // Add thinking as a separate field if the model supports it
-    let mut msg = OpenAIMessage {
+    let msg = OpenAIMessage {
         role: "assistant".to_string(),
         content,
         tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
@@ -612,14 +618,19 @@ async fn run_stream(
     let mut current_block: Option<ContentBlock> = None;
     let mut partial_tool_args: HashMap<u32, String> = HashMap::new();
     let mut current_tool_index: Option<u32> = None;
+    let mut line_buffer = String::new(); // Buffer for incomplete SSE lines
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = byte_stream.next().await {
         let chunk = chunk_result?;
         let text = String::from_utf8_lossy(&chunk);
+        line_buffer.push_str(&text);
 
-        // Parse SSE data lines
-        for line in text.lines() {
+        // Process only complete lines (ending with \n), keep partial line in buffer
+        while let Some(newline_pos) = line_buffer.find('\n') {
+            let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            line_buffer = line_buffer[newline_pos + 1..].to_string();
+
             if !line.starts_with("data: ") {
                 continue;
             }
@@ -806,8 +817,8 @@ mod tests {
 
     #[test]
     fn test_convert_messages_basic() {
-        let context = Context::with_system_prompt("You are helpful.")
-            .add_message(Message::User(UserMessage::text("Hello")));
+        let mut context = Context::with_system_prompt("You are helpful.");
+        context.add_message(Message::User(UserMessage::text("Hello")));
 
         let model = Model::builder()
             .id("gpt-4o-mini")
