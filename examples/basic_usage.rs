@@ -132,6 +132,9 @@ fn main() {
                 headers: None,
                 session_id: None,
                 security: None,
+                on_payload: None,
+                transport: None,
+                max_retry_delay_ms: None,
             };
 
             // Process streaming response
