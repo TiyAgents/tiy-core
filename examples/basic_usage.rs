@@ -15,15 +15,9 @@
 //! For request body:  RUST_LOG=debug cargo run --example basic_usage
 
 use futures::StreamExt;
-use std::sync::Arc;
 use tiy_core::{
     models::get_model,
-    provider::{
-        anthropic::AnthropicProvider, get_provider, google::GoogleProvider, groq::GroqProvider,
-        kimi_coding::KimiCodingProvider, minimax::MiniMaxProvider, ollama::OllamaProvider,
-        openai::OpenAIProvider, openrouter::OpenRouterProvider, register_provider,
-        xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
-    },
+    provider::get_provider,
     stream::AssistantMessageEventStream,
     types::{Context, Model, Provider, StreamOptions, UserMessage},
 };
@@ -89,33 +83,9 @@ fn main() {
     );
     println!("  Prompt: \"{}\"", "What is the capital of France?");
 
-    // Register all supported providers into the global registry.
-    // After this, providers are resolved automatically from model.provider.
-    register_provider(Arc::new(OpenAIProvider::new()));
-    register_provider(Arc::new(AnthropicProvider::new()));
-    register_provider(Arc::new(GoogleProvider::new()));
-    register_provider(Arc::new(OllamaProvider::new()));
-    register_provider(Arc::new(GroqProvider::new()));
-    register_provider(Arc::new(XAIProvider::new()));
-    register_provider(Arc::new(OpenRouterProvider::new()));
-    register_provider(Arc::new(MiniMaxProvider::new()));
-    register_provider(Arc::new(KimiCodingProvider::new()));
-    register_provider(Arc::new(ZAIProvider::new()));
-    register_provider(Arc::new(ZenmuxProvider::new()));
-
-    // ============================================
-    // List all registered Providers
-    // ============================================
-    println!("--- Registered Providers ---");
-    let providers = tiy_core::provider::get_registered_providers();
-    for provider in &providers {
-        println!("  - {}", provider);
-    }
-    println!();
-
-    // Resolve provider from the registry using model.provider
+    // Resolve provider automatically (auto-registered on first access)
     let provider = get_provider(&model.provider)
-        .expect(&format!("No provider registered for: {}", model.provider));
+        .unwrap_or_else(|| panic!("No provider registered for: {}", model.provider));
 
     match api_key {
         Some(key) => {

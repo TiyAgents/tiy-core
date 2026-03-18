@@ -157,13 +157,13 @@ println!("Messages: {}", state.message_count());
 
 ```rust
 use std::sync::Arc;
-use tiy_core::provider::{openai::OpenAIProvider, register_provider};
+use tiy_core::provider::openai::OpenAIProvider;
 
-// Option 1: Explicit provider
+// Option 1: Explicit provider (overrides auto-registration)
 agent.set_provider(Arc::new(OpenAIProvider::new()));
 
-// Option 2: Registry (auto-resolved from model.provider)
-register_provider(Arc::new(OpenAIProvider::new()));
+// Option 2: Auto-resolved from model.provider (default — no setup needed)
+// Built-in providers are auto-registered on first access via get_provider().
 
 // Static API key
 agent.set_api_key("sk-...");
@@ -561,18 +561,13 @@ match agent.prompt("hello").await {
 ## Complete Example
 
 ```rust
-use std::sync::Arc;
 use tiy_core::agent::*;
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::*;
-use tiy_core::provider::{register_provider, openai::OpenAIProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Register provider
-    register_provider(Arc::new(OpenAIProvider::new()));
-
-    // Create agent
+    // Create agent (provider is auto-registered from model.provider)
     let model = Model::builder()
         .id("gpt-4o-mini")
         .name("GPT-4o Mini")

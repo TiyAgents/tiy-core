@@ -10,11 +10,7 @@
 //! `provider::AnthropicProvider`) rather than protocol modules directly.
 
 mod traits;
-mod registry;
 pub mod common;
-
-#[macro_use]
-pub(crate) mod delegation;
 
 pub mod openai_completions;
 pub mod openai_responses;
@@ -22,4 +18,10 @@ pub mod anthropic;
 pub mod google;
 
 pub use traits::*;   // LLMProtocol, BoxedProtocol, ArcProtocol
-pub use registry::*; // ProtocolRegistry, register_provider, get_provider, etc.
+
+// Backward-compatible re-exports — registry & delegation now live in provider/
+// but existing `crate::protocol::{register_provider, get_provider, ...}` paths still work.
+pub use crate::provider::{
+    global_registry, register_provider, get_provider, get_registered_providers, clear_providers,
+    ProtocolRegistry,
+};

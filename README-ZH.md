@@ -76,18 +76,14 @@ futures = "0.3"
 ### 流式补全
 
 ```rust
-use std::sync::Arc;
 use futures::StreamExt;
 use tiy_core::{
-    provider::{openai::OpenAIProvider, get_provider, register_provider},
+    provider::get_provider,
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    // 注册提供商
-    register_provider(Arc::new(OpenAIProvider::new()));
-
     // 构建模型
     let model = Model::builder()
         .id("gpt-4o-mini")
@@ -106,6 +102,7 @@ async fn main() {
     };
 
     // 从 model 解析提供商并流式获取响应
+    // （提供商在首次访问时自动注册 — 无需手动设置）
     let provider = get_provider(&model.provider).unwrap();
     let options = StreamOptions {
         api_key: Some(std::env::var("OPENAI_API_KEY").unwrap()),
@@ -132,17 +129,13 @@ async fn main() {
 ### Agent 工具调用
 
 ```rust
-use std::sync::Arc;
 use tiy_core::{
     agent::{Agent, AgentTool, AgentToolResult},
-    provider::{openai::OpenAIProvider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    register_provider(Arc::new(OpenAIProvider::new()));
-
     let agent = Agent::with_model(
         Model::builder()
             .id("gpt-4o-mini").name("GPT-4o Mini")

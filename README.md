@@ -76,18 +76,14 @@ futures = "0.3"
 ### Streaming Completion
 
 ```rust
-use std::sync::Arc;
 use futures::StreamExt;
 use tiy_core::{
-    provider::{openai::OpenAIProvider, get_provider, register_provider},
+    provider::get_provider,
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    // Register the provider
-    register_provider(Arc::new(OpenAIProvider::new()));
-
     // Build a model
     let model = Model::builder()
         .id("gpt-4o-mini")
@@ -106,6 +102,7 @@ async fn main() {
     };
 
     // Resolve provider from model and stream the response
+    // (providers are auto-registered on first access — no manual setup needed)
     let provider = get_provider(&model.provider).unwrap();
     let options = StreamOptions {
         api_key: Some(std::env::var("OPENAI_API_KEY").unwrap()),
@@ -132,17 +129,13 @@ async fn main() {
 ### Agent with Tool Calling
 
 ```rust
-use std::sync::Arc;
 use tiy_core::{
     agent::{Agent, AgentTool, AgentToolResult},
-    provider::{openai::OpenAIProvider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    register_provider(Arc::new(OpenAIProvider::new()));
-
     let agent = Agent::with_model(
         Model::builder()
             .id("gpt-4o-mini").name("GPT-4o Mini")

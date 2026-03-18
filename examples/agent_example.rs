@@ -27,10 +27,6 @@ use std::sync::{
 use tiy_core::{
     agent::*,
     models::get_model,
-    provider::{
-        openai::OpenAIProvider, register_provider,
-        zenmux::ZenmuxProvider,
-    },
     thinking::ThinkingLevel,
     types::*,
 };
@@ -370,12 +366,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Injected custom 'note' message");
 
     // ========================================================================
-    // 9. Register provider
+    // 9. Provider (auto-registered)
     // ========================================================================
     println!("\n--- 9. Provider ---");
-    register_provider(Arc::new(OpenAIProvider::new()));
-    register_provider(Arc::new(ZenmuxProvider::new()));
-    println!("  Registered OpenAI & Zenmux providers");
+    // Built-in providers are auto-registered on first access via get_provider().
+    // No manual register_provider() calls needed.
+    println!("  Providers auto-registered on demand (no manual setup required)");
 
     // ========================================================================
     // 10. Run the agent

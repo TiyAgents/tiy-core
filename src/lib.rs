@@ -48,7 +48,6 @@
 
 pub mod agent;
 pub mod models;
-#[macro_use]
 pub mod protocol;
 pub mod provider;
 pub mod stream;

@@ -79,95 +79,20 @@ Common utilities shared across all protocol implementations:
 | `check_sse_buffer_overflow` | Abort stream if SSE line buffer exceeds configured limit |
 | `debug_preview` | Truncate body string for debug logging |
 
-## Delegation Macros (`delegation.rs`)
-
-Two macros reduce boilerplate for creating delegation providers:
-
-### `define_openai_delegation_provider!`
-
-Generates a provider that delegates to `OpenAICompletionsProtocol`. Three variants:
-
-```rust
-// Variant 1: No compat injection (e.g., OpenRouter)
-define_openai_delegation_provider! {
-    name: OpenRouterProvider,
-    doc: "OpenRouter provider.",
-    provider_type: Provider::OpenRouter,
-    env_var: "OPENROUTER_API_KEY",
-}
-
-// Variant 2: Static compat (e.g., xAI, ZAI)
-define_openai_delegation_provider! {
-    name: XAIProvider,
-    doc: "xAI provider.",
-    provider_type: Provider::XAI,
-    env_var: "XAI_API_KEY",
-    default_compat: || OpenAICompletionsCompat { ... },
-}
-
-// Variant 3: Model-aware compat (e.g., Groq)
-define_openai_delegation_provider! {
-    name: GroqProvider,
-    doc: "Groq provider.",
-    provider_type: Provider::Groq,
-    env_var: "GROQ_API_KEY",
-    model_aware_compat: |model_id: &str| OpenAICompletionsCompat { ... },
-}
-```
-
-### `define_anthropic_delegation_provider!`
-
-Generates a provider that delegates to `AnthropicProtocol`:
-
-```rust
-define_anthropic_delegation_provider! {
-    name: KimiCodingProvider,
-    doc: "Kimi Coding provider.",
-    provider_type: Provider::KimiCoding,
-    env_var: "KIMI_API_KEY",
-}
-```
-
-## Provider Registry (`registry.rs`)
-
-A global thread-safe registry maps `Provider::as_str()` keys to `ArcProtocol` instances:
-
-```rust
-use std::sync::Arc;
-use tiy_core::provider::{register_provider, get_provider};
-use tiy_core::provider::openai::OpenAIProvider;
-use tiy_core::types::Provider;
-
-// Register
-register_provider(Arc::new(OpenAIProvider::new()));
-
-// Lookup
-let provider = get_provider(&Provider::OpenAI).unwrap();
-```
-
-Registry API:
-
-| Function | Description |
-|---|---|
-| `register_provider(ArcProtocol)` | Register a provider globally |
-| `get_provider(&Provider)` | Look up by `Provider` enum |
-| `get_registered_providers()` | List all registered provider name strings |
-| `clear_providers()` | Remove all registered providers |
-
 ## File Structure
 
 ```
 protocol/
-├── mod.rs                  # Module declarations, re-exports LLMProtocol + registry
+├── mod.rs                  # Module declarations, re-exports LLMProtocol + backward-compat registry re-exports
 ├── traits.rs               # LLMProtocol trait, BoxedProtocol, ArcProtocol
-├── registry.rs             # ProtocolRegistry + global static + convenience functions
 ├── common.rs               # Shared infrastructure (URL, headers, errors, SSE)
-├── delegation.rs           # Macros for generating delegation providers
 ├── openai_completions.rs   # OpenAI Chat Completions wire format
 ├── openai_responses.rs     # OpenAI Responses API wire format
 ├── anthropic.rs            # Anthropic Messages wire format
 └── google.rs               # Google GenAI + Vertex AI wire format
 ```
+
+> **Note:** The provider registry (`registry.rs`) and delegation macros (`delegation.rs`) now live in the [Provider](../provider/README.md) layer, alongside the facades that use them. `protocol/mod.rs` re-exports registry symbols for backward compatibility.
 
 ## Adding a New Protocol
 
@@ -266,95 +191,20 @@ pub trait LLMProtocol: Send + Sync {
 | `check_sse_buffer_overflow` | 当 SSE 行缓冲区超出限制时中止流 |
 | `debug_preview` | 截断请求体字符串用于调试日志 |
 
-## 委托宏（`delegation.rs`）
-
-两个宏减少了创建委托提供商的样板代码：
-
-### `define_openai_delegation_provider!`
-
-生成委托到 `OpenAICompletionsProtocol` 的提供商。三个变体：
-
-```rust
-// 变体 1：无兼容性注入（如 OpenRouter）
-define_openai_delegation_provider! {
-    name: OpenRouterProvider,
-    doc: "OpenRouter provider.",
-    provider_type: Provider::OpenRouter,
-    env_var: "OPENROUTER_API_KEY",
-}
-
-// 变体 2：静态兼容性（如 xAI、ZAI）
-define_openai_delegation_provider! {
-    name: XAIProvider,
-    doc: "xAI provider.",
-    provider_type: Provider::XAI,
-    env_var: "XAI_API_KEY",
-    default_compat: || OpenAICompletionsCompat { ... },
-}
-
-// 变体 3：模型感知兼容性（如 Groq）
-define_openai_delegation_provider! {
-    name: GroqProvider,
-    doc: "Groq provider.",
-    provider_type: Provider::Groq,
-    env_var: "GROQ_API_KEY",
-    model_aware_compat: |model_id: &str| OpenAICompletionsCompat { ... },
-}
-```
-
-### `define_anthropic_delegation_provider!`
-
-生成委托到 `AnthropicProtocol` 的提供商：
-
-```rust
-define_anthropic_delegation_provider! {
-    name: KimiCodingProvider,
-    doc: "Kimi Coding provider.",
-    provider_type: Provider::KimiCoding,
-    env_var: "KIMI_API_KEY",
-}
-```
-
-## 提供商注册表（`registry.rs`）
-
-全局线程安全注册表，以 `Provider::as_str()` 为键映射到 `ArcProtocol` 实例：
-
-```rust
-use std::sync::Arc;
-use tiy_core::provider::{register_provider, get_provider};
-use tiy_core::provider::openai::OpenAIProvider;
-use tiy_core::types::Provider;
-
-// 注册
-register_provider(Arc::new(OpenAIProvider::new()));
-
-// 查找
-let provider = get_provider(&Provider::OpenAI).unwrap();
-```
-
-注册表 API：
-
-| 函数 | 描述 |
-|---|---|
-| `register_provider(ArcProtocol)` | 全局注册提供商 |
-| `get_provider(&Provider)` | 通过 `Provider` 枚举查找 |
-| `get_registered_providers()` | 列出所有已注册的提供商名称 |
-| `clear_providers()` | 移除所有已注册的提供商 |
-
 ## 文件结构
 
 ```
 protocol/
-├── mod.rs                  # 模块声明，re-export LLMProtocol + registry
+├── mod.rs                  # 模块声明，re-export LLMProtocol + 向后兼容的 registry re-export
 ├── traits.rs               # LLMProtocol trait、BoxedProtocol、ArcProtocol
-├── registry.rs             # ProtocolRegistry + 全局静态实例 + 便捷函数
 ├── common.rs               # 共享基础设施（URL、请求头、错误处理、SSE）
-├── delegation.rs           # 生成委托提供商的宏
 ├── openai_completions.rs   # OpenAI Chat Completions 线路格式
 ├── openai_responses.rs     # OpenAI Responses API 线路格式
 ├── anthropic.rs            # Anthropic Messages 线路格式
 └── google.rs               # Google GenAI + Vertex AI 线路格式
 ```
+
+> **注意：** 提供商注册表（`registry.rs`）和委托宏（`delegation.rs`）现已迁移至 [Provider](../provider/README.md) 层，与使用它们的门面文件放在一起。`protocol/mod.rs` 为向后兼容继续 re-export 注册表符号。
 
 ## 添加新协议
 

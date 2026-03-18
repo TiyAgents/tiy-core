@@ -1,9 +1,14 @@
 //! Provider registry for managing LLM providers.
+//!
+//! Built-in providers are auto-registered on first access via [`get_provider`].
+//! Manual [`register_provider`] calls are still supported for overriding defaults
+//! (e.g., injecting a custom API key via `with_api_key()`).
 
 use crate::protocol::ArcProtocol;
 use crate::types::Provider;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Provider registry for managing LLM providers.
 pub struct ProtocolRegistry {
@@ -83,8 +88,47 @@ pub fn register_provider(provider: ArcProtocol) {
 }
 
 /// Get a provider from the global registry.
+///
+/// If the requested provider is not yet registered, a default instance is
+/// created automatically for all built-in providers. This means most users
+/// never need to call [`register_provider`] manually.
+///
+/// To override the default (e.g., to inject an API key via `with_api_key()`),
+/// call [`register_provider`] before the first `get_provider` call.
 pub fn get_provider(provider: &Provider) -> Option<ArcProtocol> {
-    GLOBAL_REGISTRY.get(provider)
+    // Fast path: already registered
+    if let Some(p) = GLOBAL_REGISTRY.get(provider) {
+        return Some(p);
+    }
+    // Slow path: auto-register built-in provider on first access
+    if let Some(p) = create_default_provider(provider) {
+        GLOBAL_REGISTRY.register(p.clone());
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Create a default provider instance for a built-in [`Provider`] variant.
+///
+/// Returns `None` for [`Provider::Custom`] and provider variants that exist
+/// only as type data (e.g., `AmazonBedrock`, `Cerebras`) without a
+/// corresponding provider module.
+fn create_default_provider(provider: &Provider) -> Option<ArcProtocol> {
+    match provider {
+        Provider::OpenAI => Some(Arc::new(super::openai::OpenAIProvider::new())),
+        Provider::Anthropic => Some(Arc::new(super::anthropic::AnthropicProvider::new())),
+        Provider::Google => Some(Arc::new(super::google::GoogleProvider::new())),
+        Provider::Ollama => Some(Arc::new(super::ollama::OllamaProvider::new())),
+        Provider::XAI => Some(Arc::new(super::xai::XAIProvider::new())),
+        Provider::Groq => Some(Arc::new(super::groq::GroqProvider::new())),
+        Provider::OpenRouter => Some(Arc::new(super::openrouter::OpenRouterProvider::new())),
+        Provider::MiniMax | Provider::MiniMaxCN => Some(Arc::new(super::minimax::MiniMaxProvider::new())),
+        Provider::KimiCoding => Some(Arc::new(super::kimi_coding::KimiCodingProvider::new())),
+        Provider::ZAI => Some(Arc::new(super::zai::ZAIProvider::new())),
+        Provider::Zenmux => Some(Arc::new(super::zenmux::ZenmuxProvider::new())),
+        _ => None,
+    }
 }
 
 /// Get all registered provider type names from the global registry.
