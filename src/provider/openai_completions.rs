@@ -604,37 +604,17 @@ async fn run_stream(
     };
 
     // Apply on_payload hook if set
-    let body_string = if let Some(ref hook) = options.on_payload {
-        let request_json = serde_json::to_value(&request)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-        match hook(request_json.clone(), model.clone()).await {
-            Some(modified) => serde_json::to_string(&modified)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
-            None => serde_json::to_string(&request_json)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
-        }
-    } else {
-        serde_json::to_string(&request)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
-    };
+    let body_string = super::common::apply_on_payload(&request, &options.on_payload, model).await?;
 
-    let base = options
-        .base_url
-        .as_deref()
-        .or(model.base_url.as_deref())
-        .unwrap_or(DEFAULT_BASE_URL);
+    let base = super::common::resolve_base_url(
+        options.base_url.as_deref(),
+        model.base_url.as_deref(),
+        DEFAULT_BASE_URL,
+    );
     let url = format!("{}/chat/completions", base);
 
     // H1: Validate base URL against security policy
-    if let Err(e) = limits.url.validate(base) {
-        tracing::error!(url = %base, error = %e, "Base URL validation failed");
-        output.stop_reason = StopReason::Error;
-        output.error_message = Some(format!("URL validation error: {}", e));
-        stream.push(AssistantMessageEvent::Error {
-            reason: StopReason::Error,
-            error: output,
-        });
-        stream.end(None);
+    if !super::common::validate_url_or_error(base, &limits, &mut output, &stream) {
         return Ok(());
     }
 
@@ -646,12 +626,7 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending OpenAI Completions request"
     );
-    let debug_preview = if body_string.len() > 500 {
-        &body_string[..500]
-    } else {
-        &body_string
-    };
-    tracing::debug!(request_body = %debug_preview, "Request payload");
+    tracing::debug!(request_body = %super::common::debug_preview(&body_string, 500), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -661,19 +636,7 @@ async fn run_stream(
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
 
     // Add custom headers (H2: skip protected headers)
-    if let Some(ref custom_headers) = options.headers {
-        for (key, value) in custom_headers {
-            if limits.headers.is_protected(key) {
-                tracing::warn!(header = %key, "Skipping protected header override");
-                continue;
-            }
-            if let Ok(header_name) = reqwest::header::HeaderName::try_from(key.clone()) {
-                if let Ok(header_value) = reqwest::header::HeaderValue::try_from(value.clone()) {
-                    headers.insert(header_name, header_value);
-                }
-            }
-        }
-    }
+    super::common::apply_custom_headers(&mut headers, &options.headers, &limits.headers);
 
     let response = client
         .post(&url)
@@ -684,25 +647,9 @@ async fn run_stream(
         .await?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
-        tracing::error!(
-            url = %url,
-            model = %model.id,
-            status = %status,
-            response_body = %body,
-            "OpenAI Completions request failed"
-        );
-        output.stop_reason = StopReason::Error;
-        output.error_message = Some(crate::types::truncate_error_message(
-            &format!("HTTP {}: {}", status, body),
-            limits.http.max_error_message_chars,
-        ));
-        stream.push(AssistantMessageEvent::Error {
-            reason: StopReason::Error,
-            error: output,
-        });
-        stream.end(None);
+        super::common::handle_error_response(
+            response, &url, model, &limits, &mut output, &stream, "OpenAI Completions",
+        ).await;
         return Ok(());
     }
 
@@ -723,19 +670,12 @@ async fn run_stream(
         line_buffer.push_str(&text);
 
         // C2: Check SSE line buffer limit
-        if line_buffer.len() > limits.http.max_sse_line_buffer_bytes {
-            tracing::error!(
-                buffer_size = line_buffer.len(),
-                limit = limits.http.max_sse_line_buffer_bytes,
-                "SSE line buffer exceeded limit, aborting stream"
-            );
-            output.stop_reason = StopReason::Error;
-            output.error_message = Some("SSE line buffer exceeded maximum size".to_string());
-            stream.push(AssistantMessageEvent::Error {
-                reason: StopReason::Error,
-                error: output,
-            });
-            stream.end(None);
+        if super::common::check_sse_buffer_overflow(
+            line_buffer.len(),
+            limits.http.max_sse_line_buffer_bytes,
+            &mut output,
+            &stream,
+        ) {
             return Ok(());
         }
 

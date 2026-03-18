@@ -51,11 +51,13 @@ cargo run --example basic_usage      # Run example (requires API keys)
    | `kimi_coding` | `anthropic` | `KIMI_API_KEY` |
    | `zenmux` | adaptive (see below) | `ZENMUX_API_KEY` |
 
-   Delegation providers expose `default_compat()` static methods (for OpenAI-compatible ones) that return provider-specific `OpenAICompletionsCompat` flags. These are injected onto the model when `model.compat.is_none()`.
+   Delegation providers expose `default_compat()` static methods (for OpenAI-compatible ones) that return provider-specific `OpenAICompletionsCompat` flags. These are injected onto the model when `model.compat.is_none()`. Most delegation providers are generated via `define_openai_delegation_provider!` or `define_anthropic_delegation_provider!` macros in `src/provider/delegation.rs`.
+
+   **Shared infrastructure** (`src/provider/common.rs`): Provides functions shared by all protocol providers — `resolve_base_url`, `apply_on_payload`, `validate_url_or_error`, `handle_error_response`, `apply_custom_headers`, `check_sse_buffer_limit`, `debug_preview`.
 
 3. **Stream** (`src/stream/`) — `EventStream<T, R>` is a generic async stream backed by `parking_lot::Mutex<VecDeque>`. Implements `futures::Stream` with a separate `result()` future for the final message. `AssistantMessageEventStream` emits `AssistantMessageEvent` variants: `Start`, `TextDelta`, `ThinkingDelta`, `ToolCallDelta`, `Done`, `Error`, etc.
 
-4. **Agent** (`src/agent/`) — Stateful conversation manager. `Agent` wraps `AgentState` (thread-safe with `parking_lot::RwLock`/`AtomicBool`) and runs an autonomous loop: stream LLM → check tool calls → execute via `ToolExecutor` callback → loop. Supports steering (interrupt), follow-up message queues, event subscription (observer pattern), abort, and configurable max turns (default 25). Tool execution can be parallel (default) or sequential.
+4. **Agent** (`src/agent/`) — Stateful conversation manager. `Agent` wraps `AgentState` (thread-safe with `parking_lot::RwLock`/`AtomicBool`) and `AgentConfig` (model, thinking_level as single source of truth) and runs an autonomous loop: stream LLM → check tool calls → execute via `ToolExecutor` callback → loop. All hook callbacks are aggregated in `AgentHooks`. Supports steering (interrupt), follow-up message queues, event subscription (observer pattern), abort, and configurable max turns (default 25). Tool execution can be parallel (default) or sequential.
 
 ### Supporting Modules
 
@@ -91,9 +93,9 @@ The `google` module handles two URL formats based on `model.api`:
 ### Type Relationships
 
 ```
-Agent → AgentState (Arc-wrapped, thread-safe)
-      → AgentConfig (model, thinking_level, tool_execution mode)
-      → ToolExecutor (async callback: name, id, args → AgentToolResult)
+Agent → AgentState (Arc-wrapped, thread-safe runtime state: messages, tools, streaming)
+      → AgentConfig (model, thinking_level, tool_execution mode — single source of truth)
+      → AgentHooks (tool_executor, before/after hooks, pipeline fns, stream_fn)
 
 LLMProvider.stream() → AssistantMessageEventStream
 
@@ -112,7 +114,8 @@ ModelRegistry: HashMap<provider, HashMap<model_id, Model>>
 6. Add integration test in `tests/test_provider_<name>.rs` using `wiremock` for HTTP mocking
 
 **Delegation provider** (wraps existing protocol):
-1. Create `src/provider/<name>.rs` with `new()`, `with_api_key()`, and key resolution from env var
-2. Implement `LLMProvider::stream()` by injecting `compat` settings and delegating to the protocol provider's `stream()`
-3. Optionally expose `default_compat()` static method for OpenAI-compatible providers
+1. Use the `define_openai_delegation_provider!` or `define_anthropic_delegation_provider!` macro in `src/provider/delegation.rs` to generate the struct, constructors, and `LLMProvider` impl
+2. Add a `default_compat()` function if the provider needs OpenAI-compatible overrides
+3. Add `pub mod <name>;` to `src/provider/mod.rs`
 4. Add tests in `tests/test_delegation_providers.rs`
+5. For providers with unique logic (e.g., Ollama's no-API-key model), hand-write instead of using the macro

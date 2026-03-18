@@ -183,7 +183,6 @@ fn test_agent_event_variants() {
 fn test_agent_state_new() {
     let state = AgentState::new();
     assert_eq!(*state.system_prompt.read(), "");
-    assert_eq!(*state.thinking_level.read(), ThinkingLevel::Off);
     assert!(state.messages.read().is_empty());
     assert!(!state.is_streaming());
     assert_eq!(state.message_count(), 0);
@@ -196,28 +195,16 @@ fn test_agent_state_set_system_prompt() {
     assert_eq!(*state.system_prompt.read(), "You are helpful.");
 }
 
-#[test]
-fn test_agent_state_set_model() {
-    let state = AgentState::new();
-    let model = Model::builder()
-        .id("claude-sonnet-4")
-        .name("Claude Sonnet 4")
-        .api(Api::AnthropicMessages)
-        .provider(Provider::Anthropic)
-        .base_url("https://api.anthropic.com/v1")
-        .context_window(200000)
-        .max_tokens(16000)
-        .build()
-        .unwrap();
-    state.set_model(model);
-    assert_eq!(state.model.read().id, "claude-sonnet-4");
-}
+// test_agent_state_set_model removed: model now lives in AgentConfig only.
 
 #[test]
 fn test_agent_state_set_thinking_level() {
-    let state = AgentState::new();
-    state.set_thinking_level(ThinkingLevel::High);
-    assert_eq!(*state.thinking_level.read(), ThinkingLevel::High);
+    // thinking_level now lives in AgentConfig; AgentState no longer stores it.
+    // This test verifies it's accessible via Agent::snapshot().
+    let agent = Agent::new();
+    agent.set_thinking_level(ThinkingLevel::High);
+    let snapshot = agent.snapshot();
+    assert_eq!(snapshot.thinking_level, ThinkingLevel::High);
 }
 
 #[test]
@@ -258,7 +245,6 @@ fn test_agent_state_streaming() {
 fn test_agent_state_reset() {
     let state = AgentState::new();
     state.set_system_prompt("test");
-    state.set_thinking_level(ThinkingLevel::High);
     state.add_message(AgentMessage::User(UserMessage::text("hello")));
     state.set_streaming(true);
     *state.error.write() = Some("err".to_string());
@@ -266,7 +252,6 @@ fn test_agent_state_reset() {
     state.reset();
 
     assert_eq!(*state.system_prompt.read(), "");
-    assert_eq!(*state.thinking_level.read(), ThinkingLevel::Off);
     assert!(state.messages.read().is_empty());
     assert!(!state.is_streaming());
     assert!(state.error.read().is_none());
@@ -287,22 +272,8 @@ fn test_agent_state_clone() {
     assert_eq!(*cloned.system_prompt.read(), "test");
 }
 
-#[test]
-fn test_agent_state_with_model() {
-    let model = Model::builder()
-        .id("custom-model")
-        .name("Custom")
-        .api(Api::OpenAICompletions)
-        .provider(Provider::OpenAI)
-        .base_url("http://test")
-        .context_window(4096)
-        .max_tokens(1024)
-        .build()
-        .unwrap();
-
-    let state = AgentState::with_model(model);
-    assert_eq!(state.model.read().id, "custom-model");
-}
+// test_agent_state_with_model removed: model now lives in AgentConfig only.
+// Use Agent::with_model() instead.
 
 // ============================================================================
 // Agent tests
@@ -313,7 +284,9 @@ fn test_agent_new_defaults() {
     let agent = Agent::new();
     let state = agent.state();
     assert_eq!(*state.system_prompt.read(), "");
-    assert_eq!(*state.thinking_level.read(), ThinkingLevel::Off);
+    // thinking_level now accessed via snapshot
+    let snapshot = agent.snapshot();
+    assert_eq!(snapshot.thinking_level, ThinkingLevel::Off);
     assert!(!state.is_streaming());
 }
 
@@ -331,7 +304,8 @@ fn test_agent_with_model() {
         .unwrap();
 
     let agent = Agent::with_model(model);
-    assert_eq!(agent.state().model.read().id, "claude-sonnet-4");
+    let snapshot = agent.snapshot();
+    assert_eq!(snapshot.model.id, "claude-sonnet-4");
 }
 
 #[test]
@@ -356,14 +330,16 @@ fn test_agent_set_model() {
         .unwrap();
 
     agent.set_model(model);
-    assert_eq!(agent.state().model.read().id, "new-model");
+    let snapshot = agent.snapshot();
+    assert_eq!(snapshot.model.id, "new-model");
 }
 
 #[test]
 fn test_agent_set_thinking_level() {
     let agent = Agent::new();
     agent.set_thinking_level(ThinkingLevel::High);
-    assert_eq!(*agent.state().thinking_level.read(), ThinkingLevel::High);
+    let snapshot = agent.snapshot();
+    assert_eq!(snapshot.thinking_level, ThinkingLevel::High);
 }
 
 #[test]

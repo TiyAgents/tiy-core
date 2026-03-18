@@ -72,8 +72,9 @@ Stateful LLM conversation manager with autonomous tool execution loop. Thread-sa
 | Component | File | Responsibility |
 |-----------|------|----------------|
 | `Agent` | `agent.rs` | Top-level API, orchestrates the loop, hooks, queues, events |
-| `AgentState` | `state.rs` | Thread-safe conversation state (messages, model, tools, streaming status) |
+| `AgentState` | `state.rs` | Thread-safe conversation state (messages, tools, streaming status) |
 | `AgentConfig` | `types.rs` | Configuration: model, thinking, security, transport, queue modes |
+| `AgentHooks` | `types.rs` | Aggregated hook container (tool executor, before/after hooks, pipeline fns) |
 | `AgentEvent` | `types.rs` | Event enum for the observer pattern (10 event types) |
 | `AgentMessage` | `types.rs` | Tagged enum wrapping User/Assistant/ToolResult/Custom |
 
@@ -148,7 +149,7 @@ agent.reset();
 
 // Access underlying state
 let state = agent.state();
-let snapshot = state.snapshot();   // consistent point-in-time view
+let snapshot = agent.snapshot();   // consistent point-in-time view
 println!("Messages: {}", state.message_count());
 ```
 
@@ -656,8 +657,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |------|-------------|
 | `Agent` | Main entry point. Thread-safe, all methods take `&self`. |
 | `AgentState` | Thread-safe conversation state. Access via `agent.state()`. |
-| `AgentStateSnapshot` | Serializable point-in-time view. Get via `state.snapshot()`. |
+| `AgentStateSnapshot` | Serializable point-in-time view. Get via `agent.snapshot()`. |
 | `AgentConfig` | Model, thinking level, security, transport, queue modes. |
+| `AgentHooks` | Aggregated hook container for all Agent callbacks. |
 | `AgentMessage` | `User` / `Assistant` / `ToolResult` / `Custom` |
 | `AgentEvent` | 10-variant event enum for the observer pattern. |
 | `AgentTool` | Tool definition with name, label, description, JSON Schema parameters. |

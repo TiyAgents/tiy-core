@@ -3,6 +3,10 @@
 mod registry;
 mod traits;
 
+pub mod common;
+#[macro_use]
+mod delegation;
+
 pub mod anthropic;
 pub mod google;
 pub mod groq;

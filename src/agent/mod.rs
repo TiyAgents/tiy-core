@@ -5,6 +5,6 @@ mod agent;
 mod state;
 mod types;
 
-pub use agent::{Agent, AgentError, SubscriberId, ToolExecutor};
+pub use agent::{Agent, AgentError, SubscriberId};
 pub use state::{AgentState, AgentStateSnapshot};
 pub use types::*;

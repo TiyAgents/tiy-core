@@ -1,10 +1,10 @@
 //! Agent implementation with full conversation loop.
 
 use crate::agent::{
-    AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentEvent, AgentMessage, AgentState,
-    AgentTool, AgentToolResult, BeforeToolCallContext, BeforeToolCallFn, BeforeToolCallResult,
-    ConvertToLlmFn, GetApiKeyFn, OnPayloadFn, QueueMode, StreamFn, ThinkingBudgets,
-    ToolExecutionMode, ToolUpdateCallback, TransformContextFn, Transport,
+    AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentEvent, AgentHooks, AgentMessage,
+    AgentState, AgentStateSnapshot, AgentTool, AgentToolResult, BeforeToolCallContext,
+    BeforeToolCallFn, BeforeToolCallResult, QueueMode, ThinkingBudgets, ToolExecutionMode,
+    ToolExecutor, ToolUpdateCallback, Transport,
 };
 use crate::provider::{get_provider, ArcProvider};
 use crate::stream::AssistantMessageEventStream;
@@ -18,22 +18,6 @@ use std::sync::Arc;
 
 /// Default maximum number of turns (LLM calls) per prompt.
 const DEFAULT_MAX_TURNS: usize = 25;
-
-/// Tool executor function type.
-///
-/// Receives `(tool_name, tool_call_id, arguments, update_callback)`.
-/// The optional `update_callback` can be called during execution to push
-/// streaming partial results (emitted as `ToolExecutionUpdate` events).
-pub type ToolExecutor = Arc<
-    dyn Fn(
-            &str,
-            &str,
-            &serde_json::Value,
-            Option<ToolUpdateCallback>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
-        + Send
-        + Sync,
->;
 
 /// Subscriber ID for unsubscription.
 pub type SubscriberId = u64;
@@ -85,8 +69,8 @@ pub struct Agent {
     config: RwLock<AgentConfig>,
     /// Provider (optional, resolved from registry if not set).
     provider: RwLock<Option<ArcProvider>>,
-    /// Tool executor callback.
-    tool_executor: RwLock<Option<ToolExecutor>>,
+    /// Aggregated hooks (tool executor, before/after hooks, converters, etc.).
+    hooks: RwLock<AgentHooks>,
     /// Maximum turns per prompt.
     max_turns: RwLock<usize>,
     /// Steering message queue.
@@ -99,23 +83,6 @@ pub struct Agent {
     abort_flag: Arc<AtomicBool>,
     /// API key for the provider.
     api_key: RwLock<Option<String>>,
-
-    // --- New fields for pi-mono parity ---
-
-    /// Before tool call hook.
-    before_tool_call: RwLock<Option<BeforeToolCallFn>>,
-    /// After tool call hook.
-    after_tool_call: RwLock<Option<AfterToolCallFn>>,
-    /// Custom message-to-LLM conversion function.
-    convert_to_llm: RwLock<Option<ConvertToLlmFn>>,
-    /// Context transformation applied before convert_to_llm.
-    transform_context: RwLock<Option<TransformContextFn>>,
-    /// Dynamic API key resolver.
-    get_api_key: RwLock<Option<GetApiKeyFn>>,
-    /// Payload inspection / replacement hook.
-    on_payload: RwLock<Option<OnPayloadFn>>,
-    /// Custom stream function (for proxy backends, etc.).
-    stream_fn: RwLock<Option<StreamFn>>,
     /// Session ID for caching.
     session_id: RwLock<Option<String>>,
 }
@@ -137,20 +104,13 @@ impl Agent {
                     .unwrap(),
             )),
             provider: RwLock::new(None),
-            tool_executor: RwLock::new(None),
+            hooks: RwLock::new(AgentHooks::default()),
             max_turns: RwLock::new(DEFAULT_MAX_TURNS),
             steering_queue: Mutex::new(VecDeque::new()),
             follow_up_queue: Mutex::new(VecDeque::new()),
             subscribers: Arc::new(Subscribers::new()),
             abort_flag: Arc::new(AtomicBool::new(false)),
             api_key: RwLock::new(None),
-            before_tool_call: RwLock::new(None),
-            after_tool_call: RwLock::new(None),
-            convert_to_llm: RwLock::new(None),
-            transform_context: RwLock::new(None),
-            get_api_key: RwLock::new(None),
-            on_payload: RwLock::new(None),
-            stream_fn: RwLock::new(None),
             session_id: RwLock::new(None),
         }
     }
@@ -191,7 +151,7 @@ impl Agent {
             Box::pin(fut)
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         });
-        *self.get_api_key.write() = Some(resolver);
+        self.hooks.write().get_api_key = Some(resolver);
     }
 
     // ============================================================================
@@ -221,7 +181,7 @@ impl Agent {
                     as std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
             },
         );
-        *self.tool_executor.write() = Some(executor);
+        self.hooks.write().tool_executor = Some(executor);
     }
 
     /// Set the tool executor callback (simple version without update callback).
@@ -242,7 +202,7 @@ impl Agent {
                     as std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
             },
         );
-        *self.tool_executor.write() = Some(executor);
+        self.hooks.write().tool_executor = Some(executor);
     }
 
     /// Set the `before_tool_call` hook.
@@ -261,7 +221,7 @@ impl Agent {
                     Box<dyn std::future::Future<Output = Option<BeforeToolCallResult>> + Send>,
                 >
         });
-        *self.before_tool_call.write() = Some(hook);
+        self.hooks.write().before_tool_call = Some(hook);
     }
 
     /// Set the `after_tool_call` hook.
@@ -284,7 +244,7 @@ impl Agent {
                     >,
                 >
         });
-        *self.after_tool_call.write() = Some(hook);
+        self.hooks.write().after_tool_call = Some(hook);
     }
 
     // ============================================================================
@@ -305,7 +265,7 @@ impl Agent {
             Box::pin(fut)
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Message>> + Send>>
         });
-        *self.convert_to_llm.write() = Some(converter);
+        self.hooks.write().convert_to_llm = Some(converter);
     }
 
     /// Set the context transformation function (applied BEFORE `convert_to_llm`).
@@ -322,7 +282,7 @@ impl Agent {
             Box::pin(fut)
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
         });
-        *self.transform_context.write() = Some(transform);
+        self.hooks.write().transform_context = Some(transform);
     }
 
     // ============================================================================
@@ -344,7 +304,7 @@ impl Agent {
                     Box<dyn std::future::Future<Output = Option<serde_json::Value>> + Send>,
                 >
         });
-        *self.on_payload.write() = Some(hook);
+        self.hooks.write().on_payload = Some(hook);
     }
 
     /// Set a custom stream function to replace the default provider streaming.
@@ -364,7 +324,7 @@ impl Agent {
                     >
             },
         );
-        *self.stream_fn.write() = Some(stream_fn);
+        self.hooks.write().stream_fn = Some(stream_fn);
     }
 
     // ============================================================================
@@ -492,13 +452,11 @@ impl Agent {
 
     /// Set the model.
     pub fn set_model(&self, model: Model) {
-        self.state.set_model(model.clone());
         self.config.write().model = model;
     }
 
     /// Set the thinking level.
     pub fn set_thinking_level(&self, level: ThinkingLevel) {
-        self.state.set_thinking_level(level);
         self.config.write().thinking_level = level;
     }
 
@@ -620,7 +578,7 @@ impl Agent {
         let tools = self.state.tools.read().clone();
 
         // Step 1: transform_context (if set)
-        let transform = self.transform_context.read().clone();
+        let transform = self.hooks.read().transform_context.clone();
         let messages = if let Some(ref transform) = transform {
             transform(messages).await
         } else {
@@ -628,7 +586,7 @@ impl Agent {
         };
 
         // Step 2: convert_to_llm
-        let converter = self.convert_to_llm.read().clone();
+        let converter = self.hooks.read().convert_to_llm.clone();
         let llm_messages = if let Some(ref converter) = converter {
             converter(messages).await
         } else {
@@ -678,13 +636,13 @@ impl Agent {
     async fn build_stream_options(&self) -> StreamOptions {
         let security = self.config.read().security.clone();
         let model = self.config.read().model.clone();
-        let on_payload = self.on_payload.read().clone();
+        let on_payload = self.hooks.read().on_payload.clone();
         let transport = self.config.read().transport;
         let max_retry_delay_ms = self.config.read().max_retry_delay_ms;
         let session_id = self.session_id.read().clone();
 
         // Dynamic API key resolution: getApiKey > static api_key
-        let get_api_key = self.get_api_key.read().clone();
+        let get_api_key = self.hooks.read().get_api_key.clone();
         let api_key = if let Some(ref resolver) = get_api_key {
             let dynamic = resolver(model.provider.as_str()).await;
             dynamic.or_else(|| self.api_key.read().clone())
@@ -736,7 +694,7 @@ impl Agent {
         let stream_timeout = self.config.read().security.stream.result_timeout();
 
         // Create the stream (custom stream_fn or default provider via stream_simple)
-        let stream_fn = self.stream_fn.read().clone();
+        let stream_fn = self.hooks.read().stream_fn.clone();
         let mut stream: AssistantMessageEventStream =
             if let Some(ref custom_stream) = stream_fn {
                 custom_stream(&model, &context, options.base).await
@@ -835,12 +793,12 @@ impl Agent {
             return Vec::new();
         }
 
-        let executor = self.tool_executor.read().clone();
+        let executor = self.hooks.read().tool_executor.clone();
         let execution_mode = self.config.read().tool_execution;
         let security = self.config.read().security.clone();
         let tool_timeout = security.agent.tool_execution_timeout();
-        let before_hook = self.before_tool_call.read().clone();
-        let after_hook = self.after_tool_call.read().clone();
+        let before_hook = self.hooks.read().before_tool_call.clone();
+        let after_hook = self.hooks.read().after_tool_call.clone();
 
         // Build Tool list for validation
         let agent_tools = self.state.tools.read().clone();
@@ -870,61 +828,34 @@ impl Agent {
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
                     // Validate tool call before execution
-                    if security.agent.validate_tool_calls && !tool_defs.is_empty() {
-                        let tc_ref = ToolCall::new(&tc_id, &tc_name, tc_args.clone());
-                        if let Err(validation_err) =
-                            crate::validation::validate_tool_call(&tool_defs, &tc_ref)
-                        {
-                            let error_msg = format!("Tool validation failed: {}", validation_err);
-                            tracing::warn!(tool = %tc_name, error = %error_msg, "Tool call validation failed");
-                            self.emit(AgentEvent::ToolExecutionEnd {
-                                tool_call_id: tc_id.clone(),
-                                tool_name: tc_name.clone(),
-                                result: serde_json::json!({"error": error_msg}),
-                                is_error: true,
-                            });
-                            self.state.pending_tool_calls.write().remove(&tc_id);
-                            results.push(ToolResultMessage::new(
-                                tc_id,
-                                tc_name,
-                                vec![ContentBlock::Text(TextContent::new(&error_msg))],
-                                true,
-                            ));
-                            continue;
-                        }
+                    if let Some(result) = validate_tool_call_or_error(
+                        &tc_id, &tc_name, &tc_args, &tool_defs, &security,
+                    ) {
+                        self.emit(AgentEvent::ToolExecutionEnd {
+                            tool_call_id: tc_id.clone(),
+                            tool_name: tc_name.clone(),
+                            result: serde_json::json!({"error": result.text_content()}),
+                            is_error: true,
+                        });
+                        self.state.pending_tool_calls.write().remove(&tc_id);
+                        results.push(result);
+                        continue;
                     }
 
                     // beforeToolCall hook
-                    if let Some(ref hook) = before_hook {
-                        let hook_ctx = BeforeToolCallContext {
-                            assistant_message: assistant_msg.clone(),
-                            tool_call: tc_clone.clone(),
-                            args: tc_args.clone(),
-                            context: context.clone(),
-                        };
-                        let hook_result = hook(hook_ctx).await;
-                        if let Some(result) = hook_result {
-                            if result.block {
-                                let reason = result
-                                    .reason
-                                    .unwrap_or_else(|| "Blocked by beforeToolCall hook".to_string());
-                                tracing::info!(tool = %tc_name, reason = %reason, "Tool call blocked");
-                                self.emit(AgentEvent::ToolExecutionEnd {
-                                    tool_call_id: tc_id.clone(),
-                                    tool_name: tc_name.clone(),
-                                    result: serde_json::json!({"error": reason}),
-                                    is_error: true,
-                                });
-                                self.state.pending_tool_calls.write().remove(&tc_id);
-                                results.push(ToolResultMessage::new(
-                                    tc_id,
-                                    tc_name,
-                                    vec![ContentBlock::Text(TextContent::new(&reason))],
-                                    true,
-                                ));
-                                continue;
-                            }
-                        }
+                    if let Some(result) = run_before_hook(
+                        &before_hook, assistant_msg, &tc_clone, &tc_args, context,
+                        &tc_id, &tc_name,
+                    ).await {
+                        self.emit(AgentEvent::ToolExecutionEnd {
+                            tool_call_id: tc_id.clone(),
+                            tool_name: tc_name.clone(),
+                            result: serde_json::json!({"error": result.text_content()}),
+                            is_error: true,
+                        });
+                        self.state.pending_tool_calls.write().remove(&tc_id);
+                        results.push(result);
+                        continue;
                     }
 
                     let executor = executor.clone();
@@ -935,77 +866,21 @@ impl Agent {
                     let subscribers = Arc::clone(&self.subscribers);
 
                     tool_futures.push(async move {
-                        // Create update callback for streaming partial results
-                        let tc_id_for_cb = tc_id.clone();
-                        let tc_name_for_cb = tc_name.clone();
-                        let subs_for_cb = subscribers.clone();
-                        let update_cb: Option<ToolUpdateCallback> =
-                            Some(Arc::new(move |partial: serde_json::Value| {
-                                subs_for_cb.emit(&AgentEvent::ToolExecutionUpdate {
-                                    tool_call_id: tc_id_for_cb.clone(),
-                                    tool_name: tc_name_for_cb.clone(),
-                                    partial_result: partial,
-                                });
-                            }));
-
-                        let result = if let Some(ref exec) = executor {
-                            tokio::select! {
-                                res = tokio::time::timeout(tool_timeout, exec(&tc_name, &tc_id, &tc_args, update_cb)) => {
-                                    match res {
-                                        Ok(r) => r,
-                                        Err(_) => AgentToolResult::error(
-                                            format!("Tool '{}' timed out after {:?}", tc_name, tool_timeout)
-                                        ),
-                                    }
-                                }
-                                _ = wait_for_abort(abort) => {
-                                    AgentToolResult::error(format!("Tool '{}' aborted", tc_name))
-                                }
-                            }
-                        } else {
-                            AgentToolResult::error(format!(
-                                "No tool executor registered for '{}'",
-                                tc_name
-                            ))
-                        };
-
-                        let is_error = result.content.iter().any(|b| {
-                            b.as_text()
-                                .map(|t| {
-                                    t.text.starts_with("No tool executor")
-                                        || t.text.contains("timed out")
-                                        || t.text.contains("aborted")
-                                        || t.text.starts_with("Tool validation failed")
-                                })
-                                .unwrap_or(false)
-                        });
-
-                        // afterToolCall hook
-                        let (final_content, final_is_error) =
-                            if let Some(ref hook) = after_hook {
-                                let hook_ctx = AfterToolCallContext {
-                                    assistant_message: assistant_msg_clone,
-                                    tool_call: tc_clone,
-                                    args: tc_args.clone(),
-                                    result: result.clone(),
-                                    is_error,
-                                    context: context_clone,
-                                };
-                                match hook(hook_ctx).await {
-                                    Some(override_result) => {
-                                        let content = override_result
-                                            .content
-                                            .unwrap_or(result.content);
-                                        let error = override_result
-                                            .is_error
-                                            .unwrap_or(is_error);
-                                        (content, error)
-                                    }
-                                    None => (result.content, is_error),
-                                }
-                            } else {
-                                (result.content, is_error)
-                            };
+                        let (final_content, final_is_error) = execute_and_apply_after_hook(
+                            ToolExecCtx {
+                                executor: &executor,
+                                after_hook: &after_hook,
+                                subscribers: &subscribers,
+                                tc_id: &tc_id,
+                                tc_name: &tc_name,
+                                tc_args: &tc_args,
+                                tc: &tc_clone,
+                                assistant_msg: &assistant_msg_clone,
+                                context: &context_clone,
+                                tool_timeout,
+                                abort_flag: abort,
+                            },
+                        ).await;
 
                         (tc_id, tc_name, final_content, final_is_error)
                     });
@@ -1050,134 +925,52 @@ impl Agent {
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
                     // Validate tool call before execution
-                    if security.agent.validate_tool_calls && !tool_defs.is_empty() {
-                        let tc_ref = ToolCall::new(&tc_id, &tc_name, tc_args.clone());
-                        if let Err(validation_err) =
-                            crate::validation::validate_tool_call(&tool_defs, &tc_ref)
-                        {
-                            let error_msg = format!("Tool validation failed: {}", validation_err);
-                            tracing::warn!(tool = %tc_name, error = %error_msg, "Tool call validation failed");
-                            self.emit(AgentEvent::ToolExecutionEnd {
-                                tool_call_id: tc_id.clone(),
-                                tool_name: tc_name.clone(),
-                                result: serde_json::json!({"error": error_msg}),
-                                is_error: true,
-                            });
-                            self.state.pending_tool_calls.write().remove(&tc_id);
-                            results.push(ToolResultMessage::new(
-                                tc_id,
-                                tc_name,
-                                vec![ContentBlock::Text(TextContent::new(&error_msg))],
-                                true,
-                            ));
-                            continue;
-                        }
+                    if let Some(result) = validate_tool_call_or_error(
+                        &tc_id, &tc_name, &tc_args, &tool_defs, &security,
+                    ) {
+                        self.emit(AgentEvent::ToolExecutionEnd {
+                            tool_call_id: tc_id.clone(),
+                            tool_name: tc_name.clone(),
+                            result: serde_json::json!({"error": result.text_content()}),
+                            is_error: true,
+                        });
+                        self.state.pending_tool_calls.write().remove(&tc_id);
+                        results.push(result);
+                        continue;
                     }
 
                     // beforeToolCall hook
-                    if let Some(ref hook) = before_hook {
-                        let hook_ctx = BeforeToolCallContext {
-                            assistant_message: assistant_msg.clone(),
-                            tool_call: tc_clone.clone(),
-                            args: tc_args.clone(),
-                            context: context.clone(),
-                        };
-                        let hook_result = hook(hook_ctx).await;
-                        if let Some(result) = hook_result {
-                            if result.block {
-                                let reason = result
-                                    .reason
-                                    .unwrap_or_else(|| "Blocked by beforeToolCall hook".to_string());
-                                tracing::info!(tool = %tc_name, reason = %reason, "Tool call blocked");
-                                self.emit(AgentEvent::ToolExecutionEnd {
-                                    tool_call_id: tc_id.clone(),
-                                    tool_name: tc_name.clone(),
-                                    result: serde_json::json!({"error": reason}),
-                                    is_error: true,
-                                });
-                                self.state.pending_tool_calls.write().remove(&tc_id);
-                                results.push(ToolResultMessage::new(
-                                    tc_id,
-                                    tc_name,
-                                    vec![ContentBlock::Text(TextContent::new(&reason))],
-                                    true,
-                                ));
-                                continue;
-                            }
-                        }
+                    if let Some(result) = run_before_hook(
+                        &before_hook, assistant_msg, &tc_clone, &tc_args, context,
+                        &tc_id, &tc_name,
+                    ).await {
+                        self.emit(AgentEvent::ToolExecutionEnd {
+                            tool_call_id: tc_id.clone(),
+                            tool_name: tc_name.clone(),
+                            result: serde_json::json!({"error": result.text_content()}),
+                            is_error: true,
+                        });
+                        self.state.pending_tool_calls.write().remove(&tc_id);
+                        results.push(result);
+                        continue;
                     }
 
-                    // Create update callback for streaming partial results
-                    let tc_id_for_cb = tc_id.clone();
-                    let tc_name_for_cb = tc_name.clone();
-                    let subs_for_cb = Arc::clone(&self.subscribers);
-                    let update_cb: Option<ToolUpdateCallback> =
-                        Some(Arc::new(move |partial: serde_json::Value| {
-                            subs_for_cb.emit(&AgentEvent::ToolExecutionUpdate {
-                                tool_call_id: tc_id_for_cb.clone(),
-                                tool_name: tc_name_for_cb.clone(),
-                                partial_result: partial,
-                            });
-                        }));
-
-                    // Execute tool with timeout and abort
                     let abort_flag = Arc::clone(&self.abort_flag);
-                    let result = if let Some(ref exec) = executor {
-                        tokio::select! {
-                            res = tokio::time::timeout(tool_timeout, exec(&tc_name, &tc_id, &tc_args, update_cb)) => {
-                                match res {
-                                    Ok(r) => r,
-                                    Err(_) => AgentToolResult::error(
-                                        format!("Tool '{}' timed out after {:?}", tc_name, tool_timeout)
-                                    ),
-                                }
-                            }
-                            _ = wait_for_abort(abort_flag) => {
-                                AgentToolResult::error(format!("Tool '{}' aborted", tc_name))
-                            }
-                        }
-                    } else {
-                        AgentToolResult::error(format!(
-                            "No tool executor registered for '{}'",
-                            tc_name
-                        ))
-                    };
-
-                    let is_error = result.content.iter().any(|b| {
-                        b.as_text()
-                            .map(|t| {
-                                t.text.starts_with("No tool executor")
-                                    || t.text.contains("timed out")
-                                    || t.text.contains("aborted")
-                                    || t.text.starts_with("Tool validation failed")
-                            })
-                            .unwrap_or(false)
-                    });
-
-                    // afterToolCall hook
-                    let (final_content, final_is_error) =
-                        if let Some(ref hook) = after_hook {
-                            let hook_ctx = AfterToolCallContext {
-                                assistant_message: assistant_msg.clone(),
-                                tool_call: tc_clone,
-                                args: tc_args.clone(),
-                                result: result.clone(),
-                                is_error,
-                                context: context.clone(),
-                            };
-                            match hook(hook_ctx).await {
-                                Some(override_result) => {
-                                    let content =
-                                        override_result.content.unwrap_or(result.content);
-                                    let error =
-                                        override_result.is_error.unwrap_or(is_error);
-                                    (content, error)
-                                }
-                                None => (result.content, is_error),
-                            }
-                        } else {
-                            (result.content, is_error)
-                        };
+                    let (final_content, final_is_error) = execute_and_apply_after_hook(
+                        ToolExecCtx {
+                            executor: &executor,
+                            after_hook: &after_hook,
+                            subscribers: &self.subscribers,
+                            tc_id: &tc_id,
+                            tc_name: &tc_name,
+                            tc_args: &tc_args,
+                            tc: &tc_clone,
+                            assistant_msg,
+                            context,
+                            tool_timeout,
+                            abort_flag,
+                        },
+                    ).await;
 
                     let result_json = serde_json::to_value(&final_content)
                         .unwrap_or(serde_json::Value::Null);
@@ -1215,7 +1008,7 @@ impl Agent {
 
     /// Run the agent loop: stream LLM → check tool calls → execute → loop.
     async fn run_loop(&self) -> Result<Vec<AgentMessage>, AgentError> {
-        let provider = if self.stream_fn.read().is_some() {
+        let provider = if self.hooks.read().stream_fn.is_some() {
             // When a custom stream function is set, we don't need a provider.
             // Create a dummy Arc for the loop (won't be used).
             None
@@ -1449,6 +1242,35 @@ impl Agent {
     pub fn state(&self) -> &Arc<AgentState> {
         &self.state
     }
+
+    /// Take a consistent point-in-time snapshot of the agent's full state.
+    ///
+    /// Combines runtime state from [`AgentState`] with configuration
+    /// (model, thinking_level) from [`AgentConfig`].
+    pub fn snapshot(&self) -> AgentStateSnapshot {
+        let config = self.config.read();
+        let system_prompt = self.state.system_prompt.read().clone();
+        let messages = self.state.messages.read().clone();
+        let is_streaming = self.state.is_streaming();
+        let stream_message = self.state.stream_message.read().clone();
+        let pending_tool_calls = self.state.pending_tool_calls.read().clone();
+        let error = self.state.error.read().clone();
+        let max_messages = self.state.get_max_messages();
+        let message_count = messages.len();
+
+        AgentStateSnapshot {
+            system_prompt,
+            model: config.model.clone(),
+            thinking_level: config.thinking_level,
+            messages,
+            is_streaming,
+            stream_message,
+            pending_tool_calls,
+            error,
+            message_count,
+            max_messages,
+        }
+    }
 }
 
 /// Helper: wait until the abort flag is set.
@@ -1459,6 +1281,173 @@ async fn wait_for_abort(flag: Arc<AtomicBool>) {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}
+
+// ============================================================================
+// Extracted helpers for execute_tool_calls deduplication
+// ============================================================================
+
+/// Validate a tool call against the tool definitions and security config.
+///
+/// Returns `Some(ToolResultMessage)` (an error result) if validation fails,
+/// or `None` if the tool call is valid and execution should proceed.
+/// Skips validation when disabled in config or when no tools are registered.
+fn validate_tool_call_or_error(
+    tc_id: &str,
+    tc_name: &str,
+    tc_args: &serde_json::Value,
+    tool_defs: &[Tool],
+    security: &SecurityConfig,
+) -> Option<ToolResultMessage> {
+    if !security.agent.validate_tool_calls || tool_defs.is_empty() {
+        return None;
+    }
+
+    let tc = ToolCall::new(tc_id, tc_name, tc_args.clone());
+    match crate::validation::validate_tool_call(tool_defs, &tc) {
+        Ok(_) => None,
+        Err(e) => Some(ToolResultMessage::error(tc_id, tc_name, e.to_string())),
+    }
+}
+
+/// Run the `before_tool_call` hook if set.
+///
+/// Returns `Some(ToolResultMessage)` (a blocked/error result) if the hook
+/// blocked execution, or `None` if execution should proceed.
+async fn run_before_hook(
+    before_hook: &Option<BeforeToolCallFn>,
+    assistant_msg: &AssistantMessage,
+    tc: &ToolCall,
+    tc_args: &serde_json::Value,
+    context: &Context,
+    tc_id: &str,
+    tc_name: &str,
+) -> Option<ToolResultMessage> {
+    let hook = before_hook.as_ref()?;
+    let ctx = BeforeToolCallContext {
+        assistant_message: assistant_msg.clone(),
+        tool_call: tc.clone(),
+        args: tc_args.clone(),
+        context: context.clone(),
+    };
+    match hook(ctx).await {
+        Some(result) if result.block => {
+            let reason = result
+                .reason
+                .unwrap_or_else(|| "Tool call blocked by before_tool_call hook".to_string());
+            Some(ToolResultMessage::error(tc_id, tc_name, reason))
+        }
+        _ => None,
+    }
+}
+
+/// Context for a single tool call execution.
+///
+/// Groups the parameters needed by `execute_and_apply_after_hook` to avoid
+/// exceeding clippy's `too_many_arguments` limit.
+struct ToolExecCtx<'a> {
+    executor: &'a Option<ToolExecutor>,
+    after_hook: &'a Option<AfterToolCallFn>,
+    subscribers: &'a Arc<Subscribers>,
+    tc_id: &'a str,
+    tc_name: &'a str,
+    tc_args: &'a serde_json::Value,
+    tc: &'a ToolCall,
+    assistant_msg: &'a AssistantMessage,
+    context: &'a Context,
+    tool_timeout: std::time::Duration,
+    abort_flag: Arc<AtomicBool>,
+}
+
+/// Execute a tool call and apply the `after_tool_call` hook if set.
+///
+/// Handles: executor invocation with timeout, abort-awareness,
+/// streaming `ToolExecutionUpdate` events, error detection,
+/// and after-hook overrides.
+///
+/// Returns `(final_content, final_is_error)`.
+async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (Vec<ContentBlock>, bool) {
+    let ToolExecCtx {
+        executor,
+        after_hook,
+        subscribers,
+        tc_id,
+        tc_name,
+        tc_args,
+        tc,
+        assistant_msg,
+        context,
+        tool_timeout,
+        abort_flag,
+    } = ctx;
+    // Execute the tool
+    let tool_result = if let Some(ref exec) = executor {
+        // Build update callback for streaming partial results
+        let subs = Arc::clone(subscribers);
+        let update_tc_id = tc_id.to_string();
+        let update_tc_name = tc_name.to_string();
+        let update_cb: ToolUpdateCallback = Arc::new(move |partial: serde_json::Value| {
+            subs.emit(&AgentEvent::ToolExecutionUpdate {
+                tool_call_id: update_tc_id.clone(),
+                tool_name: update_tc_name.clone(),
+                partial_result: partial,
+            });
+        });
+
+        let exec_future = exec(tc_name, tc_id, tc_args, Some(update_cb));
+
+        // Race: tool execution vs timeout vs abort
+        tokio::select! {
+            result = exec_future => result,
+            _ = tokio::time::sleep(tool_timeout) => {
+                AgentToolResult::error(format!(
+                    "Tool '{}' timed out after {:?}",
+                    tc_name, tool_timeout
+                ))
+            }
+            _ = wait_for_abort(abort_flag) => {
+                AgentToolResult::error(format!("Tool '{}' aborted", tc_name))
+            }
+        }
+    } else {
+        AgentToolResult::error(format!(
+            "No tool executor configured for tool '{}'",
+            tc_name
+        ))
+    };
+
+    // Detect is_error from content
+    let mut is_error = tool_result.content.iter().any(|block| {
+        if let Some(text) = block.as_text() {
+            text.text.starts_with("Error:") || text.text.starts_with("error:")
+        } else {
+            false
+        }
+    });
+
+    let mut final_content = tool_result.content.clone();
+
+    // Apply after_tool_call hook
+    if let Some(ref hook) = after_hook {
+        let after_ctx = AfterToolCallContext {
+            assistant_message: assistant_msg.clone(),
+            tool_call: tc.clone(),
+            args: tc_args.clone(),
+            result: tool_result,
+            is_error,
+            context: context.clone(),
+        };
+        if let Some(overrides) = hook(after_ctx).await {
+            if let Some(content_override) = overrides.content {
+                final_content = content_override;
+            }
+            if let Some(error_override) = overrides.is_error {
+                is_error = error_override;
+            }
+        }
+    }
+
+    (final_content, is_error)
 }
 
 impl Default for Agent {

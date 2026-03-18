@@ -306,6 +306,16 @@ impl ToolResultMessage {
         Self::text(tool_call_id, tool_name, error_message, true)
     }
 
+    /// Get text content from this message.
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|b| b.as_text())
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     /// Add details to this result.
     pub fn with_details<T>(self, details: T) -> ToolResultMessage<T> {
         ToolResultMessage {

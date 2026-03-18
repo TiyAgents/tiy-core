@@ -436,6 +436,55 @@ pub type StreamFn = Arc<
 >;
 
 // ============================================================================
+// ToolExecutor
+// ============================================================================
+
+/// Tool executor function type.
+///
+/// Receives `(tool_name, tool_call_id, arguments, update_callback)`.
+/// The optional `update_callback` can be called during execution to push
+/// streaming partial results (emitted as `ToolExecutionUpdate` events).
+pub type ToolExecutor = Arc<
+    dyn Fn(
+            &str,
+            &str,
+            &serde_json::Value,
+            Option<ToolUpdateCallback>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AgentToolResult> + Send>>
+        + Send
+        + Sync,
+>;
+
+// ============================================================================
+// AgentHooks — Aggregated hook container
+// ============================================================================
+
+/// Aggregated hook container for Agent callbacks.
+///
+/// Groups all optional callback fields that customize Agent behaviour
+/// into a single structure, reducing the number of top-level fields on
+/// `Agent` (from 18 to 11).
+#[derive(Clone, Default)]
+pub struct AgentHooks {
+    /// Tool executor callback.
+    pub tool_executor: Option<ToolExecutor>,
+    /// Before tool call hook.
+    pub before_tool_call: Option<BeforeToolCallFn>,
+    /// After tool call hook.
+    pub after_tool_call: Option<AfterToolCallFn>,
+    /// Custom message-to-LLM conversion function.
+    pub convert_to_llm: Option<ConvertToLlmFn>,
+    /// Context transformation applied before convert_to_llm.
+    pub transform_context: Option<TransformContextFn>,
+    /// Dynamic API key resolver.
+    pub get_api_key: Option<GetApiKeyFn>,
+    /// Payload inspection / replacement hook.
+    pub on_payload: Option<OnPayloadFn>,
+    /// Custom stream function (for proxy backends, etc.).
+    pub stream_fn: Option<StreamFn>,
+}
+
+// ============================================================================
 // AgentConfig
 // ============================================================================
 

@@ -410,8 +410,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.error.read().as_deref().unwrap_or("none")
     );
 
-    // Consistent snapshot
-    let snapshot = state.snapshot();
+    // Consistent snapshot (combines state + config)
+    let snapshot = agent.snapshot();
     println!("  Snapshot message count: {}", snapshot.message_count);
     println!("  Snapshot model: {}", snapshot.model.id);
     println!("  Snapshot thinking: {:?}", snapshot.thinking_level);

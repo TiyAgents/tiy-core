@@ -420,6 +420,8 @@ src/
 ├── provider/
 │   ├── traits.rs       # LLMProvider trait
 │   ├── registry.rs     # Global ProviderRegistry
+│   ├── common.rs       # Shared infrastructure (URL resolution, payload hooks, error handling)
+│   ├── delegation.rs   # Macros for generating delegation providers
 │   ├── openai_completions.rs
 │   ├── openai_responses.rs
 │   ├── anthropic.rs
@@ -438,7 +440,7 @@ src/
 │   ├── README.md      # Full Agent module documentation
 │   ├── agent.rs        # Agent loop: stream → tools → re-prompt
 │   ├── state.rs        # Thread-safe AgentState
-│   └── types.rs        # AgentConfig, AgentEvent, AgentTool, ToolExecutionMode
+│   └── types.rs        # AgentConfig, AgentEvent, AgentTool, AgentHooks, ToolExecutor, ToolExecutionMode
 ├── transform/
 │   ├── messages.rs     # Thinking block conversion, orphan tool call handling
 │   └── tool_calls.rs   # Tool call ID normalization

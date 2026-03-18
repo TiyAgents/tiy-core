@@ -8,15 +8,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Agent state.
+/// Agent state — pure runtime state without configuration.
+///
+/// Configuration values (model, thinking_level) live in [`AgentConfig`]
+/// (the single source of truth). This struct only holds conversational
+/// and streaming runtime state.
 #[derive(Debug)]
 pub struct AgentState {
     /// System prompt.
     pub system_prompt: RwLock<String>,
-    /// Current model.
-    pub model: RwLock<Model>,
-    /// Thinking level.
-    pub thinking_level: RwLock<ThinkingLevel>,
     /// Available tools.
     pub tools: RwLock<Vec<AgentTool>>,
     /// Conversation messages.
@@ -39,18 +39,6 @@ impl AgentState {
     pub fn new() -> Self {
         Self {
             system_prompt: RwLock::new(String::new()),
-            model: RwLock::new(
-                Model::builder()
-                    .id("gpt-4o-mini")
-                    .name("GPT-4o Mini")
-                    .provider(crate::types::Provider::OpenAI)
-                    .base_url("https://api.openai.com/v1")
-                    .context_window(128000)
-                    .max_tokens(16384)
-                    .build()
-                    .unwrap(),
-            ),
-            thinking_level: RwLock::new(ThinkingLevel::Off),
             tools: RwLock::new(Vec::new()),
             messages: RwLock::new(Vec::new()),
             is_streaming: AtomicBool::new(false),
@@ -61,26 +49,9 @@ impl AgentState {
         }
     }
 
-    /// Create state with a model.
-    pub fn with_model(model: Model) -> Self {
-        let state = Self::new();
-        *state.model.write() = model;
-        state
-    }
-
     /// Set the system prompt.
     pub fn set_system_prompt(&self, prompt: impl Into<String>) {
         *self.system_prompt.write() = prompt.into();
-    }
-
-    /// Set the model.
-    pub fn set_model(&self, model: Model) {
-        *self.model.write() = model;
-    }
-
-    /// Set the thinking level.
-    pub fn set_thinking_level(&self, level: ThinkingLevel) {
-        *self.thinking_level.write() = level;
     }
 
     /// Set the tools.
@@ -129,10 +100,11 @@ impl AgentState {
         self.messages.write().clear();
     }
 
-    /// Reset the state.
+    /// Reset the runtime state (messages, streaming, errors).
+    ///
+    /// Does NOT reset model or thinking_level (those live in `AgentConfig`).
     pub fn reset(&self) {
         *self.system_prompt.write() = String::new();
-        *self.thinking_level.write() = ThinkingLevel::Off;
         *self.tools.write() = Vec::new();
         self.messages.write().clear();
         self.is_streaming.store(false, Ordering::SeqCst);
@@ -165,13 +137,11 @@ impl Default for AgentState {
 
 /// NOTE: This `Clone` implementation acquires each lock independently,
 /// so the resulting clone is NOT a single atomic snapshot.
-/// For a consistent point-in-time snapshot, use [`AgentState::snapshot()`].
+/// For a consistent point-in-time snapshot, use [`Agent::snapshot()`].
 impl Clone for AgentState {
     fn clone(&self) -> Self {
         Self {
             system_prompt: RwLock::new(self.system_prompt.read().clone()),
-            model: RwLock::new(self.model.read().clone()),
-            thinking_level: RwLock::new(*self.thinking_level.read()),
             tools: RwLock::new(self.tools.read().clone()),
             messages: RwLock::new(self.messages.read().clone()),
             is_streaming: AtomicBool::new(self.is_streaming.load(Ordering::SeqCst)),
@@ -187,18 +157,19 @@ impl Clone for AgentState {
 // AgentStateSnapshot — consistent point-in-time view
 // ============================================================================
 
-/// A consistent, lock-free snapshot of [`AgentState`].
+/// A consistent, lock-free snapshot of the agent's full state.
 ///
-/// Unlike `Clone` on `AgentState` (which acquires each lock independently),
-/// `snapshot()` acquires all locks simultaneously to produce a coherent
-/// point-in-time view of the state.
+/// Includes both runtime state (from [`AgentState`]) and configuration
+/// (model, thinking_level from [`AgentConfig`]).
+///
+/// Obtain via [`Agent::snapshot()`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStateSnapshot {
     /// System prompt.
     pub system_prompt: String,
-    /// Current model.
+    /// Current model (from AgentConfig).
     pub model: Model,
-    /// Thinking level.
+    /// Thinking level (from AgentConfig).
     pub thinking_level: ThinkingLevel,
     /// Conversation messages.
     pub messages: Vec<AgentMessage>,
@@ -214,37 +185,4 @@ pub struct AgentStateSnapshot {
     pub message_count: usize,
     /// Max messages limit (0 = unlimited).
     pub max_messages: usize,
-}
-
-impl AgentState {
-    /// Take a consistent point-in-time snapshot of the agent state.
-    ///
-    /// This acquires all locks to produce a coherent view, unlike `Clone`
-    /// which acquires locks one at a time and may see partial updates.
-    pub fn snapshot(&self) -> AgentStateSnapshot {
-        // Acquire all locks at once for consistency
-        let system_prompt = self.system_prompt.read().clone();
-        let model = self.model.read().clone();
-        let thinking_level = *self.thinking_level.read();
-        let messages = self.messages.read().clone();
-        let is_streaming = self.is_streaming.load(Ordering::SeqCst);
-        let stream_message = self.stream_message.read().clone();
-        let pending_tool_calls = self.pending_tool_calls.read().clone();
-        let error = self.error.read().clone();
-        let max_messages = self.max_messages.load(Ordering::SeqCst);
-        let message_count = messages.len();
-
-        AgentStateSnapshot {
-            system_prompt,
-            model,
-            thinking_level,
-            messages,
-            is_streaming,
-            stream_message,
-            pending_tool_calls,
-            error,
-            message_count,
-            max_messages,
-        }
-    }
 }

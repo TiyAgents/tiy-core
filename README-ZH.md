@@ -420,6 +420,8 @@ src/
 ├── provider/
 │   ├── traits.rs       # LLMProvider trait
 │   ├── registry.rs     # 全局 ProviderRegistry
+│   ├── common.rs       # 共享基础设施（URL 解析、payload hook、错误处理）
+│   ├── delegation.rs   # 代理提供商生成宏
 │   ├── openai_completions.rs
 │   ├── openai_responses.rs
 │   ├── anthropic.rs
@@ -438,7 +440,7 @@ src/
 │   ├── README.md      # Agent 模块完整文档
 │   ├── agent.rs        # Agent 循环：流式 → 工具 → 重新请求
 │   ├── state.rs        # 线程安全的 AgentState
-│   └── types.rs        # AgentConfig, AgentEvent, AgentTool, ToolExecutionMode
+│   └── types.rs        # AgentConfig, AgentEvent, AgentTool, AgentHooks, ToolExecutor, ToolExecutionMode
 ├── transform/
 │   ├── messages.rs     # 思维块转换、孤儿工具调用处理
 │   └── tool_calls.rs   # 工具调用 ID 规范化
