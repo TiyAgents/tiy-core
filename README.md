@@ -63,6 +63,7 @@ graph TD
 | **Thinking** | `src/thinking/` | `ThinkingLevel` enum and provider-specific thinking options |
 | **Validation** | `src/validation/` | JSON Schema validation for tool parameters |
 | **Models** | `src/models/` | `ModelRegistry` with predefined models (GPT-4o, Claude Sonnet 4, Gemini 2.5 Flash, etc.) |
+| **Catalog** | `src/catalog/` | Native model listing, snapshot refresh, and optional metadata enrichment for display ([full docs](./src/catalog/README.md)) |
 
 ## Quick Start
 
@@ -446,6 +447,9 @@ src/
 │   ├── minimax.rs      # Delegation → Anthropic
 │   ├── kimi_coding.rs  # Delegation → Anthropic
 │   └── zenmux.rs       # Adaptive 3-way routing
+├── catalog/
+│   ├── README.md       # Catalog fetch/enrichment/snapshot documentation
+│   └── mod.rs          # Native model listing + snapshot refresh + metadata stores
 ├── stream/
 │   └── event_stream.rs # Generic EventStream<T, R> + AssistantMessageEventStream
 ├── agent/

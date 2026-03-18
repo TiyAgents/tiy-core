@@ -63,6 +63,7 @@ graph TD
 | **Thinking** | `src/thinking/` | `ThinkingLevel` 枚举及提供商特定的思维选项 |
 | **Validation** | `src/validation/` | 工具参数 JSON Schema 验证 |
 | **Models** | `src/models/` | `ModelRegistry`，内置预定义模型（GPT-4o、Claude Sonnet 4、Gemini 2.5 Flash 等） |
+| **Catalog** | `src/catalog/` | 原生模型列表抓取、快照刷新，以及面向展示的元数据补全（[完整文档](./src/catalog/README.md)） |
 
 ## 快速开始
 
@@ -446,6 +447,9 @@ src/
 │   ├── minimax.rs      # 代理 → Anthropic
 │   ├── kimi_coding.rs  # 代理 → Anthropic
 │   └── zenmux.rs       # 自适应三路路由
+├── catalog/
+│   ├── README.md       # Catalog 抓取/补全/快照文档
+│   └── mod.rs          # 原生模型列表 + 快照刷新 + metadata stores
 ├── stream/
 │   └── event_stream.rs # 通用 EventStream<T, R> + AssistantMessageEventStream
 ├── agent/

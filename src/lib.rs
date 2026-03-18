@@ -47,6 +47,7 @@
 //! ```
 
 pub mod agent;
+pub mod catalog;
 pub mod models;
 pub mod protocol;
 pub mod provider;
@@ -67,3 +68,12 @@ pub use types::{
 pub use stream::EventStream;
 
 pub use agent::{Agent, AgentStateSnapshot};
+pub use catalog::{
+    build_catalog_snapshot, build_catalog_snapshot_manifest, catalog_manifest_sidecar_path,
+    list_models, list_models_with_enrichment, load_catalog_metadata_store,
+    refresh_catalog_snapshot, save_catalog_snapshot, CatalogMetadataStore, CatalogModelMatch,
+    CatalogModelMetadata, CatalogRefreshResult, CatalogRemoteConfig, CatalogSnapshot,
+    CatalogSnapshotError, CatalogSnapshotManifest, EmptyCatalogMetadataStore, FetchModelsRequest,
+    FileCatalogMetadataStore, InMemoryCatalogMetadataStore, ListModelsResult, ModelCatalogError,
+    ProviderExtractedModel, UnifiedModelInfo,
+};

@@ -78,6 +78,7 @@ cargo run --example basic_usage      # Run example (requires API keys)
 - **Thinking** (`src/thinking/`) — `ThinkingLevel` enum (Off/Minimal/Low/Medium/High/XHigh) and provider-specific thinking option structs.
 - **Validation** (`src/validation/`) — Tool parameter JSON Schema validation via `jsonschema` crate.
 - **Models** (`src/models/`) — `ModelRegistry` with predefined models and a global static instance. Use `get_model("openai", "gpt-4o")` to look up. Predefined models are a small stub set (a few models per provider for OpenAI, Anthropic, Google).
+- **Catalog** (`src/catalog/`) — Library-level model listing flow for providers with native list-models endpoints. Fetches provider-native availability, extracts a shared intermediate shape (`raw_id`, `display_name`, `context_window`, `max_output_tokens`, etc.), optionally enriches from a local snapshot-backed metadata store, and supports stale-while-revalidate snapshot refresh from a published remote manifest.
 
 ### Key Design Patterns
 
