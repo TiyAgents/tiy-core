@@ -18,7 +18,7 @@ tiy-core is a Rust library that provides a single, provider-agnostic interface f
 
 ## Highlights
 
-- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 7 delegation providers (xAI, Groq, OpenRouter, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProvider` trait.
+- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 7 delegation providers (xAI, Groq, OpenRouter, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProtocol` trait.
 - **Streaming-first** — `EventStream<T, R>` backed by `parking_lot::Mutex<VecDeque>` implements `futures::Stream`. Every provider returns an `AssistantMessageEventStream` with fine-grained deltas: text, thinking, tool call arguments, and completion events.
 - **Tool / Function calling** — Define tools via JSON Schema, validate arguments with the `jsonschema` crate, and execute tools in parallel or sequentially within the agent loop.
 - **Stateful Agent runtime** — `Agent` manages a full conversation loop: stream LLM → detect tool calls → execute tools → re-prompt → repeat. Supports steering (interrupt mid-turn), follow-up queues, event subscription (observer pattern), abort, and configurable max turns (default 25).
@@ -30,7 +30,7 @@ tiy-core is a Rust library that provides a single, provider-agnostic interface f
 ```mermaid
 graph TD
     A[Your Application] --> B[Agent]
-    A --> C[LLMProvider trait]
+    A --> C[LLMProtocol trait]
     B --> C
     C --> D[Protocol Providers]
     C --> E[Delegation Providers]
@@ -53,7 +53,8 @@ graph TD
 | Layer | Path | Purpose |
 |---|---|---|
 | **Types** | `src/types/` | Provider-agnostic data model: `Message`, `ContentBlock`, `Model`, `Tool`, `Context`, `SecurityConfig` |
-| **Provider** | `src/provider/` | `LLMProvider` trait + protocol & delegation implementations |
+| **Protocol** | `src/protocol/` | Wire-format implementations: `LLMProtocol` trait, 4 base protocols, shared infrastructure |
+| **Provider** | `src/provider/` | Service vendor facades (OpenAI, Anthropic, Google, etc.) + delegation providers |
 | **Stream** | `src/stream/` | Generic `EventStream<T, R>` implementing `futures::Stream` |
 | **Agent** | `src/agent/` | Stateful conversation manager with tool execution loop ([full docs](./src/agent/README.md)) |
 | **Transform** | `src/transform/` | Cross-provider message transformation (thinking blocks, tool call IDs, orphan resolution) |
@@ -78,14 +79,14 @@ futures = "0.3"
 use std::sync::Arc;
 use futures::StreamExt;
 use tiy_core::{
-    provider::{openai_completions::OpenAICompletionsProvider, get_provider, register_provider},
+    provider::{openai::OpenAIProvider, get_provider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
     // Register the provider
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
 
     // Build a model
     let model = Model::builder()
@@ -134,13 +135,13 @@ async fn main() {
 use std::sync::Arc;
 use tiy_core::{
     agent::{Agent, AgentTool, AgentToolResult},
-    provider::{openai_completions::OpenAICompletionsProvider, register_provider},
+    provider::{openai::OpenAIProvider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
 
     let agent = Agent::with_model(
         Model::builder()
@@ -417,16 +418,20 @@ src/
 │   ├── limits.rs       # SecurityConfig, HttpLimits, AgentLimits, StreamLimits, UrlPolicy, HeaderPolicy
 │   ├── events.rs       # AssistantMessageEvent (streaming events)
 │   └── usage.rs        # Token usage tracking
-├── provider/
-│   ├── traits.rs       # LLMProvider trait
-│   ├── registry.rs     # Global ProviderRegistry
+├── protocol/           # Wire-format protocol implementations
+│   ├── traits.rs       # LLMProtocol trait
+│   ├── registry.rs     # Global ProtocolRegistry
 │   ├── common.rs       # Shared infrastructure (URL resolution, payload hooks, error handling)
 │   ├── delegation.rs   # Macros for generating delegation providers
-│   ├── openai_completions.rs
-│   ├── openai_responses.rs
-│   ├── anthropic.rs
-│   ├── google.rs       # Dual-mode: Generative AI + Vertex AI
-│   ├── ollama.rs
+│   ├── openai_completions.rs  # OpenAI Chat Completions protocol
+│   ├── openai_responses.rs    # OpenAI Responses API protocol
+│   ├── anthropic.rs    # Anthropic Messages protocol
+│   └── google.rs       # Google GenAI + Vertex AI (dual-mode)
+├── provider/           # Service vendor facades
+│   ├── openai.rs       # OpenAI → protocol::openai_responses
+│   ├── anthropic.rs    # Anthropic → protocol::anthropic
+│   ├── google.rs       # Google → protocol::google
+│   ├── ollama.rs       # Ollama → protocol::openai_completions
 │   ├── xai.rs          # Delegation → OpenAI Completions
 │   ├── groq.rs         # Delegation → OpenAI Completions
 │   ├── openrouter.rs   # Delegation → OpenAI Completions

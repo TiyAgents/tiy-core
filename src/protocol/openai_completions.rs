@@ -3,7 +3,7 @@
 /// Default base URL for OpenAI Chat Completions API.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
-use crate::provider::LLMProvider;
+use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::thinking::OpenAIThinkingOptions;
 use crate::types::*;
@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// OpenAI Completions API provider.
-pub struct OpenAICompletionsProvider {
+pub struct OpenAICompletionsProtocol {
     client: Client,
     default_api_key: Option<String>,
 }
 
-impl OpenAICompletionsProvider {
+impl OpenAICompletionsProtocol {
     /// Create a new OpenAI Completions provider.
     pub fn new() -> Self {
         Self {
@@ -71,14 +71,14 @@ impl OpenAICompletionsProvider {
     }
 }
 
-impl Default for OpenAICompletionsProvider {
+impl Default for OpenAICompletionsProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl LLMProvider for OpenAICompletionsProvider {
+impl LLMProtocol for OpenAICompletionsProtocol {
     fn provider_type(&self) -> Provider {
         Provider::OpenAI
     }

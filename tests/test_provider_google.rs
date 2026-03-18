@@ -2,8 +2,8 @@
 
 use futures::StreamExt;
 use serde_json::json;
-use tiy_core::provider::google::GoogleProvider;
-use tiy_core::provider::LLMProvider;
+use tiy_core::protocol::google::GoogleProtocol;
+use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -54,7 +54,7 @@ fn google_sse(chunks: Vec<&str>) -> String {
 
 #[test]
 fn test_provider_type() {
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     assert_eq!(provider.provider_type(), Provider::Google);
 }
 
@@ -93,7 +93,7 @@ async fn test_stream_simple_text_response() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("test-key");
@@ -163,7 +163,7 @@ async fn test_stream_with_tool_call() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
     context.set_tools(vec![Tool::new(
@@ -198,7 +198,7 @@ async fn test_stream_http_error() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("invalid-key");
@@ -271,7 +271,7 @@ async fn test_stream_with_thinking() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "What is the meaning of life?");
     let options = make_options("test-key");
@@ -343,7 +343,7 @@ async fn test_stream_usage_tracking() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("test-key");
@@ -398,7 +398,7 @@ async fn test_stream_length_stop_reason() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "Write a very long essay.");
     let options = make_options("test-key");
@@ -477,7 +477,7 @@ async fn test_stream_multiple_text_chunks() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Say hello world");
     let options = make_options("test-key");
@@ -540,13 +540,13 @@ async fn test_stream_multiple_text_chunks() {
 
 #[test]
 fn test_provider_with_api_key() {
-    let provider = GoogleProvider::with_api_key("test-api-key");
+    let provider = GoogleProtocol::with_api_key("test-api-key");
     assert_eq!(provider.provider_type(), Provider::Google);
 }
 
 #[test]
 fn test_provider_default() {
-    let provider = GoogleProvider::default();
+    let provider = GoogleProtocol::default();
     assert_eq!(provider.provider_type(), Provider::Google);
 }
 
@@ -570,7 +570,7 @@ async fn test_stream_simple_delegates_correctly() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let stream = provider.stream_simple(
@@ -613,7 +613,7 @@ async fn test_stream_safety_finish_reason() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "something");
     let options = make_options("test-key");
@@ -646,7 +646,7 @@ async fn test_stream_recitation_finish_reason() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "something");
     let options = make_options("test-key");
@@ -685,7 +685,7 @@ async fn test_stream_thinking_with_signature() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "think about it");
     let options = make_options("test-key");
@@ -725,7 +725,7 @@ async fn test_stream_function_call_after_text() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "find info");
     context.set_tools(vec![Tool::new(
@@ -783,7 +783,7 @@ async fn test_stream_function_call_after_thinking() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "calculate");
     context.set_tools(vec![Tool::new(
@@ -830,7 +830,7 @@ async fn test_stream_done_line_ignored() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("test-key");
@@ -864,7 +864,7 @@ async fn test_stream_blocklist_finish_reason() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("test-key");
@@ -938,7 +938,7 @@ async fn test_stream_with_rich_context_multiturn() {
     ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
 
     let model = make_model(&server.uri());
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let options = make_options("test-key");
     let stream = provider.stream(&model, &ctx, options);
     let result = stream.result().await;
@@ -981,7 +981,7 @@ async fn test_stream_with_error_tool_result() {
     ctx.add_message(Message::User(UserMessage::text("retry")));
 
     let model = make_model(&server.uri());
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let options = make_options("test-key");
     let stream = provider.stream(&model, &ctx, options);
     let result = stream.result().await;
@@ -1027,7 +1027,7 @@ async fn test_stream_vertex_ai_mode() {
         api_key: Some("vertex-key".to_string()),
         ..Default::default()
     };
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
@@ -1067,7 +1067,7 @@ async fn test_stream_with_image_user_content() {
         timestamp: 0,
     }));
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = Model::builder()
         .id("gemini-2.0-flash")
         .name("Gemini 2.0 Flash")
@@ -1101,7 +1101,7 @@ async fn test_stream_http_error_response() {
         .mount(&server)
         .await;
 
-    let provider = GoogleProvider::new();
+    let provider = GoogleProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("test-key");

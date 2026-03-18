@@ -1,24 +1,22 @@
-//! Provider implementations for various LLM APIs.
+//! LLM service provider facades.
+//!
+//! Each provider represents a specific LLM service vendor.
+//! Providers internally delegate to protocol implementations in `crate::protocol`.
 
-mod registry;
-mod traits;
-
-pub mod common;
-#[macro_use]
-mod delegation;
-
+pub mod openai;
 pub mod anthropic;
 pub mod google;
-pub mod groq;
-pub mod kimi_coding;
-pub mod minimax;
 pub mod ollama;
-pub mod openai_completions;
-pub mod openai_responses;
-pub mod openrouter;
 pub mod xai;
+pub mod groq;
+pub mod openrouter;
 pub mod zai;
+pub mod minimax;
+pub mod kimi_coding;
 pub mod zenmux;
 
-pub use registry::*;
-pub use traits::*;
+// Re-export protocol infrastructure for backward compatibility
+pub use crate::protocol::{
+    global_registry, register_provider, get_provider, get_registered_providers, clear_providers,
+    LLMProtocol, BoxedProtocol, ArcProtocol, ProtocolRegistry,
+};

@@ -31,33 +31,42 @@ cargo run --example basic_usage      # Run example (requires API keys)
    - `Api` enum identifies wire protocol (e.g., `OpenAICompletions`, `OpenAIResponses`, `AnthropicMessages`, `GoogleGenerativeAi`, `GoogleVertex`, `Ollama`)
    - `Provider` enum identifies the service/company (e.g., `OpenAI`, `Anthropic`, `Google`, `XAI`, `Groq`, `Zenmux`). Many variants exist as type data without a corresponding provider module.
 
-2. **Provider** (`src/provider/`) — Two-tier architecture:
-
-   **Protocol providers** (implement HTTP/SSE stream parsing):
+2. **Protocol** (`src/protocol/`) — Wire-format implementations (4 base protocols + shared infrastructure):
+   - `traits.rs` — `LLMProtocol` trait (3 methods: `provider_type`, `stream`, `stream_simple`)
+   - `registry.rs` — Global `ProtocolRegistry` (register/get providers by `Provider::as_str()` key)
+   - `common.rs` — Shared infrastructure: `resolve_base_url`, `apply_on_payload`, `validate_url_or_error`, `handle_error_response`, `apply_custom_headers`, `check_sse_buffer_limit`, `debug_preview`
+   - `delegation.rs` — Macros (`define_openai_delegation_provider!`, `define_anthropic_delegation_provider!`) for generating delegation providers
    - `openai_completions` — OpenAI Chat Completions (`/chat/completions`)
    - `openai_responses` — OpenAI Responses API (`/responses`)
    - `anthropic` — Anthropic Messages API (`/messages`)
    - `google` — Google Generative AI + Vertex AI (dual-mode, single module)
-   - `ollama` — Ollama (OpenAI-compatible wrapper, defaults to `localhost:11434`)
+
+3. **Provider** (`src/provider/`) — Service vendor facades. Each provider is a thin wrapper that selects and delegates to a protocol implementation:
+
+   **Direct providers** (facade → protocol):
+   - `openai` → `protocol::openai_responses` (OpenAI uses Responses API natively)
+   - `anthropic` → `protocol::anthropic`
+   - `google` → `protocol::google`
+   - `ollama` → `protocol::openai_completions` (OpenAI-compatible, defaults to `localhost:11434`)
 
    **Delegation providers** (inject API key/compat, then call a protocol provider):
    | Module | Delegates To | Env Var |
    |---|---|---|
-   | `xai` | `openai_completions` | `XAI_API_KEY` |
-   | `groq` | `openai_completions` | `GROQ_API_KEY` |
-   | `openrouter` | `openai_completions` | `OPENROUTER_API_KEY` |
-   | `zai` | `openai_completions` | `ZAI_API_KEY` |
-   | `minimax` | `anthropic` | `MINIMAX_API_KEY` |
-   | `kimi_coding` | `anthropic` | `KIMI_API_KEY` |
+   | `xai` | `protocol::openai_completions` | `XAI_API_KEY` |
+   | `groq` | `protocol::openai_completions` | `GROQ_API_KEY` |
+   | `openrouter` | `protocol::openai_completions` | `OPENROUTER_API_KEY` |
+   | `zai` | `protocol::openai_completions` | `ZAI_API_KEY` |
+   | `minimax` | `protocol::anthropic` | `MINIMAX_API_KEY` |
+   | `kimi_coding` | `protocol::anthropic` | `KIMI_API_KEY` |
    | `zenmux` | adaptive (see below) | `ZENMUX_API_KEY` |
 
-   Delegation providers expose `default_compat()` static methods (for OpenAI-compatible ones) that return provider-specific `OpenAICompletionsCompat` flags. These are injected onto the model when `model.compat.is_none()`. Most delegation providers are generated via `define_openai_delegation_provider!` or `define_anthropic_delegation_provider!` macros in `src/provider/delegation.rs`.
+   Delegation providers expose `default_compat()` static methods (for OpenAI-compatible ones) that return provider-specific `OpenAICompletionsCompat` flags. These are injected onto the model when `model.compat.is_none()`. Most delegation providers are generated via macros in `src/protocol/delegation.rs`.
 
-   **Shared infrastructure** (`src/provider/common.rs`): Provides functions shared by all protocol providers — `resolve_base_url`, `apply_on_payload`, `validate_url_or_error`, `handle_error_response`, `apply_custom_headers`, `check_sse_buffer_limit`, `debug_preview`.
+   `provider/mod.rs` re-exports `LLMProtocol`, `ArcProtocol`, `register_provider`, `get_provider` etc. from `crate::protocol` for backward compatibility.
 
-3. **Stream** (`src/stream/`) — `EventStream<T, R>` is a generic async stream backed by `parking_lot::Mutex<VecDeque>`. Implements `futures::Stream` with a separate `result()` future for the final message. `AssistantMessageEventStream` emits `AssistantMessageEvent` variants: `Start`, `TextDelta`, `ThinkingDelta`, `ToolCallDelta`, `Done`, `Error`, etc.
+4. **Stream** (`src/stream/`) — `EventStream<T, R>` is a generic async stream backed by `parking_lot::Mutex<VecDeque>`. Implements `futures::Stream` with a separate `result()` future for the final message. `AssistantMessageEventStream` emits `AssistantMessageEvent` variants: `Start`, `TextDelta`, `ThinkingDelta`, `ToolCallDelta`, `Done`, `Error`, etc.
 
-4. **Agent** (`src/agent/`) — Stateful conversation manager. `Agent` wraps `AgentState` (thread-safe with `parking_lot::RwLock`/`AtomicBool`) and `AgentConfig` (model, thinking_level as single source of truth) and runs an autonomous loop: stream LLM → check tool calls → execute via `ToolExecutor` callback → loop. All hook callbacks are aggregated in `AgentHooks`. Supports steering (interrupt), follow-up message queues, event subscription (observer pattern), abort, and configurable max turns (default 25). Tool execution can be parallel (default) or sequential.
+5. **Agent** (`src/agent/`) — Stateful conversation manager. `Agent` wraps `AgentState` (thread-safe with `parking_lot::RwLock`/`AtomicBool`) and `AgentConfig` (model, thinking_level as single source of truth) and runs an autonomous loop: stream LLM → check tool calls → execute via `ToolExecutor` callback → loop. All hook callbacks are aggregated in `AgentHooks`. Supports steering (interrupt), follow-up message queues, event subscription (observer pattern), abort, and configurable max turns (default 25). Tool execution can be parallel (default) or sequential.
 
 ### Supporting Modules
 
@@ -68,7 +77,7 @@ cargo run --example basic_usage      # Run example (requires API keys)
 
 ### Key Design Patterns
 
-- **Provider registry**: `ProviderRegistry` is keyed by `Provider::as_str()` string (e.g., `"openai"`, `"xai"`, `"zenmux"`). Global static accessed via `register_provider()` / `get_provider()` / `get_registered_providers()`.
+- **Provider registry**: `ProtocolRegistry` is keyed by `Provider::as_str()` string (e.g., `"openai"`, `"xai"`, `"zenmux"`). Global static accessed via `register_provider()` / `get_provider()` / `get_registered_providers()`.
 - **Base URL resolution**: 3-level fallback: `StreamOptions.base_url` > `model.base_url` > provider's `DEFAULT_BASE_URL` constant.
 - **API key resolution**: `StreamOptions.api_key` → provider's `default_api_key` → environment variable (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
 - **SSE parsing**: Provider modules parse Server-Sent Events manually from HTTP byte streams, buffering incomplete lines. The OpenAI Responses provider extracts event type from the JSON `type` field (not SSE `event:` line) to handle proxies that strip SSE event headers.
@@ -78,15 +87,15 @@ cargo run --example basic_usage      # Run example (requires API keys)
 ### Zenmux Adaptive Routing
 
 Zenmux is a unique multi-protocol proxy provider. When `base_url` is None, empty, or starts with `https://zenmux.ai`, it routes based on model ID:
-- `"google"` or `"gemini"` in ID → `GoogleProvider` with `Api::GoogleVertex`, base `https://zenmux.ai/api/vertex-ai`
-- `"openai"` or `"gpt"` in ID → `OpenAIResponsesProvider` with `Api::OpenAIResponses`, base `https://zenmux.ai/api/v1`
-- anything else → `AnthropicProvider` with `Api::AnthropicMessages`, base `https://zenmux.ai/api/anthropic/v1`
+- `"google"` or `"gemini"` in ID → `protocol::google::GoogleProtocol` with `Api::GoogleVertex`, base `https://zenmux.ai/api/vertex-ai`
+- `"openai"` or `"gpt"` in ID → `protocol::openai_responses::OpenAIResponsesProtocol` with `Api::OpenAIResponses`, base `https://zenmux.ai/api/v1`
+- anything else → `protocol::anthropic::AnthropicProtocol` with `Api::AnthropicMessages`, base `https://zenmux.ai/api/anthropic/v1`
 
 When a custom (non-zenmux) base URL is provided, it forces `OpenAICompletions` protocol.
 
 ### Google Dual-Mode URL Format
 
-The `google` module handles two URL formats based on `model.api`:
+The `protocol::google` module handles two URL formats based on `model.api`:
 - `GoogleGenerativeAi` (default): `{base}/models/{id}:streamGenerateContent?alt=sse` with `x-goog-api-key` header
 - `GoogleVertex`: `{base}/v1/publishers/google/models/{id}:streamGenerateContent?alt=sse` with `Authorization: Bearer` header
 
@@ -97,24 +106,30 @@ Agent → AgentState (Arc-wrapped, thread-safe runtime state: messages, tools, s
       → AgentConfig (model, thinking_level, tool_execution mode — single source of truth)
       → AgentHooks (tool_executor, before/after hooks, pipeline fns, stream_fn)
 
-LLMProvider.stream() → AssistantMessageEventStream
+LLMProtocol.stream() → AssistantMessageEventStream
 
-ProviderRegistry: HashMap<String, ArcProvider> keyed by Provider::as_str()
+ProtocolRegistry: HashMap<String, ArcProtocol> keyed by Provider::as_str()
 ModelRegistry: HashMap<provider, HashMap<model_id, Model>>
 ```
 
 ## Adding a New Provider
 
-**Protocol provider** (new wire format):
-1. Create `src/provider/<name>.rs` implementing `LLMProvider` trait (3 methods: `provider_type`, `stream`, `stream_simple`)
-2. Add `pub mod <name>;` to `src/provider/mod.rs`
+**New wire-format protocol** (rare — only if a completely new HTTP/SSE wire format is needed):
+1. Create `src/protocol/<name>.rs` implementing `LLMProtocol` trait (3 methods: `provider_type`, `stream`, `stream_simple`)
+2. Add `pub mod <name>;` to `src/protocol/mod.rs`
 3. Add wire-format request/response structs (private to the module)
 4. Implement SSE stream parsing in a `run_stream` async function spawned via `tokio::spawn`
 5. Push events to `AssistantMessageEventStream` (Start → deltas → Done/Error)
 6. Add integration test in `tests/test_provider_<name>.rs` using `wiremock` for HTTP mocking
 
-**Delegation provider** (wraps existing protocol):
-1. Use the `define_openai_delegation_provider!` or `define_anthropic_delegation_provider!` macro in `src/provider/delegation.rs` to generate the struct, constructors, and `LLMProvider` impl
+**New service vendor** (facade wrapping an existing protocol):
+1. Create `src/provider/<name>.rs` as a thin facade struct that wraps a `protocol::*` provider
+2. Implement `LLMProtocol` by delegating all methods to the inner protocol provider
+3. Add `pub mod <name>;` to `src/provider/mod.rs`
+4. Add integration test in `tests/`
+
+**Delegation provider** (wraps existing protocol, generated by macro):
+1. Use the `define_openai_delegation_provider!` or `define_anthropic_delegation_provider!` macro in `src/protocol/delegation.rs` to generate the struct, constructors, and `LLMProtocol` impl
 2. Add a `default_compat()` function if the provider needs OpenAI-compatible overrides
 3. Add `pub mod <name>;` to `src/provider/mod.rs`
 4. Add tests in `tests/test_delegation_providers.rs`

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// Provider trait for LLM API implementations.
 #[async_trait]
-pub trait LLMProvider: Send + Sync {
+pub trait LLMProtocol: Send + Sync {
     /// Get the provider type this implementation handles.
     fn provider_type(&self) -> Provider;
 
@@ -29,7 +29,7 @@ pub trait LLMProvider: Send + Sync {
 }
 
 /// Type alias for a boxed provider.
-pub type BoxedProvider = Box<dyn LLMProvider>;
+pub type BoxedProtocol = Box<dyn LLMProtocol>;
 
 /// Type alias for an Arc-wrapped provider.
-pub type ArcProvider = Arc<dyn LLMProvider>;
+pub type ArcProtocol = Arc<dyn LLMProtocol>;

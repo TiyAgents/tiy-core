@@ -2,8 +2,8 @@
 
 use futures::StreamExt;
 use serde_json::json;
-use tiy_core::provider::openai_responses::OpenAIResponsesProvider;
-use tiy_core::provider::LLMProvider;
+use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
+use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -54,7 +54,7 @@ fn responses_sse(events: Vec<(&str, &str)>) -> String {
 
 #[test]
 fn test_provider_type() {
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
 }
 
@@ -135,7 +135,7 @@ async fn test_stream_simple_text_response() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("test-key");
@@ -255,7 +255,7 @@ async fn test_stream_with_tool_call() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
     context.set_tools(vec![Tool::new(
@@ -291,7 +291,7 @@ async fn test_stream_http_error() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("invalid-key");
@@ -425,7 +425,7 @@ async fn test_stream_with_thinking() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "What is the meaning of life?");
     let options = make_options("test-key");
@@ -542,7 +542,7 @@ async fn test_stream_usage_tracking() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -624,7 +624,7 @@ async fn test_stream_incomplete_stop_reason() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -741,7 +741,7 @@ async fn test_stream_multiple_text_deltas() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("test-key");
@@ -844,7 +844,7 @@ async fn test_stream_text_without_output_item_added() {
     let model = make_model(&server.uri());
     let context = make_context("You are a test assistant.", "Hi");
     let options = make_options("test-key");
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
 
     let stream = provider.stream(&model, &context, options);
 
@@ -949,7 +949,7 @@ async fn test_stream_without_sse_event_lines() {
     let model = make_model(&server.uri());
     let context = make_context("You are a test assistant.", "Hi");
     let options = make_options("test-key");
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
 
     let stream = provider.stream(&model, &context, options);
 
@@ -986,13 +986,13 @@ async fn test_stream_without_sse_event_lines() {
 
 #[test]
 fn test_provider_with_api_key() {
-    let provider = OpenAIResponsesProvider::with_api_key("sk-test");
+    let provider = OpenAIResponsesProtocol::with_api_key("sk-test");
     assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
 }
 
 #[test]
 fn test_provider_default() {
-    let provider = OpenAIResponsesProvider::default();
+    let provider = OpenAIResponsesProtocol::default();
     assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
 }
 
@@ -1017,7 +1017,7 @@ async fn test_stream_simple_delegates_correctly() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let stream = provider.stream_simple(
@@ -1055,7 +1055,7 @@ async fn test_stream_failed_status() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -1090,7 +1090,7 @@ async fn test_stream_text_then_tool_call() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "find info");
     context.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
@@ -1131,7 +1131,7 @@ async fn test_stream_multiple_function_calls() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "use tools");
     let options = make_options("key");
@@ -1197,7 +1197,7 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     ctx.add_message(Message::User(UserMessage::text("go on")));
     ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -1240,7 +1240,7 @@ async fn test_stream_with_image_user_content() {
         timestamp: 0,
     }));
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -1286,7 +1286,7 @@ async fn test_stream_non_composite_tool_call_id() {
     ctx.add_message(Message::ToolResult(ToolResultMessage::text("simple_id", "fn_a", "result", false)));
     ctx.add_message(Message::User(UserMessage::text("continue")));
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -1312,7 +1312,7 @@ async fn test_stream_cancelled_status() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -1335,7 +1335,7 @@ async fn test_stream_http_error_response() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -1366,7 +1366,7 @@ async fn test_stream_usage_with_cached_tokens() {
         .mount(&server)
         .await;
 
-    let provider = OpenAIResponsesProvider::new();
+    let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");

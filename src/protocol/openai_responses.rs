@@ -7,7 +7,7 @@
 /// Default base URL for OpenAI Responses API.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
-use crate::provider::LLMProvider;
+use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::types::*;
 use async_trait::async_trait;
@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// OpenAI Responses API provider.
-pub struct OpenAIResponsesProvider {
+pub struct OpenAIResponsesProtocol {
     client: Client,
     default_api_key: Option<String>,
 }
 
-impl OpenAIResponsesProvider {
+impl OpenAIResponsesProtocol {
     /// Create a new OpenAI Responses provider.
     pub fn new() -> Self {
         Self {
@@ -57,14 +57,14 @@ impl OpenAIResponsesProvider {
     }
 }
 
-impl Default for OpenAIResponsesProvider {
+impl Default for OpenAIResponsesProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl LLMProvider for OpenAIResponsesProvider {
+impl LLMProtocol for OpenAIResponsesProtocol {
     fn provider_type(&self) -> Provider {
         Provider::OpenAIResponses
     }
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn test_provider_type() {
-        let provider = OpenAIResponsesProvider::new();
+        let provider = OpenAIResponsesProtocol::new();
         assert_eq!(provider.provider_type(), Provider::OpenAIResponses);
     }
 

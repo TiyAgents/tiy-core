@@ -2,8 +2,8 @@
 
 use futures::StreamExt;
 use serde_json::json;
-use tiy_core::provider::openai_completions::OpenAICompletionsProvider;
-use tiy_core::provider::LLMProvider;
+use tiy_core::protocol::openai_completions::OpenAICompletionsProtocol;
+use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -54,13 +54,13 @@ fn sse_response(chunks: Vec<&str>) -> String {
 
 #[test]
 fn test_provider_type() {
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     assert_eq!(provider.provider_type(), Provider::OpenAI);
 }
 
 #[test]
 fn test_provider_with_api_key() {
-    let provider = OpenAICompletionsProvider::with_api_key("sk-test-key");
+    let provider = OpenAICompletionsProtocol::with_api_key("sk-test-key");
     assert_eq!(provider.provider_type(), Provider::OpenAI);
 }
 
@@ -113,7 +113,7 @@ async fn test_stream_simple_text_response() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("test-key");
@@ -223,7 +223,7 @@ async fn test_stream_with_tool_call() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
     context.set_tools(vec![Tool::new(
@@ -258,7 +258,7 @@ async fn test_stream_http_error() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("invalid-key");
@@ -321,7 +321,7 @@ async fn test_stream_with_thinking() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "What is the meaning of life?");
     let options = make_options("test-key");
@@ -375,7 +375,7 @@ async fn test_stream_usage_tracking() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -409,7 +409,7 @@ async fn test_stream_with_custom_headers() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let mut headers = std::collections::HashMap::new();
@@ -443,7 +443,7 @@ async fn test_stream_empty_response() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -481,7 +481,7 @@ async fn test_stream_length_stop_reason() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -523,7 +523,7 @@ async fn test_stream_content_filter_stop_reason() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -560,7 +560,7 @@ async fn test_stream_simple_delegates_correctly() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let stream = provider.stream_simple(
@@ -615,7 +615,7 @@ async fn test_stream_choice_level_usage() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -658,7 +658,7 @@ async fn test_stream_reasoning_field_alternative() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "think about this");
     let options = make_options("key");
@@ -702,7 +702,7 @@ async fn test_stream_reasoning_text_field() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "reason about this");
     let options = make_options("key");
@@ -765,7 +765,7 @@ async fn test_stream_multiple_tool_calls_by_index() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "use tools");
     context.set_tools(vec![
@@ -819,7 +819,7 @@ async fn test_stream_text_then_tool_call_transition() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "search for something");
     context.set_tools(vec![Tool::new(
@@ -844,7 +844,7 @@ async fn test_stream_text_then_tool_call_transition() {
 
 #[tokio::test]
 async fn test_stream_default_provider() {
-    let provider = OpenAICompletionsProvider::default();
+    let provider = OpenAICompletionsProtocol::default();
     assert_eq!(provider.provider_type(), Provider::OpenAI);
 }
 
@@ -876,7 +876,7 @@ async fn test_stream_function_call_finish_reason() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "use fn");
     let options = make_options("key");
@@ -950,7 +950,7 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     ctx.add_message(Message::User(UserMessage::text("continue")));
     ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -996,7 +996,7 @@ async fn test_stream_with_image_user_content() {
         timestamp: 0,
     }));
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -1046,7 +1046,7 @@ async fn test_stream_with_thinking_in_assistant_context() {
     ctx.add_message(Message::Assistant(asst));
     ctx.add_message(Message::User(UserMessage::text("go on")));
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let options = make_options("key");
     let stream = provider.stream(&model, &ctx, options);
@@ -1098,7 +1098,7 @@ async fn test_stream_with_developer_role_compat() {
 
     let context = make_context("system prompt", "hello");
     let options = make_options("key");
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
@@ -1117,7 +1117,7 @@ async fn test_stream_http_error_response() {
         .mount(&server)
         .await;
 
-    let provider = OpenAICompletionsProvider::new();
+    let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");

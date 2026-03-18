@@ -6,7 +6,7 @@ use crate::agent::{
     BeforeToolCallFn, BeforeToolCallResult, QueueMode, ThinkingBudgets, ToolExecutionMode,
     ToolExecutor, ToolUpdateCallback, Transport,
 };
-use crate::provider::{get_provider, ArcProvider};
+use crate::provider::{get_provider, ArcProtocol};
 use crate::stream::AssistantMessageEventStream;
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
@@ -68,7 +68,7 @@ pub struct Agent {
     /// Configuration.
     config: RwLock<AgentConfig>,
     /// Provider (optional, resolved from registry if not set).
-    provider: RwLock<Option<ArcProvider>>,
+    provider: RwLock<Option<ArcProtocol>>,
     /// Aggregated hooks (tool executor, before/after hooks, converters, etc.).
     hooks: RwLock<AgentHooks>,
     /// Maximum turns per prompt.
@@ -128,7 +128,7 @@ impl Agent {
     // ============================================================================
 
     /// Set the LLM provider explicitly.
-    pub fn set_provider(&self, provider: ArcProvider) {
+    pub fn set_provider(&self, provider: ArcProtocol) {
         *self.provider.write() = Some(provider);
     }
 
@@ -614,7 +614,7 @@ impl Agent {
     }
 
     /// Resolve the provider to use.
-    fn resolve_provider(&self) -> Result<ArcProvider, AgentError> {
+    fn resolve_provider(&self) -> Result<ArcProtocol, AgentError> {
         // First check explicit provider
         if let Some(ref provider) = *self.provider.read() {
             return Ok(provider.clone());
@@ -687,7 +687,7 @@ impl Agent {
     }
 
     /// Run a single LLM turn: call provider, consume stream, return AssistantMessage.
-    async fn run_turn(&self, provider: &ArcProvider) -> Result<AssistantMessage, AgentError> {
+    async fn run_turn(&self, provider: &ArcProtocol) -> Result<AssistantMessage, AgentError> {
         let context = self.build_context().await;
         let model = self.config.read().model.clone();
         let options = self.build_simple_stream_options().await;
@@ -1041,7 +1041,7 @@ impl Agent {
             self.emit(AgentEvent::TurnStart);
 
             // Run one LLM turn
-            let dummy_provider: ArcProvider = Arc::new(DummyProvider);
+            let dummy_provider: ArcProtocol = Arc::new(DummyProvider);
             let active_provider = provider.as_ref().unwrap_or(&dummy_provider);
             let assistant_result = self.run_turn(active_provider).await;
 
@@ -1461,7 +1461,7 @@ impl Default for Agent {
 struct DummyProvider;
 
 #[async_trait::async_trait]
-impl crate::provider::LLMProvider for DummyProvider {
+impl crate::provider::LLMProtocol for DummyProvider {
     fn provider_type(&self) -> Provider {
         Provider::Custom("dummy".to_string())
     }

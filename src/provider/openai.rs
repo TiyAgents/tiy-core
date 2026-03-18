@@ -1,45 +1,47 @@
-//! Google provider — uses Google Generative AI / Vertex protocol.
+//! Unified OpenAI provider — uses Responses protocol.
+//!
+//! OpenAI Completions protocol is for third-party compatible providers
+//! (xAI, Groq, OpenRouter, etc.), not for direct OpenAI usage.
 
-use crate::protocol::google::GoogleProtocol;
+use crate::protocol::openai_responses::OpenAIResponsesProtocol;
 use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
 use async_trait::async_trait;
 
-/// Google provider.
+/// Unified OpenAI provider.
 ///
-/// Internally uses the Google Generative AI protocol, with dual-mode
-/// support for both Generative AI and Vertex AI based on `model.api`.
-pub struct GoogleProvider {
-    inner: GoogleProtocol,
+/// Internally uses the OpenAI Responses protocol.
+pub struct OpenAIProvider {
+    inner: OpenAIResponsesProtocol,
 }
 
-impl GoogleProvider {
-    /// Create a new Google provider.
+impl OpenAIProvider {
+    /// Create a new OpenAI provider.
     pub fn new() -> Self {
         Self {
-            inner: GoogleProtocol::new(),
+            inner: OpenAIResponsesProtocol::new(),
         }
     }
 
     /// Create a provider with a default API key.
     pub fn with_api_key(api_key: impl Into<String>) -> Self {
         Self {
-            inner: GoogleProtocol::with_api_key(api_key),
+            inner: OpenAIResponsesProtocol::with_api_key(api_key),
         }
     }
 }
 
-impl Default for GoogleProvider {
+impl Default for OpenAIProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl LLMProtocol for GoogleProvider {
+impl LLMProtocol for OpenAIProvider {
     fn provider_type(&self) -> Provider {
-        Provider::Google
+        Provider::OpenAI
     }
 
     fn stream(

@@ -11,7 +11,7 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use tiy_core::{provider::openai_completions::OpenAICompletionsProvider, types::*};
+//! use tiy_core::{provider::openai::OpenAIProvider, types::*};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -48,6 +48,8 @@
 
 pub mod agent;
 pub mod models;
+#[macro_use]
+pub mod protocol;
 pub mod provider;
 pub mod stream;
 pub mod thinking;

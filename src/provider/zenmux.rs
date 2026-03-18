@@ -18,7 +18,7 @@
 //!
 //! API key environment variable: `ZENMUX_API_KEY`
 
-use crate::provider::LLMProvider;
+use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
 use async_trait::async_trait;
@@ -105,7 +105,7 @@ impl Default for ZenmuxProvider {
 }
 
 #[async_trait]
-impl LLMProvider for ZenmuxProvider {
+impl LLMProtocol for ZenmuxProvider {
     fn provider_type(&self) -> Provider {
         Provider::Zenmux
     }
@@ -131,26 +131,26 @@ impl LLMProvider for ZenmuxProvider {
                 ProtocolRoute::Google => {
                     m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
                     m.api = Some(Api::GoogleVertex);
-                    let provider = super::google::GoogleProvider::new();
+                    let provider = crate::protocol::google::GoogleProtocol::new();
                     provider.stream(&m, context, opts)
                 }
                 ProtocolRoute::OpenAI => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     m.api = Some(Api::OpenAIResponses);
-                    let provider = super::openai_responses::OpenAIResponsesProvider::new();
+                    let provider = crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {
                     m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
                     m.api = Some(Api::AnthropicMessages);
-                    let provider = super::anthropic::AnthropicProvider::new();
+                    let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                     provider.stream(&m, context, opts)
                 }
             }
         } else {
             // Custom base_url: use OpenAI Completions protocol as-is
             m.api = Some(Api::OpenAICompletions);
-            let provider = super::openai_completions::OpenAICompletionsProvider::new();
+            let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
             provider.stream(&m, context, opts)
         }
     }
@@ -174,26 +174,26 @@ impl LLMProvider for ZenmuxProvider {
                 ProtocolRoute::Google => {
                     m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
                     m.api = Some(Api::GoogleVertex);
-                    let provider = super::google::GoogleProvider::new();
+                    let provider = crate::protocol::google::GoogleProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
                 ProtocolRoute::OpenAI => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     m.api = Some(Api::OpenAIResponses);
-                    let provider = super::openai_responses::OpenAIResponsesProvider::new();
+                    let provider = crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {
                     m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
                     m.api = Some(Api::AnthropicMessages);
-                    let provider = super::anthropic::AnthropicProvider::new();
+                    let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
             }
         } else {
             // Custom base_url: use OpenAI Completions protocol as-is
             m.api = Some(Api::OpenAICompletions);
-            let provider = super::openai_completions::OpenAICompletionsProvider::new();
+            let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
             provider.stream_simple(&m, context, opts)
         }
     }

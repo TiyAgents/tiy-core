@@ -18,7 +18,7 @@ tiy-core 是一个 Rust 库，提供统一的、与提供商无关的流式 LLM 
 
 ## 核心特性
 
-- **一套接口，多个提供商** — 5 个协议级实现（OpenAI Completions、OpenAI Responses、Anthropic Messages、Google Generative AI / Vertex AI、Ollama）和 7 个代理提供商（xAI、Groq、OpenRouter、MiniMax、Kimi Coding、ZAI、Zenmux），统一在单一 `LLMProvider` trait 之下。
+- **一套接口，多个提供商** — 5 个协议级实现（OpenAI Completions、OpenAI Responses、Anthropic Messages、Google Generative AI / Vertex AI、Ollama）和 7 个代理提供商（xAI、Groq、OpenRouter、MiniMax、Kimi Coding、ZAI、Zenmux），统一在单一 `LLMProtocol` trait 之下。
 - **流式优先** — `EventStream<T, R>` 基于 `parking_lot::Mutex<VecDeque>` 实现 `futures::Stream`。每个提供商返回 `AssistantMessageEventStream`，包含细粒度的增量事件：文本、思维链、工具调用参数和完成事件。
 - **工具 / 函数调用** — 通过 JSON Schema 定义工具，使用 `jsonschema` crate 验证参数，支持在 Agent 循环中并行或串行执行工具。
 - **有状态 Agent 运行时** — `Agent` 管理完整对话循环：流式 LLM → 检测工具调用 → 执行工具 → 重新请求 → 循环。支持引导中断（steering）、后续消息队列、事件订阅（观察者模式）、中止操作，以及可配置的最大轮次（默认 25）。
@@ -30,7 +30,7 @@ tiy-core 是一个 Rust 库，提供统一的、与提供商无关的流式 LLM 
 ```mermaid
 graph TD
     A[你的应用] --> B[Agent]
-    A --> C[LLMProvider trait]
+    A --> C[LLMProtocol trait]
     B --> C
     C --> D[协议提供商]
     C --> E[代理提供商]
@@ -53,7 +53,8 @@ graph TD
 | 层 | 路径 | 职责 |
 |---|---|---|
 | **Types** | `src/types/` | 与提供商无关的数据模型：`Message`、`ContentBlock`、`Model`、`Tool`、`Context`、`SecurityConfig` |
-| **Provider** | `src/provider/` | `LLMProvider` trait + 协议与代理实现 |
+| **Protocol** | `src/protocol/` | 线路格式实现：`LLMProtocol` trait、4 个基础协议、共享基础设施 |
+| **Provider** | `src/provider/` | 服务商门面（OpenAI、Anthropic、Google 等）+ 代理提供商 |
 | **Stream** | `src/stream/` | 通用 `EventStream<T, R>`，实现 `futures::Stream` |
 | **Agent** | `src/agent/` | 有状态对话管理器，含工具执行循环（[完整文档](./src/agent/README.md)） |
 | **Transform** | `src/transform/` | 跨提供商消息变换（思维块转换、工具调用 ID 规范化、孤儿工具调用处理） |
@@ -78,14 +79,14 @@ futures = "0.3"
 use std::sync::Arc;
 use futures::StreamExt;
 use tiy_core::{
-    provider::{openai_completions::OpenAICompletionsProvider, get_provider, register_provider},
+    provider::{openai::OpenAIProvider, get_provider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
     // 注册提供商
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
 
     // 构建模型
     let model = Model::builder()
@@ -134,13 +135,13 @@ async fn main() {
 use std::sync::Arc;
 use tiy_core::{
     agent::{Agent, AgentTool, AgentToolResult},
-    provider::{openai_completions::OpenAICompletionsProvider, register_provider},
+    provider::{openai::OpenAIProvider, register_provider},
     types::*,
 };
 
 #[tokio::main]
 async fn main() {
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
 
     let agent = Agent::with_model(
         Model::builder()
@@ -417,16 +418,20 @@ src/
 │   ├── limits.rs       # SecurityConfig, HttpLimits, AgentLimits, StreamLimits, UrlPolicy, HeaderPolicy
 │   ├── events.rs       # AssistantMessageEvent（流式事件）
 │   └── usage.rs        # Token 用量追踪
-├── provider/
-│   ├── traits.rs       # LLMProvider trait
-│   ├── registry.rs     # 全局 ProviderRegistry
+├── protocol/           # 线路格式协议实现
+│   ├── traits.rs       # LLMProtocol trait
+│   ├── registry.rs     # 全局 ProtocolRegistry
 │   ├── common.rs       # 共享基础设施（URL 解析、payload hook、错误处理）
 │   ├── delegation.rs   # 代理提供商生成宏
-│   ├── openai_completions.rs
-│   ├── openai_responses.rs
-│   ├── anthropic.rs
-│   ├── google.rs       # 双模式：Generative AI + Vertex AI
-│   ├── ollama.rs
+│   ├── openai_completions.rs  # OpenAI Chat Completions 协议
+│   ├── openai_responses.rs    # OpenAI Responses API 协议
+│   ├── anthropic.rs    # Anthropic Messages 协议
+│   └── google.rs       # Google GenAI + Vertex AI（双模式）
+├── provider/           # 服务商门面
+│   ├── openai.rs       # OpenAI → protocol::openai_responses
+│   ├── anthropic.rs    # Anthropic → protocol::anthropic
+│   ├── google.rs       # Google → protocol::google
+│   ├── ollama.rs       # Ollama → protocol::openai_completions
 │   ├── xai.rs          # 代理 → OpenAI Completions
 │   ├── groq.rs         # 代理 → OpenAI Completions
 │   ├── openrouter.rs   # 代理 → OpenAI Completions

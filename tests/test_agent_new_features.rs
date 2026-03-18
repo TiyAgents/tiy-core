@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 use tiy_core::agent::*;
-use tiy_core::provider::{ArcProvider, LLMProvider};
+use tiy_core::provider::{ArcProtocol, LLMProtocol};
 use tiy_core::stream::AssistantMessageEventStream;
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::*;
@@ -36,7 +36,7 @@ impl MockProvider {
 }
 
 #[async_trait]
-impl LLMProvider for MockProvider {
+impl LLMProtocol for MockProvider {
     fn provider_type(&self) -> Provider {
         Provider::OpenAI
     }
@@ -175,7 +175,7 @@ fn test_agent_message_from_string() {
 #[tokio::test]
 async fn test_prompt_with_str_convenience() {
     let response = make_assistant_message("Hi!");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
 
@@ -214,7 +214,7 @@ async fn test_steering_one_at_a_time_mode() {
     // Queue 3 steering messages, only 1 should be dequeued per turn in OneAtATime mode
     let responses: Vec<AssistantMessage> = (0..5).map(|_| make_assistant_message("ok")).collect();
     let mock = Arc::new(MockProvider::new(responses));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -236,7 +236,7 @@ async fn test_steering_one_at_a_time_mode() {
 async fn test_follow_up_one_at_a_time_mode() {
     let responses: Vec<AssistantMessage> = (0..5).map(|_| make_assistant_message("ok")).collect();
     let mock = Arc::new(MockProvider::new(responses));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -329,7 +329,7 @@ fn test_max_retry_delay_setter_getter() {
 async fn test_before_tool_call_allows_execution() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({"x": 1}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -364,7 +364,7 @@ async fn test_before_tool_call_allows_execution() {
 async fn test_before_tool_call_blocks_execution() {
     let tool_response = make_tool_call_message("dangerous_tool", "call_1", json!({}));
     let final_response = make_assistant_message("OK, I won't do that.");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -427,7 +427,7 @@ async fn test_before_tool_call_blocks_execution() {
 async fn test_after_tool_call_overrides_content() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -476,7 +476,7 @@ async fn test_after_tool_call_overrides_content() {
 async fn test_after_tool_call_override_is_error() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -522,7 +522,7 @@ async fn test_after_tool_call_override_is_error() {
 #[tokio::test]
 async fn test_convert_to_llm_filters_custom_messages_by_default() {
     let response = make_assistant_message("I see 1 message");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -540,7 +540,7 @@ async fn test_convert_to_llm_filters_custom_messages_by_default() {
 #[tokio::test]
 async fn test_convert_to_llm_custom_converter() {
     let response = make_assistant_message("Done");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -575,7 +575,7 @@ async fn test_convert_to_llm_custom_converter() {
 #[tokio::test]
 async fn test_transform_context_called() {
     let response = make_assistant_message("Done");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -612,7 +612,7 @@ async fn test_transform_context_called() {
 #[tokio::test]
 async fn test_get_api_key_dynamic_resolution() {
     let response = make_assistant_message("Done");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -644,7 +644,7 @@ async fn test_get_api_key_dynamic_resolution() {
 async fn test_tool_execution_update_events() {
     let tool_response = make_tool_call_message("streaming_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -696,7 +696,7 @@ async fn test_tool_execution_update_events() {
 async fn test_tool_executor_simple_works() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -779,7 +779,7 @@ fn test_agent_event_tool_execution_update_serialization() {
 async fn test_both_hooks_called_in_order() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProvider =
+    let provider: ArcProtocol =
         Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
@@ -852,7 +852,7 @@ impl CapturingMockProvider {
 }
 
 #[async_trait]
-impl LLMProvider for CapturingMockProvider {
+impl LLMProtocol for CapturingMockProvider {
     fn provider_type(&self) -> Provider {
         Provider::OpenAI
     }
@@ -946,7 +946,7 @@ impl LLMProvider for CapturingMockProvider {
 async fn test_thinking_budgets_flow_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -976,7 +976,7 @@ async fn test_thinking_budgets_flow_to_provider() {
 async fn test_thinking_budgets_default_fallback() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1002,7 +1002,7 @@ async fn test_thinking_budgets_default_fallback() {
 async fn test_thinking_off_no_budget() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1040,7 +1040,7 @@ fn test_session_id_setter_getter() {
 async fn test_session_id_flows_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1062,7 +1062,7 @@ async fn test_session_id_flows_to_provider() {
 async fn test_session_id_none_when_not_set() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1083,7 +1083,7 @@ async fn test_session_id_none_when_not_set() {
 async fn test_on_payload_flows_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1114,7 +1114,7 @@ async fn test_on_payload_flows_to_provider() {
 async fn test_on_payload_none_when_not_set() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1135,7 +1135,7 @@ async fn test_on_payload_none_when_not_set() {
 async fn test_transport_flows_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1157,7 +1157,7 @@ async fn test_transport_flows_to_provider() {
 async fn test_transport_default_sse_flows_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1182,7 +1182,7 @@ async fn test_transport_default_sse_flows_to_provider() {
 async fn test_max_retry_delay_flows_to_provider() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1204,7 +1204,7 @@ async fn test_max_retry_delay_flows_to_provider() {
 async fn test_max_retry_delay_none_when_not_set() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1228,7 +1228,7 @@ async fn test_max_retry_delay_none_when_not_set() {
 async fn test_all_five_features_flow_together() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -1272,7 +1272,7 @@ async fn test_reset_clears_session_id() {
         make_assistant_message("Second"),
     ];
     let mock = Arc::new(CapturingMockProvider::new(responses));
-    let provider: ArcProvider = mock.clone();
+    let provider: ArcProtocol = mock.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);

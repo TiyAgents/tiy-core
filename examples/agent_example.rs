@@ -28,7 +28,7 @@ use tiy_core::{
     agent::*,
     models::get_model,
     provider::{
-        openai_completions::OpenAICompletionsProvider, register_provider,
+        openai::OpenAIProvider, register_provider,
         zenmux::ZenmuxProvider,
     },
     thinking::ThinkingLevel,
@@ -373,7 +373,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 9. Register provider
     // ========================================================================
     println!("\n--- 9. Provider ---");
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
     register_provider(Arc::new(ZenmuxProvider::new()));
     println!("  Registered OpenAI & Zenmux providers");
 

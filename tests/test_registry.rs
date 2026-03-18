@@ -180,16 +180,16 @@ fn test_get_providers_function() {
 }
 
 // ============================================================================
-// ProviderRegistry tests
+// ProtocolRegistry tests
 // ============================================================================
 
 use std::sync::Arc;
-use tiy_core::provider::{LLMProvider, ProviderRegistry};
+use tiy_core::provider::{LLMProtocol, ProtocolRegistry};
 use tiy_core::stream::AssistantMessageEventStream;
 
 struct MockProvider;
 
-impl LLMProvider for MockProvider {
+impl LLMProtocol for MockProvider {
     fn provider_type(&self) -> Provider {
         Provider::Custom("mock".to_string())
     }
@@ -215,14 +215,14 @@ impl LLMProvider for MockProvider {
 
 #[test]
 fn test_provider_registry_new() {
-    let registry = ProviderRegistry::new();
+    let registry = ProtocolRegistry::new();
     assert!(registry.provider_types().is_empty());
 }
 
 #[test]
 fn test_provider_registry_register_and_get() {
-    let registry = ProviderRegistry::new();
-    let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
+    let registry = ProtocolRegistry::new();
+    let provider: Arc<dyn LLMProtocol> = Arc::new(MockProvider);
     registry.register(provider);
 
     let p = Provider::Custom("mock".to_string());
@@ -235,8 +235,8 @@ fn test_provider_registry_register_and_get() {
 
 #[test]
 fn test_provider_registry_get_by_name() {
-    let registry = ProviderRegistry::new();
-    let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
+    let registry = ProtocolRegistry::new();
+    let provider: Arc<dyn LLMProtocol> = Arc::new(MockProvider);
     registry.register(provider);
 
     let retrieved = registry.get_by_name("mock");
@@ -245,8 +245,8 @@ fn test_provider_registry_get_by_name() {
 
 #[test]
 fn test_provider_registry_unregister() {
-    let registry = ProviderRegistry::new();
-    let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
+    let registry = ProtocolRegistry::new();
+    let provider: Arc<dyn LLMProtocol> = Arc::new(MockProvider);
     registry.register(provider);
 
     let p = Provider::Custom("mock".to_string());
@@ -258,8 +258,8 @@ fn test_provider_registry_unregister() {
 
 #[test]
 fn test_provider_registry_clear() {
-    let registry = ProviderRegistry::new();
-    let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
+    let registry = ProtocolRegistry::new();
+    let provider: Arc<dyn LLMProtocol> = Arc::new(MockProvider);
     registry.register(provider);
 
     registry.clear();
@@ -268,8 +268,8 @@ fn test_provider_registry_clear() {
 
 #[test]
 fn test_provider_registry_provider_types() {
-    let registry = ProviderRegistry::new();
-    let provider: Arc<dyn LLMProvider> = Arc::new(MockProvider);
+    let registry = ProtocolRegistry::new();
+    let provider: Arc<dyn LLMProtocol> = Arc::new(MockProvider);
     registry.register(provider);
 
     let types = registry.provider_types();
@@ -279,7 +279,7 @@ fn test_provider_registry_provider_types() {
 
 #[test]
 fn test_provider_registry_not_found() {
-    let registry = ProviderRegistry::new();
+    let registry = ProtocolRegistry::new();
     assert!(registry.get(&Provider::OpenAI).is_none());
     assert!(!registry.contains(&Provider::OpenAI));
 }

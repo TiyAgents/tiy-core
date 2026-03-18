@@ -21,9 +21,8 @@ use tiy_core::{
     provider::{
         anthropic::AnthropicProvider, get_provider, google::GoogleProvider, groq::GroqProvider,
         kimi_coding::KimiCodingProvider, minimax::MiniMaxProvider, ollama::OllamaProvider,
-        openai_completions::OpenAICompletionsProvider, openai_responses::OpenAIResponsesProvider,
-        openrouter::OpenRouterProvider, register_provider, xai::XAIProvider, zai::ZAIProvider,
-        zenmux::ZenmuxProvider,
+        openai::OpenAIProvider, openrouter::OpenRouterProvider, register_provider,
+        xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
     },
     stream::AssistantMessageEventStream,
     types::{Context, Model, Provider, StreamOptions, UserMessage},
@@ -92,8 +91,7 @@ fn main() {
 
     // Register all supported providers into the global registry.
     // After this, providers are resolved automatically from model.provider.
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
-    register_provider(Arc::new(OpenAIResponsesProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
     register_provider(Arc::new(AnthropicProvider::new()));
     register_provider(Arc::new(GoogleProvider::new()));
     register_provider(Arc::new(OllamaProvider::new()));

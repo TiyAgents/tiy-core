@@ -1,16 +1,16 @@
 //! Provider registry for managing LLM providers.
 
-use crate::provider::ArcProvider;
+use crate::protocol::ArcProtocol;
 use crate::types::Provider;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
 /// Provider registry for managing LLM providers.
-pub struct ProviderRegistry {
-    providers: RwLock<HashMap<String, ArcProvider>>,
+pub struct ProtocolRegistry {
+    providers: RwLock<HashMap<String, ArcProtocol>>,
 }
 
-impl ProviderRegistry {
+impl ProtocolRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
         Self {
@@ -19,20 +19,20 @@ impl ProviderRegistry {
     }
 
     /// Register a provider.
-    pub fn register(&self, provider: ArcProvider) {
+    pub fn register(&self, provider: ArcProtocol) {
         let provider_type = provider.provider_type();
         let mut providers = self.providers.write();
         providers.insert(provider_type.as_str().to_string(), provider);
     }
 
     /// Get a provider by provider type.
-    pub fn get(&self, provider: &Provider) -> Option<ArcProvider> {
+    pub fn get(&self, provider: &Provider) -> Option<ArcProtocol> {
         let providers = self.providers.read();
         providers.get(provider.as_str()).cloned()
     }
 
     /// Get a provider by provider type string.
-    pub fn get_by_name(&self, provider_name: &str) -> Option<ArcProvider> {
+    pub fn get_by_name(&self, provider_name: &str) -> Option<ArcProtocol> {
         let providers = self.providers.read();
         providers.get(provider_name).cloned()
     }
@@ -62,28 +62,28 @@ impl ProviderRegistry {
     }
 }
 
-impl Default for ProviderRegistry {
+impl Default for ProtocolRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Global provider registry.
-static GLOBAL_REGISTRY: once_cell::sync::Lazy<ProviderRegistry> =
-    once_cell::sync::Lazy::new(ProviderRegistry::new);
+static GLOBAL_REGISTRY: once_cell::sync::Lazy<ProtocolRegistry> =
+    once_cell::sync::Lazy::new(ProtocolRegistry::new);
 
 /// Get the global provider registry.
-pub fn global_registry() -> &'static ProviderRegistry {
+pub fn global_registry() -> &'static ProtocolRegistry {
     &GLOBAL_REGISTRY
 }
 
 /// Register a provider globally.
-pub fn register_provider(provider: ArcProvider) {
+pub fn register_provider(provider: ArcProtocol) {
     GLOBAL_REGISTRY.register(provider);
 }
 
 /// Get a provider from the global registry.
-pub fn get_provider(provider: &Provider) -> Option<ArcProvider> {
+pub fn get_provider(provider: &Provider) -> Option<ArcProtocol> {
     GLOBAL_REGISTRY.get(provider)
 }
 

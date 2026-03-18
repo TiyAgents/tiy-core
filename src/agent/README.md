@@ -157,13 +157,13 @@ println!("Messages: {}", state.message_count());
 
 ```rust
 use std::sync::Arc;
-use tiy_core::provider::{openai_completions::OpenAICompletionsProvider, register_provider};
+use tiy_core::provider::{openai::OpenAIProvider, register_provider};
 
 // Option 1: Explicit provider
-agent.set_provider(Arc::new(OpenAICompletionsProvider::new()));
+agent.set_provider(Arc::new(OpenAIProvider::new()));
 
 // Option 2: Registry (auto-resolved from model.provider)
-register_provider(Arc::new(OpenAICompletionsProvider::new()));
+register_provider(Arc::new(OpenAIProvider::new()));
 
 // Static API key
 agent.set_api_key("sk-...");
@@ -565,12 +565,12 @@ use std::sync::Arc;
 use tiy_core::agent::*;
 use tiy_core::thinking::ThinkingLevel;
 use tiy_core::types::*;
-use tiy_core::provider::{register_provider, openai_completions::OpenAICompletionsProvider};
+use tiy_core::provider::{register_provider, openai::OpenAIProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register provider
-    register_provider(Arc::new(OpenAICompletionsProvider::new()));
+    register_provider(Arc::new(OpenAIProvider::new()));
 
     // Create agent
     let model = Model::builder()

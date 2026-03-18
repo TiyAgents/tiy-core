@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 use tiy_core::agent::*;
-use tiy_core::provider::{ArcProvider, LLMProvider};
+use tiy_core::provider::{ArcProtocol, LLMProtocol};
 use tiy_core::stream::AssistantMessageEventStream;
 use tiy_core::types::*;
 
@@ -39,7 +39,7 @@ impl MockProvider {
 }
 
 #[async_trait]
-impl LLMProvider for MockProvider {
+impl LLMProtocol for MockProvider {
     fn provider_type(&self) -> Provider {
         Provider::OpenAI
     }
@@ -145,7 +145,7 @@ fn make_tool_call_message(
 #[tokio::test]
 async fn test_agent_prompt_with_provider() {
     let response = make_assistant_message("Hello! How can I help?");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -170,7 +170,7 @@ async fn test_agent_prompt_with_provider() {
 #[tokio::test]
 async fn test_agent_prompt_text_content() {
     let response = make_assistant_message("The answer is 42.");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -203,7 +203,7 @@ async fn test_agent_tool_execution_loop() {
     let final_response = make_assistant_message("The weather in Tokyo is sunny.");
 
     let mock_provider = Arc::new(MockProvider::new(vec![tool_response, final_response]));
-    let provider: ArcProvider = mock_provider.clone();
+    let provider: ArcProtocol = mock_provider.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -259,7 +259,7 @@ async fn test_agent_tool_execution_no_executor() {
     let tool_response = make_tool_call_message("get_weather", "call_123", json!({"city": "Tokyo"}));
     let final_response = make_assistant_message("I couldn't get the weather.");
 
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -303,7 +303,7 @@ async fn test_agent_max_turns_limit() {
         .map(|i| make_tool_call_message("loop_tool", &format!("call_{}", i), json!({})))
         .collect();
 
-    let provider: ArcProvider = Arc::new(MockProvider::new(responses));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(responses));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -338,7 +338,7 @@ async fn test_agent_max_turns_limit() {
 #[tokio::test]
 async fn test_agent_events_emitted() {
     let response = make_assistant_message("Hi there!");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -397,7 +397,7 @@ async fn test_agent_tool_execution_events() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({"x": 1}));
     let final_response = make_assistant_message("Done!");
 
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -446,7 +446,7 @@ async fn test_agent_tool_execution_events() {
 #[tokio::test]
 async fn test_agent_continue_after_tool_result() {
     let response = make_assistant_message("Based on the tool result...");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -511,7 +511,7 @@ async fn test_agent_follow_up_processed() {
     let response1 = make_assistant_message("First response");
     let response2 = make_assistant_message("Second response");
     let mock_provider = Arc::new(MockProvider::new(vec![response1, response2]));
-    let provider: ArcProvider = mock_provider.clone();
+    let provider: ArcProtocol = mock_provider.clone();
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -550,7 +550,7 @@ async fn test_agent_multiple_tool_calls() {
 
     let final_response = make_assistant_message("Both tools executed.");
 
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![multi_tool, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![multi_tool, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -589,7 +589,7 @@ async fn test_agent_sequential_tool_execution() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
 
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -612,7 +612,7 @@ async fn test_agent_sequential_tool_execution() {
 #[tokio::test]
 async fn test_agent_state_after_prompt() {
     let response = make_assistant_message("Hi!");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -629,7 +629,7 @@ async fn test_agent_state_after_prompt() {
 #[tokio::test]
 async fn test_agent_reset_clears_state() {
     let response = make_assistant_message("Hi!");
-    let provider: ArcProvider = Arc::new(MockProvider::new(vec![response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);

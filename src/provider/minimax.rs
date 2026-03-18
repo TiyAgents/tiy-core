@@ -4,13 +4,13 @@
 //! - `https://api.minimax.io/anthropic` (international)
 //! - `https://api.minimaxi.com/anthropic` (minimax-cn, China mainland)
 //!
-//! This provider delegates all streaming to `AnthropicProvider`.
+//! This provider delegates all streaming to `AnthropicProtocol`.
 //!
 //! Note: MiniMax has a dual env var for API key resolution based on
 //! the provider variant (MiniMax vs MiniMaxCN), which requires a
 //! custom `resolve_api_key` instead of using the delegation macro.
 
-use crate::provider::LLMProvider;
+use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
 use async_trait::async_trait;
@@ -61,7 +61,7 @@ impl Default for MiniMaxProvider {
 }
 
 #[async_trait]
-impl LLMProvider for MiniMaxProvider {
+impl LLMProtocol for MiniMaxProvider {
     fn provider_type(&self) -> Provider {
         Provider::MiniMax
     }
@@ -76,7 +76,7 @@ impl LLMProvider for MiniMaxProvider {
         if opts.api_key.is_none() {
             opts.api_key = self.resolve_api_key(&opts, &model.provider);
         }
-        let provider = super::anthropic::AnthropicProvider::new();
+        let provider = crate::protocol::anthropic::AnthropicProtocol::new();
         provider.stream(model, context, opts)
     }
 
@@ -90,7 +90,7 @@ impl LLMProvider for MiniMaxProvider {
         if opts.base.api_key.is_none() {
             opts.base.api_key = self.resolve_api_key(&opts.base, &model.provider);
         }
-        let provider = super::anthropic::AnthropicProvider::new();
+        let provider = crate::protocol::anthropic::AnthropicProtocol::new();
         provider.stream_simple(model, context, opts)
     }
 }

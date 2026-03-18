@@ -4,7 +4,7 @@
 //! resolve it from options / self / env, optionally inject compat settings,
 //! and delegate to a protocol provider (OpenAI Completions or Anthropic).
 
-/// Generate a delegation provider that delegates to `OpenAICompletionsProvider`.
+/// Generate a delegation provider that delegates to `OpenAICompletionsProtocol`.
 ///
 /// # Variants
 ///
@@ -80,7 +80,7 @@ macro_rules! define_openai_delegation_provider {
         }
 
         #[async_trait::async_trait]
-        impl crate::provider::LLMProvider for $name {
+        impl crate::protocol::LLMProtocol for $name {
             fn provider_type(&self) -> Provider { $provider_type }
 
             fn stream(
@@ -93,7 +93,7 @@ macro_rules! define_openai_delegation_provider {
                 if opts.api_key.is_none() {
                     opts.api_key = self.resolve_api_key(&opts);
                 }
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(model, context, opts)
             }
 
@@ -107,7 +107,7 @@ macro_rules! define_openai_delegation_provider {
                 if opts.base.api_key.is_none() {
                     opts.base.api_key = self.resolve_api_key(&opts.base);
                 }
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(model, context, opts)
             }
         }
@@ -159,7 +159,7 @@ macro_rules! define_openai_delegation_provider {
         }
 
         #[async_trait::async_trait]
-        impl crate::provider::LLMProvider for $name {
+        impl crate::protocol::LLMProtocol for $name {
             fn provider_type(&self) -> Provider { $provider_type }
 
             fn stream(
@@ -179,7 +179,7 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(&model, context, opts)
             }
 
@@ -200,7 +200,7 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(&model, context, opts)
             }
         }
@@ -252,7 +252,7 @@ macro_rules! define_openai_delegation_provider {
         }
 
         #[async_trait::async_trait]
-        impl crate::provider::LLMProvider for $name {
+        impl crate::protocol::LLMProtocol for $name {
             fn provider_type(&self) -> Provider { $provider_type }
 
             fn stream(
@@ -272,7 +272,7 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(&model, context, opts)
             }
 
@@ -293,14 +293,14 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = super::openai_completions::OpenAICompletionsProvider::new();
+                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(&model, context, opts)
             }
         }
     };
 }
 
-/// Generate a delegation provider that delegates to `AnthropicProvider`.
+/// Generate a delegation provider that delegates to `AnthropicProtocol`.
 macro_rules! define_anthropic_delegation_provider {
     (
         name: $name:ident,
@@ -341,7 +341,7 @@ macro_rules! define_anthropic_delegation_provider {
         }
 
         #[async_trait::async_trait]
-        impl crate::provider::LLMProvider for $name {
+        impl crate::protocol::LLMProtocol for $name {
             fn provider_type(&self) -> Provider { $provider_type }
 
             fn stream(
@@ -354,7 +354,7 @@ macro_rules! define_anthropic_delegation_provider {
                 if opts.api_key.is_none() {
                     opts.api_key = self.resolve_api_key(&opts);
                 }
-                let provider = super::anthropic::AnthropicProvider::new();
+                let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                 provider.stream(model, context, opts)
             }
 
@@ -368,7 +368,7 @@ macro_rules! define_anthropic_delegation_provider {
                 if opts.base.api_key.is_none() {
                     opts.base.api_key = self.resolve_api_key(&opts.base);
                 }
-                let provider = super::anthropic::AnthropicProvider::new();
+                let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                 provider.stream_simple(model, context, opts)
             }
         }

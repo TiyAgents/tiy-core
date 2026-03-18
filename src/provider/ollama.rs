@@ -1,6 +1,6 @@
 //! Ollama API provider (OpenAI compatible).
 
-use crate::provider::LLMProvider;
+use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
 use crate::types::{SimpleStreamOptions, StreamOptions};
@@ -34,7 +34,7 @@ impl Default for OllamaProvider {
 }
 
 #[async_trait]
-impl LLMProvider for OllamaProvider {
+impl LLMProtocol for OllamaProvider {
     fn provider_type(&self) -> Provider {
         Provider::Ollama
     }
@@ -52,7 +52,7 @@ impl LLMProvider for OllamaProvider {
             ..model.clone()
         };
 
-        let provider = super::openai_completions::OpenAICompletionsProvider::new();
+        let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
         provider.stream(&ollama_model, context, options)
     }
 
@@ -67,7 +67,7 @@ impl LLMProvider for OllamaProvider {
             ..model.clone()
         };
 
-        let provider = super::openai_completions::OpenAICompletionsProvider::new();
+        let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
         provider.stream_simple(&ollama_model, context, options)
     }
 }

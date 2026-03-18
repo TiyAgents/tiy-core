@@ -1,7 +1,7 @@
 //! Tests for Zenmux provider internal logic and stream dispatch.
 
 use tiy_core::provider::zenmux::ZenmuxProvider;
-use tiy_core::provider::LLMProvider;
+use tiy_core::provider::LLMProtocol;
 use tiy_core::types::*;
 use wiremock::matchers;
 use wiremock::{Mock, MockServer, ResponseTemplate};

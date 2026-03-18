@@ -2,8 +2,8 @@
 
 use futures::StreamExt;
 use serde_json::json;
-use tiy_core::provider::anthropic::AnthropicProvider;
-use tiy_core::provider::LLMProvider;
+use tiy_core::protocol::anthropic::AnthropicProtocol;
+use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -53,7 +53,7 @@ fn anthropic_sse(events: Vec<(&str, &str)>) -> String {
 
 #[test]
 fn test_provider_type() {
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     assert_eq!(provider.provider_type(), Provider::Anthropic);
 }
 
@@ -143,7 +143,7 @@ async fn test_stream_simple_text_response() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("test-key");
@@ -259,7 +259,7 @@ async fn test_stream_with_tool_call() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("You are helpful.", "What's the weather in Tokyo?");
     context.set_tools(vec![Tool::new(
@@ -293,7 +293,7 @@ async fn test_stream_http_error() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "Hello");
     let options = make_options("invalid-key");
@@ -415,7 +415,7 @@ async fn test_stream_with_thinking() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("You are helpful.", "What is the meaning of life?");
     let options = make_options("test-key");
@@ -502,7 +502,7 @@ async fn test_stream_usage_tracking() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -593,7 +593,7 @@ async fn test_stream_length_stop_reason() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -652,7 +652,7 @@ async fn test_stream_sse_error_event() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -672,13 +672,13 @@ async fn test_stream_sse_error_event() {
 
 #[test]
 fn test_provider_with_api_key() {
-    let provider = AnthropicProvider::with_api_key("sk-ant-test");
+    let provider = AnthropicProtocol::with_api_key("sk-ant-test");
     assert_eq!(provider.provider_type(), Provider::Anthropic);
 }
 
 #[test]
 fn test_provider_default() {
-    let provider = AnthropicProvider::default();
+    let provider = AnthropicProtocol::default();
     assert_eq!(provider.provider_type(), Provider::Anthropic);
 }
 
@@ -705,7 +705,7 @@ async fn test_stream_simple_delegates_correctly() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let stream = provider.stream_simple(
@@ -748,7 +748,7 @@ async fn test_stream_stop_sequence_reason() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -784,7 +784,7 @@ async fn test_stream_redacted_thinking() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "think about it");
     let options = make_options("key");
@@ -822,7 +822,7 @@ async fn test_stream_with_signature_delta() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "think deeply");
     let options = make_options("key");
@@ -858,7 +858,7 @@ async fn test_stream_unknown_event_type_ignored() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -895,7 +895,7 @@ async fn test_stream_done_in_data() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
@@ -1001,7 +1001,7 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
 
     let model = make_model(&server.uri());
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let options = make_options("key");
 
     let stream = provider.stream(&model, &ctx, options);
@@ -1056,7 +1056,7 @@ async fn test_stream_with_redacted_thinking_in_context() {
     ctx.add_message(Message::User(UserMessage::text("go on")));
 
     let model = make_model(&server.uri());
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let options = make_options("key");
 
     let stream = provider.stream(&model, &ctx, options);
@@ -1103,7 +1103,7 @@ async fn test_stream_with_image_user_content() {
     }));
 
     let model = make_model(&server.uri());
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let options = make_options("key");
 
     let stream = provider.stream(&model, &ctx, options);
@@ -1125,7 +1125,7 @@ async fn test_stream_http_error_response() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new();
+    let provider = AnthropicProtocol::new();
     let model = make_model(&server.uri());
     let context = make_context("test", "hello");
     let options = make_options("key");
