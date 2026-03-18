@@ -55,7 +55,7 @@ graph TD
 | **Types** | `src/types/` | Provider-agnostic data model: `Message`, `ContentBlock`, `Model`, `Tool`, `Context`, `SecurityConfig` |
 | **Provider** | `src/provider/` | `LLMProvider` trait + protocol & delegation implementations |
 | **Stream** | `src/stream/` | Generic `EventStream<T, R>` implementing `futures::Stream` |
-| **Agent** | `src/agent/` | Stateful conversation manager with tool execution loop |
+| **Agent** | `src/agent/` | Stateful conversation manager with tool execution loop ([full docs](./src/agent/README.md)) |
 | **Transform** | `src/transform/` | Cross-provider message transformation (thinking blocks, tool call IDs, orphan resolution) |
 | **Thinking** | `src/thinking/` | `ThinkingLevel` enum and provider-specific thinking options |
 | **Validation** | `src/validation/` | JSON Schema validation for tool parameters |
@@ -144,58 +144,43 @@ async fn main() {
 
     let agent = Agent::with_model(
         Model::builder()
-            .id("gpt-4o-mini")
-            .name("GPT-4o Mini")
+            .id("gpt-4o-mini").name("GPT-4o Mini")
             .provider(Provider::OpenAI)
-            .context_window(128000)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
+            .context_window(128000).max_tokens(16384)
+            .build().unwrap(),
     );
 
     agent.set_api_key(std::env::var("OPENAI_API_KEY").unwrap());
     agent.set_system_prompt("You are a helpful assistant with access to tools.");
-
-    // Define tools
     agent.set_tools(vec![AgentTool::new(
-        "get_weather",
-        "Get Weather",
-        "Get current weather for a city",
+        "get_weather", "Get Weather", "Get current weather for a city",
         serde_json::json!({
             "type": "object",
-            "properties": {
-                "city": { "type": "string", "description": "City name" }
-            },
+            "properties": { "city": { "type": "string" } },
             "required": ["city"]
         }),
     )]);
-
-    // Register tool executor
-    agent.set_tool_executor(|name, _id, args| async move {
-        match name {
-            "get_weather" => {
-                let city = args["city"].as_str().unwrap_or("unknown");
-                AgentToolResult::text(format!("Weather in {city}: 22°C, sunny"))
+    agent.set_tool_executor_simple(|name, _id, args| {
+        let name = name.to_string();
+        let args = args.clone();
+        async move {
+            match name.as_str() {
+                "get_weather" => {
+                    let city = args["city"].as_str().unwrap_or("unknown");
+                    AgentToolResult::text(format!("Weather in {city}: 22°C, sunny"))
+                }
+                _ => AgentToolResult::error(format!("Unknown tool: {name}")),
             }
-            _ => AgentToolResult::error(format!("Unknown tool: {name}")),
         }
     });
 
-    // Subscribe to events
-    let _unsub = agent.subscribe(|event| {
-        println!("Event: {event:?}");
-    });
-
-    // Run a prompt — the agent loops automatically:
-    // LLM → tool calls → execute → re-prompt → until done
-    let messages = agent
-        .prompt(UserMessage::text("What's the weather in Tokyo?").into())
-        .await
-        .unwrap();
-
+    // The agent loops automatically: LLM → tool calls → execute → re-prompt → done
+    let messages = agent.prompt("What's the weather in Tokyo?").await.unwrap();
     println!("Agent produced {} messages", messages.len());
 }
 ```
+
+The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), context pipeline (transformContext / convertToLlm), event subscription, steering & follow-up queues, thinking budgets, custom messages, and more. See the full **[Agent Module Documentation](./src/agent/README.md)** for details.
 
 ## Supported Providers
 
@@ -450,6 +435,7 @@ src/
 ├── stream/
 │   └── event_stream.rs # Generic EventStream<T, R> + AssistantMessageEventStream
 ├── agent/
+│   ├── README.md      # Full Agent module documentation
 │   ├── agent.rs        # Agent loop: stream → tools → re-prompt
 │   ├── state.rs        # Thread-safe AgentState
 │   └── types.rs        # AgentConfig, AgentEvent, AgentTool, ToolExecutionMode

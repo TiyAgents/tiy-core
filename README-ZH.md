@@ -55,7 +55,7 @@ graph TD
 | **Types** | `src/types/` | 与提供商无关的数据模型：`Message`、`ContentBlock`、`Model`、`Tool`、`Context`、`SecurityConfig` |
 | **Provider** | `src/provider/` | `LLMProvider` trait + 协议与代理实现 |
 | **Stream** | `src/stream/` | 通用 `EventStream<T, R>`，实现 `futures::Stream` |
-| **Agent** | `src/agent/` | 有状态对话管理器，含工具执行循环 |
+| **Agent** | `src/agent/` | 有状态对话管理器，含工具执行循环（[完整文档](./src/agent/README.md)） |
 | **Transform** | `src/transform/` | 跨提供商消息变换（思维块转换、工具调用 ID 规范化、孤儿工具调用处理） |
 | **Thinking** | `src/thinking/` | `ThinkingLevel` 枚举及提供商特定的思维选项 |
 | **Validation** | `src/validation/` | 工具参数 JSON Schema 验证 |
@@ -144,58 +144,43 @@ async fn main() {
 
     let agent = Agent::with_model(
         Model::builder()
-            .id("gpt-4o-mini")
-            .name("GPT-4o Mini")
+            .id("gpt-4o-mini").name("GPT-4o Mini")
             .provider(Provider::OpenAI)
-            .context_window(128000)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
+            .context_window(128000).max_tokens(16384)
+            .build().unwrap(),
     );
 
     agent.set_api_key(std::env::var("OPENAI_API_KEY").unwrap());
     agent.set_system_prompt("你是一个有工具访问权限的助手。");
-
-    // 定义工具
     agent.set_tools(vec![AgentTool::new(
-        "get_weather",
-        "获取天气",
-        "获取指定城市的当前天气",
+        "get_weather", "获取天气", "获取指定城市的当前天气",
         serde_json::json!({
             "type": "object",
-            "properties": {
-                "city": { "type": "string", "description": "城市名称" }
-            },
+            "properties": { "city": { "type": "string", "description": "城市名称" } },
             "required": ["city"]
         }),
     )]);
-
-    // 注册工具执行器
-    agent.set_tool_executor(|name, _id, args| async move {
-        match name {
-            "get_weather" => {
-                let city = args["city"].as_str().unwrap_or("未知");
-                AgentToolResult::text(format!("{city} 的天气：22°C，晴"))
+    agent.set_tool_executor_simple(|name, _id, args| {
+        let name = name.to_string();
+        let args = args.clone();
+        async move {
+            match name.as_str() {
+                "get_weather" => {
+                    let city = args["city"].as_str().unwrap_or("未知");
+                    AgentToolResult::text(format!("{city} 的天气：22°C，晴"))
+                }
+                _ => AgentToolResult::error(format!("未知工具: {name}")),
             }
-            _ => AgentToolResult::error(format!("未知工具: {name}")),
         }
     });
 
-    // 订阅事件
-    let _unsub = agent.subscribe(|event| {
-        println!("事件: {event:?}");
-    });
-
-    // 执行提示 — Agent 自动循环：
-    // LLM → 工具调用 → 执行 → 重新请求 → 直至完成
-    let messages = agent
-        .prompt(UserMessage::text("东京的天气怎么样？").into())
-        .await
-        .unwrap();
-
+    // Agent 自动循环：LLM → 工具调用 → 执行 → 重新请求 → 直至完成
+    let messages = agent.prompt("东京的天气怎么样？").await.unwrap();
     println!("Agent 产生了 {} 条消息", messages.len());
 }
 ```
+
+Agent 还支持钩子（beforeToolCall / afterToolCall / onPayload）、上下文管道（transformContext / convertToLlm）、事件订阅、引导 / 后续消息队列、思维链预算、自定义消息等更多能力。详见 **[Agent 模块完整文档](./src/agent/README.md)**。
 
 ## 支持的提供商
 
@@ -450,6 +435,7 @@ src/
 ├── stream/
 │   └── event_stream.rs # 通用 EventStream<T, R> + AssistantMessageEventStream
 ├── agent/
+│   ├── README.md      # Agent 模块完整文档
 │   ├── agent.rs        # Agent 循环：流式 → 工具 → 重新请求
 │   ├── state.rs        # 线程安全的 AgentState
 │   └── types.rs        # AgentConfig, AgentEvent, AgentTool, ToolExecutionMode
