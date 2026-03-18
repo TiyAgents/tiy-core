@@ -231,16 +231,17 @@ impl Agent {
     pub fn set_after_tool_call<F, Fut>(&self, hook: F)
     where
         F: Fn(AfterToolCallContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Option<crate::agent::AfterToolCallResult>> + Send + 'static,
+        Fut: std::future::Future<Output = Option<crate::agent::AfterToolCallResult>>
+            + Send
+            + 'static,
     {
         let hook = Arc::new(move |ctx: AfterToolCallContext| {
             let fut = hook(ctx);
             Box::pin(fut)
                 as std::pin::Pin<
                     Box<
-                        dyn std::future::Future<
-                                Output = Option<crate::agent::AfterToolCallResult>,
-                            > + Send,
+                        dyn std::future::Future<Output = Option<crate::agent::AfterToolCallResult>>
+                            + Send,
                     >,
                 >
         });
@@ -673,7 +674,11 @@ impl Agent {
                 .thinking_budgets
                 .as_ref()
                 .and_then(|b| b.budget_for(thinking_level))
-                .or_else(|| Some(crate::thinking::ThinkingConfig::default_budget(thinking_level)));
+                .or_else(|| {
+                    Some(crate::thinking::ThinkingConfig::default_budget(
+                        thinking_level,
+                    ))
+                });
             (Some(thinking_level), budget)
         } else {
             (None, None)
@@ -695,12 +700,11 @@ impl Agent {
 
         // Create the stream (custom stream_fn or default provider via stream_simple)
         let stream_fn = self.hooks.read().stream_fn.clone();
-        let mut stream: AssistantMessageEventStream =
-            if let Some(ref custom_stream) = stream_fn {
-                custom_stream(&model, &context, options.base).await
-            } else {
-                provider.stream_simple(&model, &context, options)
-            };
+        let mut stream: AssistantMessageEventStream = if let Some(ref custom_stream) = stream_fn {
+            custom_stream(&model, &context, options.base).await
+        } else {
+            provider.stream_simple(&model, &context, options)
+        };
 
         // Process stream events
         while let Some(event) = stream.next().await {
@@ -844,9 +848,16 @@ impl Agent {
 
                     // beforeToolCall hook
                     if let Some(result) = run_before_hook(
-                        &before_hook, assistant_msg, &tc_clone, &tc_args, context,
-                        &tc_id, &tc_name,
-                    ).await {
+                        &before_hook,
+                        assistant_msg,
+                        &tc_clone,
+                        &tc_args,
+                        context,
+                        &tc_id,
+                        &tc_name,
+                    )
+                    .await
+                    {
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
@@ -866,8 +877,8 @@ impl Agent {
                     let subscribers = Arc::clone(&self.subscribers);
 
                     tool_futures.push(async move {
-                        let (final_content, final_is_error) = execute_and_apply_after_hook(
-                            ToolExecCtx {
+                        let (final_content, final_is_error) =
+                            execute_and_apply_after_hook(ToolExecCtx {
                                 executor: &executor,
                                 after_hook: &after_hook,
                                 subscribers: &subscribers,
@@ -879,8 +890,8 @@ impl Agent {
                                 context: &context_clone,
                                 tool_timeout,
                                 abort_flag: abort,
-                            },
-                        ).await;
+                            })
+                            .await;
 
                         (tc_id, tc_name, final_content, final_is_error)
                     });
@@ -941,9 +952,16 @@ impl Agent {
 
                     // beforeToolCall hook
                     if let Some(result) = run_before_hook(
-                        &before_hook, assistant_msg, &tc_clone, &tc_args, context,
-                        &tc_id, &tc_name,
-                    ).await {
+                        &before_hook,
+                        assistant_msg,
+                        &tc_clone,
+                        &tc_args,
+                        context,
+                        &tc_id,
+                        &tc_name,
+                    )
+                    .await
+                    {
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
@@ -956,8 +974,8 @@ impl Agent {
                     }
 
                     let abort_flag = Arc::clone(&self.abort_flag);
-                    let (final_content, final_is_error) = execute_and_apply_after_hook(
-                        ToolExecCtx {
+                    let (final_content, final_is_error) =
+                        execute_and_apply_after_hook(ToolExecCtx {
                             executor: &executor,
                             after_hook: &after_hook,
                             subscribers: &self.subscribers,
@@ -969,11 +987,11 @@ impl Agent {
                             context,
                             tool_timeout,
                             abort_flag,
-                        },
-                    ).await;
+                        })
+                        .await;
 
-                    let result_json = serde_json::to_value(&final_content)
-                        .unwrap_or(serde_json::Value::Null);
+                    let result_json =
+                        serde_json::to_value(&final_content).unwrap_or(serde_json::Value::Null);
                     self.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
@@ -1066,8 +1084,7 @@ impl Agent {
                     if assistant_msg.has_tool_calls()
                         && assistant_msg.stop_reason == StopReason::ToolUse
                     {
-                        let tool_results =
-                            self.execute_tool_calls(&assistant_msg, &context).await;
+                        let tool_results = self.execute_tool_calls(&assistant_msg, &context).await;
 
                         for result in &tool_results {
                             let result_msg = AgentMessage::ToolResult(result.clone());

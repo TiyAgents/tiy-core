@@ -1093,7 +1093,11 @@ async fn test_stream_text_then_tool_call() {
     let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
     let mut context = make_context("test", "find info");
-    context.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    context.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type":"object","properties":{"q":{"type":"string"}}}),
+    )]);
     let options = make_options("key");
 
     let stream = provider.stream(&model, &context, options);
@@ -1174,28 +1178,51 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     ctx.add_message(Message::User(UserMessage::text("search for info")));
     // Assistant with text + tool call (composite ID)
     let asst = AssistantMessage::builder()
-        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
+        .api(Api::OpenAIResponses)
+        .provider(Provider::OpenAIResponses)
+        .model("gpt-4o")
         .content(vec![
-            ContentBlock::Text(TextContent { text: "Searching".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "Searching".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::ToolCall(ToolCall {
-                id: "call_1|fc_item1".to_string(), name: "search".to_string(),
-                arguments: json!({"q": "test"}), thought_signature: None,
+                id: "call_1|fc_item1".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"q": "test"}),
+                thought_signature: None,
             }),
         ])
         .stop_reason(StopReason::ToolUse)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
     // Tool result with composite ID
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("call_1|fc_item1", "search", "found data", false)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "call_1|fc_item1",
+        "search",
+        "found data",
+        false,
+    )));
     // Errored assistant (should be skipped)
     let asst_err = AssistantMessage::builder()
-        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
-        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .api(Api::OpenAIResponses)
+        .provider(Provider::OpenAIResponses)
+        .model("gpt-4o")
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "err".to_string(),
+            text_signature: None,
+        })])
         .stop_reason(StopReason::Error)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst_err));
     ctx.add_message(Message::User(UserMessage::text("go on")));
-    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    ctx.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type":"object","properties":{"q":{"type":"string"}}}),
+    )]);
 
     let provider = OpenAIResponsesProtocol::new();
     let model = make_model(&server.uri());
@@ -1231,7 +1258,10 @@ async fn test_stream_with_image_user_content() {
     ctx.add_message(Message::User(UserMessage {
         role: Role::User,
         content: UserContent::Blocks(vec![
-            ContentBlock::Text(TextContent { text: "What is this?".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "What is this?".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::Image(ImageContent {
                 mime_type: "image/jpeg".to_string(),
                 data: "/9j/4AA=".to_string(),
@@ -1274,16 +1304,26 @@ async fn test_stream_non_composite_tool_call_id() {
     ctx.add_message(Message::User(UserMessage::text("use tool")));
     // Assistant with non-composite tool call ID (no "|")
     let asst = AssistantMessage::builder()
-        .api(Api::OpenAIResponses).provider(Provider::OpenAIResponses).model("gpt-4o")
+        .api(Api::OpenAIResponses)
+        .provider(Provider::OpenAIResponses)
+        .model("gpt-4o")
         .content(vec![ContentBlock::ToolCall(ToolCall {
-            id: "simple_id".to_string(), name: "fn_a".to_string(),
-            arguments: json!({"x": 1}), thought_signature: None,
+            id: "simple_id".to_string(),
+            name: "fn_a".to_string(),
+            arguments: json!({"x": 1}),
+            thought_signature: None,
         })])
         .stop_reason(StopReason::ToolUse)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
     // Tool result with non-composite ID
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("simple_id", "fn_a", "result", false)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "simple_id",
+        "fn_a",
+        "result",
+        false,
+    )));
     ctx.add_message(Message::User(UserMessage::text("continue")));
 
     let provider = OpenAIResponsesProtocol::new();
@@ -1328,10 +1368,7 @@ async fn test_stream_http_error_response() {
 
     Mock::given(method("POST"))
         .and(path("/responses"))
-        .respond_with(
-            ResponseTemplate::new(500)
-                .set_body_string("Internal server error"),
-        )
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal server error"))
         .mount(&server)
         .await;
 

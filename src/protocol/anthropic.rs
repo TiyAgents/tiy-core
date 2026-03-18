@@ -519,8 +519,15 @@ async fn run_stream(
 
     if !response.status().is_success() {
         super::common::handle_error_response(
-            response, &url, model, &limits, &mut output, &stream, "Anthropic Messages",
-        ).await;
+            response,
+            &url,
+            model,
+            &limits,
+            &mut output,
+            &stream,
+            "Anthropic Messages",
+        )
+        .await;
         return Ok(());
     }
 

@@ -460,7 +460,11 @@ async fn run_stream(
     let base = super::common::resolve_base_url(
         options.base_url.as_deref(),
         model.base_url.as_deref(),
-        if is_vertex { DEFAULT_VERTEX_BASE_URL } else { DEFAULT_BASE_URL },
+        if is_vertex {
+            DEFAULT_VERTEX_BASE_URL
+        } else {
+            DEFAULT_BASE_URL
+        },
     );
 
     // H1: Validate base URL against security policy
@@ -515,8 +519,15 @@ async fn run_stream(
 
     if !response.status().is_success() {
         super::common::handle_error_response(
-            response, &url, model, &limits, &mut output, &stream, "Google GenerativeAI",
-        ).await;
+            response,
+            &url,
+            model,
+            &limits,
+            &mut output,
+            &stream,
+            "Google GenerativeAI",
+        )
+        .await;
         return Ok(());
     }
 

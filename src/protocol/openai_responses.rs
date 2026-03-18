@@ -449,8 +449,15 @@ async fn run_stream(
 
     if !response.status().is_success() {
         super::common::handle_error_response(
-            response, &url, model, &limits, &mut output, &stream, "OpenAI Responses",
-        ).await;
+            response,
+            &url,
+            model,
+            &limits,
+            &mut output,
+            &stream,
+            "OpenAI Responses",
+        )
+        .await;
         return Ok(());
     }
 

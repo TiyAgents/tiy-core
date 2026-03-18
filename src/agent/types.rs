@@ -362,7 +362,8 @@ pub struct AfterToolCallResult {
 pub type BeforeToolCallFn = Arc<
     dyn Fn(
             BeforeToolCallContext,
-        ) -> Pin<Box<dyn std::future::Future<Output = Option<BeforeToolCallResult>> + Send>>
+        )
+            -> Pin<Box<dyn std::future::Future<Output = Option<BeforeToolCallResult>> + Send>>
         + Send
         + Sync,
 >;
@@ -374,7 +375,8 @@ pub type BeforeToolCallFn = Arc<
 pub type AfterToolCallFn = Arc<
     dyn Fn(
             AfterToolCallContext,
-        ) -> Pin<Box<dyn std::future::Future<Output = Option<AfterToolCallResult>> + Send>>
+        )
+            -> Pin<Box<dyn std::future::Future<Output = Option<AfterToolCallResult>> + Send>>
         + Send
         + Sync,
 >;
@@ -385,9 +387,7 @@ pub type AfterToolCallFn = Arc<
 /// Return `Some(key)` to override the static API key, or `None` to fall back
 /// to the configured key.
 pub type GetApiKeyFn = Arc<
-    dyn Fn(&str) -> Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(&str) -> Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>> + Send + Sync,
 >;
 
 /// Payload inspection / replacement hook (re-exported from crate::types).
@@ -429,9 +429,11 @@ pub type StreamFn = Arc<
             &Model,
             &Context,
             StreamOptions,
-        )
-            -> Pin<Box<dyn std::future::Future<Output = crate::stream::AssistantMessageEventStream> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = crate::stream::AssistantMessageEventStream> + Send,
+            >,
+        > + Send
         + Sync,
 >;
 

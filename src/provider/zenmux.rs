@@ -137,7 +137,8 @@ impl LLMProtocol for ZenmuxProvider {
                 ProtocolRoute::OpenAI => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     m.api = Some(Api::OpenAIResponses);
-                    let provider = crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
+                    let provider =
+                        crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {
@@ -180,7 +181,8 @@ impl LLMProtocol for ZenmuxProvider {
                 ProtocolRoute::OpenAI => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     m.api = Some(Api::OpenAIResponses);
-                    let provider = crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
+                    let provider =
+                        crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {

@@ -947,7 +947,10 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
                 thinking_signature: Some("sig_1".to_string()),
                 redacted: false,
             }),
-            ContentBlock::Text(TextContent { text: "response".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "response".to_string(),
+                text_signature: None,
+            }),
         ])
         .stop_reason(StopReason::Stop)
         .build()
@@ -973,14 +976,22 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     ctx.add_message(Message::Assistant(asst2));
 
     // Tool result
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_1", "search", "found result", false)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "tc_1",
+        "search",
+        "found result",
+        false,
+    )));
 
     // Errored assistant (should be skipped)
     let asst_err = AssistantMessage::builder()
         .api(Api::AnthropicMessages)
         .provider(Provider::Anthropic)
         .model("claude-3-5-sonnet")
-        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "err".to_string(),
+            text_signature: None,
+        })])
         .stop_reason(StopReason::Error)
         .build()
         .unwrap();
@@ -991,14 +1002,21 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
         .api(Api::AnthropicMessages)
         .provider(Provider::Anthropic)
         .model("claude-3-5-sonnet")
-        .content(vec![ContentBlock::Text(TextContent { text: "abort".to_string(), text_signature: None })])
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "abort".to_string(),
+            text_signature: None,
+        })])
         .stop_reason(StopReason::Aborted)
         .build()
         .unwrap();
     ctx.add_message(Message::Assistant(asst_abort));
 
     ctx.add_message(Message::User(UserMessage::text("continue")));
-    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    ctx.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type":"object","properties":{"q":{"type":"string"}}}),
+    )]);
 
     let model = make_model(&server.uri());
     let provider = AnthropicProtocol::new();
@@ -1047,7 +1065,10 @@ async fn test_stream_with_redacted_thinking_in_context() {
                 thinking_signature: None,
                 redacted: true,
             }),
-            ContentBlock::Text(TextContent { text: "prev response".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "prev response".to_string(),
+                text_signature: None,
+            }),
         ])
         .stop_reason(StopReason::Stop)
         .build()
@@ -1093,7 +1114,10 @@ async fn test_stream_with_image_user_content() {
     ctx.add_message(Message::User(UserMessage {
         role: Role::User,
         content: UserContent::Blocks(vec![
-            ContentBlock::Text(TextContent { text: "What is this?".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "What is this?".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::Image(ImageContent {
                 mime_type: "image/png".to_string(),
                 data: "iVBORw0KGgo=".to_string(),
@@ -1118,10 +1142,9 @@ async fn test_stream_http_error_response() {
 
     Mock::given(method("POST"))
         .and(path("/messages"))
-        .respond_with(
-            ResponseTemplate::new(529)
-                .set_body_string(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
-        )
+        .respond_with(ResponseTemplate::new(529).set_body_string(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ))
         .mount(&server)
         .await;
 

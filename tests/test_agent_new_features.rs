@@ -250,7 +250,10 @@ async fn test_follow_up_one_at_a_time_mode() {
     assert!(result.is_ok());
 
     // Provider should be called multiple times (start + follow-ups)
-    assert!(mock.call_count() >= 2, "Expected multiple calls for follow-ups in one-at-a-time mode");
+    assert!(
+        mock.call_count() >= 2,
+        "Expected multiple calls for follow-ups in one-at-a-time mode"
+    );
 }
 
 // ============================================================================
@@ -265,12 +268,30 @@ fn test_thinking_budgets_budget_for() {
         medium: None,
         high: Some(4096),
     };
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::Minimal), Some(64));
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::Low), Some(256));
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::Medium), None);
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::High), Some(4096));
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::Off), None);
-    assert_eq!(budgets.budget_for(tiy_core::thinking::ThinkingLevel::XHigh), None);
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Minimal),
+        Some(64)
+    );
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Low),
+        Some(256)
+    );
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Medium),
+        None
+    );
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::High),
+        Some(4096)
+    );
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Off),
+        None
+    );
+    assert_eq!(
+        budgets.budget_for(tiy_core::thinking::ThinkingLevel::XHigh),
+        None
+    );
 }
 
 #[test]
@@ -329,13 +350,15 @@ fn test_max_retry_delay_setter_getter() {
 async fn test_before_tool_call_allows_execution() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({"x": 1}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "my_tool", "My Tool", "description", json!({"type": "object"}),
+        "my_tool",
+        "My Tool",
+        "description",
+        json!({"type": "object"}),
     )]);
 
     let hook_called = Arc::new(AtomicUsize::new(0));
@@ -357,20 +380,26 @@ async fn test_before_tool_call_allows_execution() {
 
     let result = agent.prompt("go").await;
     assert!(result.is_ok());
-    assert_eq!(hook_called.load(Ordering::SeqCst), 1, "beforeToolCall hook should be called once");
+    assert_eq!(
+        hook_called.load(Ordering::SeqCst),
+        1,
+        "beforeToolCall hook should be called once"
+    );
 }
 
 #[tokio::test]
 async fn test_before_tool_call_blocks_execution() {
     let tool_response = make_tool_call_message("dangerous_tool", "call_1", json!({}));
     let final_response = make_assistant_message("OK, I won't do that.");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "dangerous_tool", "Danger", "dangerous", json!({"type": "object"}),
+        "dangerous_tool",
+        "Danger",
+        "dangerous",
+        json!({"type": "object"}),
     )]);
 
     let executor_called = Arc::new(AtomicUsize::new(0));
@@ -396,7 +425,11 @@ async fn test_before_tool_call_blocks_execution() {
     assert!(result.is_ok());
 
     // Tool executor should NOT have been called
-    assert_eq!(executor_called.load(Ordering::SeqCst), 0, "Blocked tool should not be executed");
+    assert_eq!(
+        executor_called.load(Ordering::SeqCst),
+        0,
+        "Blocked tool should not be executed"
+    );
 
     // Should have a tool result with the blocked reason
     let messages = result.unwrap();
@@ -427,18 +460,22 @@ async fn test_before_tool_call_blocks_execution() {
 async fn test_after_tool_call_overrides_content() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "my_tool", "My Tool", "desc", json!({"type": "object"}),
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({"type": "object"}),
     )]);
 
     agent.set_after_tool_call(move |_ctx| async move {
         Some(AfterToolCallResult {
-            content: Some(vec![ContentBlock::Text(TextContent::new("overridden content"))]),
+            content: Some(vec![ContentBlock::Text(TextContent::new(
+                "overridden content",
+            ))]),
             details: None,
             is_error: Some(false),
         })
@@ -476,13 +513,15 @@ async fn test_after_tool_call_overrides_content() {
 async fn test_after_tool_call_override_is_error() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "my_tool", "My Tool", "desc", json!({"type": "object"}),
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({"type": "object"}),
     )]);
 
     // Override is_error to true even though original succeeded
@@ -512,7 +551,10 @@ async fn test_after_tool_call_override_is_error() {
         })
         .collect();
     assert_eq!(tool_results.len(), 1);
-    assert!(tool_results[0].is_error, "afterToolCall should have overridden is_error to true");
+    assert!(
+        tool_results[0].is_error,
+        "afterToolCall should have overridden is_error to true"
+    );
 }
 
 // ============================================================================
@@ -565,7 +607,10 @@ async fn test_convert_to_llm_custom_converter() {
 
     let result = agent.prompt("hello").await;
     assert!(result.is_ok());
-    assert!(converter_called.load(Ordering::SeqCst) >= 1, "Custom converter should be called");
+    assert!(
+        converter_called.load(Ordering::SeqCst) >= 1,
+        "Custom converter should be called"
+    );
 }
 
 // ============================================================================
@@ -644,13 +689,15 @@ async fn test_get_api_key_dynamic_resolution() {
 async fn test_tool_execution_update_events() {
     let tool_response = make_tool_call_message("streaming_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "streaming_tool", "Streaming Tool", "desc", json!({"type": "object"}),
+        "streaming_tool",
+        "Streaming Tool",
+        "desc",
+        json!({"type": "object"}),
     )]);
 
     let update_count = Arc::new(AtomicUsize::new(0));
@@ -696,8 +743,7 @@ async fn test_tool_execution_update_events() {
 async fn test_tool_executor_simple_works() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
@@ -779,13 +825,15 @@ fn test_agent_event_tool_execution_update_serialization() {
 async fn test_both_hooks_called_in_order() {
     let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
     let final_response = make_assistant_message("Done");
-    let provider: ArcProtocol =
-        Arc::new(MockProvider::new(vec![tool_response, final_response]));
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
 
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
     agent.set_tools(vec![AgentTool::new(
-        "my_tool", "My Tool", "desc", json!({"type": "object"}),
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({"type": "object"}),
     )]);
 
     let before_called = Arc::new(AtomicUsize::new(0));
@@ -894,18 +942,14 @@ impl LLMProtocol for CapturingMockProvider {
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
         // Capture all fields from SimpleStreamOptions
-        self.captured_reasoning
-            .lock()
-            .push(options.reasoning);
+        self.captured_reasoning.lock().push(options.reasoning);
         self.captured_budget
             .lock()
             .push(options.thinking_budget_tokens);
         self.captured_session_id
             .lock()
             .push(options.base.session_id.clone());
-        self.captured_transport
-            .lock()
-            .push(options.base.transport);
+        self.captured_transport.lock().push(options.base.transport);
         self.captured_max_retry_delay
             .lock()
             .push(options.base.max_retry_delay_ms);
@@ -969,7 +1013,11 @@ async fn test_thinking_budgets_flow_to_provider() {
     assert_eq!(captured_reasoning.len(), 1);
     assert_eq!(captured_reasoning[0], Some(ThinkingLevel::Medium));
     assert_eq!(captured_budget.len(), 1);
-    assert_eq!(captured_budget[0], Some(2048), "Should use custom budget for Medium");
+    assert_eq!(
+        captured_budget[0],
+        Some(2048),
+        "Should use custom budget for Medium"
+    );
 }
 
 #[tokio::test]
@@ -993,7 +1041,9 @@ async fn test_thinking_budgets_default_fallback() {
     assert_eq!(captured_reasoning[0], Some(ThinkingLevel::Low));
     assert_eq!(
         captured_budget[0],
-        Some(tiy_core::thinking::ThinkingConfig::default_budget(ThinkingLevel::Low)),
+        Some(tiy_core::thinking::ThinkingConfig::default_budget(
+            ThinkingLevel::Low
+        )),
         "Should fall back to default budget (512) when no custom budgets set"
     );
 }
@@ -1016,8 +1066,14 @@ async fn test_thinking_off_no_budget() {
     let captured_reasoning = mock.captured_reasoning.lock();
     let captured_budget = mock.captured_budget.lock();
 
-    assert_eq!(captured_reasoning[0], None, "Thinking Off should send reasoning=None");
-    assert_eq!(captured_budget[0], None, "Thinking Off should send budget=None");
+    assert_eq!(
+        captured_reasoning[0], None,
+        "Thinking Off should send reasoning=None"
+    );
+    assert_eq!(
+        captured_budget[0], None,
+        "Thinking Off should send budget=None"
+    );
 }
 
 // ============================================================================

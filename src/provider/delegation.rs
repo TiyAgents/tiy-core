@@ -55,12 +55,16 @@ macro_rules! define_openai_delegation_provider {
         impl $name {
             /// Create a new provider.
             pub fn new() -> Self {
-                Self { default_api_key: None }
+                Self {
+                    default_api_key: None,
+                }
             }
 
             /// Create a provider with a default API key.
             pub fn with_api_key(api_key: impl Into<String>) -> Self {
-                Self { default_api_key: Some(api_key.into()) }
+                Self {
+                    default_api_key: Some(api_key.into()),
+                }
             }
 
             /// Resolve API key from options, self, or environment.
@@ -76,12 +80,16 @@ macro_rules! define_openai_delegation_provider {
         }
 
         impl Default for $name {
-            fn default() -> Self { Self::new() }
+            fn default() -> Self {
+                Self::new()
+            }
         }
 
         #[async_trait::async_trait]
         impl crate::protocol::LLMProtocol for $name {
-            fn provider_type(&self) -> Provider { $provider_type }
+            fn provider_type(&self) -> Provider {
+                $provider_type
+            }
 
             fn stream(
                 &self,
@@ -93,7 +101,8 @@ macro_rules! define_openai_delegation_provider {
                 if opts.api_key.is_none() {
                     opts.api_key = self.resolve_api_key(&opts);
                 }
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(model, context, opts)
             }
 
@@ -107,7 +116,8 @@ macro_rules! define_openai_delegation_provider {
                 if opts.base.api_key.is_none() {
                     opts.base.api_key = self.resolve_api_key(&opts.base);
                 }
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(model, context, opts)
             }
         }
@@ -129,12 +139,16 @@ macro_rules! define_openai_delegation_provider {
         impl $name {
             /// Create a new provider.
             pub fn new() -> Self {
-                Self { default_api_key: None }
+                Self {
+                    default_api_key: None,
+                }
             }
 
             /// Create a provider with a default API key.
             pub fn with_api_key(api_key: impl Into<String>) -> Self {
-                Self { default_api_key: Some(api_key.into()) }
+                Self {
+                    default_api_key: Some(api_key.into()),
+                }
             }
 
             /// Resolve API key from options, self, or environment.
@@ -155,12 +169,16 @@ macro_rules! define_openai_delegation_provider {
         }
 
         impl Default for $name {
-            fn default() -> Self { Self::new() }
+            fn default() -> Self {
+                Self::new()
+            }
         }
 
         #[async_trait::async_trait]
         impl crate::protocol::LLMProtocol for $name {
-            fn provider_type(&self) -> Provider { $provider_type }
+            fn provider_type(&self) -> Provider {
+                $provider_type
+            }
 
             fn stream(
                 &self,
@@ -179,7 +197,8 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(&model, context, opts)
             }
 
@@ -200,7 +219,8 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(&model, context, opts)
             }
         }
@@ -222,12 +242,16 @@ macro_rules! define_openai_delegation_provider {
         impl $name {
             /// Create a new provider.
             pub fn new() -> Self {
-                Self { default_api_key: None }
+                Self {
+                    default_api_key: None,
+                }
             }
 
             /// Create a provider with a default API key.
             pub fn with_api_key(api_key: impl Into<String>) -> Self {
-                Self { default_api_key: Some(api_key.into()) }
+                Self {
+                    default_api_key: Some(api_key.into()),
+                }
             }
 
             /// Resolve API key from options, self, or environment.
@@ -248,12 +272,16 @@ macro_rules! define_openai_delegation_provider {
         }
 
         impl Default for $name {
-            fn default() -> Self { Self::new() }
+            fn default() -> Self {
+                Self::new()
+            }
         }
 
         #[async_trait::async_trait]
         impl crate::protocol::LLMProtocol for $name {
-            fn provider_type(&self) -> Provider { $provider_type }
+            fn provider_type(&self) -> Provider {
+                $provider_type
+            }
 
             fn stream(
                 &self,
@@ -272,7 +300,8 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream(&model, context, opts)
             }
 
@@ -293,7 +322,8 @@ macro_rules! define_openai_delegation_provider {
                 } else {
                     model.clone()
                 };
-                let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                let provider =
+                    crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                 provider.stream_simple(&model, context, opts)
             }
         }
@@ -316,12 +346,16 @@ macro_rules! define_anthropic_delegation_provider {
         impl $name {
             /// Create a new provider.
             pub fn new() -> Self {
-                Self { default_api_key: None }
+                Self {
+                    default_api_key: None,
+                }
             }
 
             /// Create a provider with a default API key.
             pub fn with_api_key(api_key: impl Into<String>) -> Self {
-                Self { default_api_key: Some(api_key.into()) }
+                Self {
+                    default_api_key: Some(api_key.into()),
+                }
             }
 
             /// Resolve API key from options, self, or environment.
@@ -337,12 +371,16 @@ macro_rules! define_anthropic_delegation_provider {
         }
 
         impl Default for $name {
-            fn default() -> Self { Self::new() }
+            fn default() -> Self {
+                Self::new()
+            }
         }
 
         #[async_trait::async_trait]
         impl crate::protocol::LLMProtocol for $name {
-            fn provider_type(&self) -> Provider { $provider_type }
+            fn provider_type(&self) -> Provider {
+                $provider_type
+            }
 
             fn stream(
                 &self,

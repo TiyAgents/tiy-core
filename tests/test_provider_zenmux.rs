@@ -186,11 +186,7 @@ async fn test_zenmux_api_key_from_provider_when_no_options() {
     let provider = ZenmuxProvider::with_api_key("provider-key");
     let model = make_model("test-model", &server.uri());
     let context = Context::with_system_prompt("test");
-    let stream = provider.stream(
-        &model,
-        &context,
-        StreamOptions::default(),
-    );
+    let stream = provider.stream(&model, &context, StreamOptions::default());
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
 }

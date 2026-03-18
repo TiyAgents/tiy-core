@@ -909,7 +909,9 @@ fn test_event_stop_reason() {
     };
     assert_eq!(done.stop_reason(), Some(StopReason::ToolUse));
 
-    let start = AssistantMessageEvent::Start { partial: msg.clone() };
+    let start = AssistantMessageEvent::Start {
+        partial: msg.clone(),
+    };
     assert_eq!(start.stop_reason(), None);
 
     let error = AssistantMessageEvent::Error {
@@ -935,11 +937,27 @@ fn make_partial() -> AssistantMessage {
 #[test]
 fn test_event_is_text_event() {
     let msg = make_partial();
-    let text_start = AssistantMessageEvent::TextStart { content_index: 0, partial: msg.clone() };
-    let text_delta = AssistantMessageEvent::TextDelta { content_index: 0, delta: "hi".into(), partial: msg.clone() };
-    let text_end = AssistantMessageEvent::TextEnd { content_index: 0, content: "hi".into(), partial: msg.clone() };
-    let thinking_start = AssistantMessageEvent::ThinkingStart { content_index: 0, partial: msg.clone() };
-    let start = AssistantMessageEvent::Start { partial: msg.clone() };
+    let text_start = AssistantMessageEvent::TextStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
+    let text_delta = AssistantMessageEvent::TextDelta {
+        content_index: 0,
+        delta: "hi".into(),
+        partial: msg.clone(),
+    };
+    let text_end = AssistantMessageEvent::TextEnd {
+        content_index: 0,
+        content: "hi".into(),
+        partial: msg.clone(),
+    };
+    let thinking_start = AssistantMessageEvent::ThinkingStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
+    let start = AssistantMessageEvent::Start {
+        partial: msg.clone(),
+    };
 
     assert!(text_start.is_text_event());
     assert!(text_delta.is_text_event());
@@ -951,10 +969,24 @@ fn test_event_is_text_event() {
 #[test]
 fn test_event_is_thinking_event() {
     let msg = make_partial();
-    let thinking_start = AssistantMessageEvent::ThinkingStart { content_index: 0, partial: msg.clone() };
-    let thinking_delta = AssistantMessageEvent::ThinkingDelta { content_index: 0, delta: "hmm".into(), partial: msg.clone() };
-    let thinking_end = AssistantMessageEvent::ThinkingEnd { content_index: 0, content: "hmm".into(), partial: msg.clone() };
-    let text_start = AssistantMessageEvent::TextStart { content_index: 0, partial: msg.clone() };
+    let thinking_start = AssistantMessageEvent::ThinkingStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
+    let thinking_delta = AssistantMessageEvent::ThinkingDelta {
+        content_index: 0,
+        delta: "hmm".into(),
+        partial: msg.clone(),
+    };
+    let thinking_end = AssistantMessageEvent::ThinkingEnd {
+        content_index: 0,
+        content: "hmm".into(),
+        partial: msg.clone(),
+    };
+    let text_start = AssistantMessageEvent::TextStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
 
     assert!(thinking_start.is_thinking_event());
     assert!(thinking_delta.is_thinking_event());
@@ -966,10 +998,24 @@ fn test_event_is_thinking_event() {
 fn test_event_is_tool_call_event() {
     let msg = make_partial();
     let tc = ToolCall::new("id1", "func", json!({}));
-    let tc_start = AssistantMessageEvent::ToolCallStart { content_index: 0, partial: msg.clone() };
-    let tc_delta = AssistantMessageEvent::ToolCallDelta { content_index: 0, delta: "{".into(), partial: msg.clone() };
-    let tc_end = AssistantMessageEvent::ToolCallEnd { content_index: 0, tool_call: tc, partial: msg.clone() };
-    let text_start = AssistantMessageEvent::TextStart { content_index: 0, partial: msg.clone() };
+    let tc_start = AssistantMessageEvent::ToolCallStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
+    let tc_delta = AssistantMessageEvent::ToolCallDelta {
+        content_index: 0,
+        delta: "{".into(),
+        partial: msg.clone(),
+    };
+    let tc_end = AssistantMessageEvent::ToolCallEnd {
+        content_index: 0,
+        tool_call: tc,
+        partial: msg.clone(),
+    };
+    let text_start = AssistantMessageEvent::TextStart {
+        content_index: 0,
+        partial: msg.clone(),
+    };
 
     assert!(tc_start.is_tool_call_event());
     assert!(tc_delta.is_tool_call_event());
@@ -984,21 +1030,66 @@ fn test_event_partial_message_all_variants() {
 
     // All variants must return Some(partial)
     let events: Vec<AssistantMessageEvent> = vec![
-        AssistantMessageEvent::Start { partial: msg.clone() },
-        AssistantMessageEvent::TextStart { content_index: 0, partial: msg.clone() },
-        AssistantMessageEvent::TextDelta { content_index: 0, delta: "x".into(), partial: msg.clone() },
-        AssistantMessageEvent::TextEnd { content_index: 0, content: "x".into(), partial: msg.clone() },
-        AssistantMessageEvent::ThinkingStart { content_index: 0, partial: msg.clone() },
-        AssistantMessageEvent::ThinkingDelta { content_index: 0, delta: "t".into(), partial: msg.clone() },
-        AssistantMessageEvent::ThinkingEnd { content_index: 0, content: "t".into(), partial: msg.clone() },
-        AssistantMessageEvent::ToolCallStart { content_index: 0, partial: msg.clone() },
-        AssistantMessageEvent::ToolCallDelta { content_index: 0, delta: "{".into(), partial: msg.clone() },
-        AssistantMessageEvent::ToolCallEnd { content_index: 0, tool_call: tc, partial: msg.clone() },
-        AssistantMessageEvent::Done { reason: StopReason::Stop, message: msg.clone() },
-        AssistantMessageEvent::Error { reason: StopReason::Error, error: msg.clone() },
+        AssistantMessageEvent::Start {
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::TextStart {
+            content_index: 0,
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::TextDelta {
+            content_index: 0,
+            delta: "x".into(),
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::TextEnd {
+            content_index: 0,
+            content: "x".into(),
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ThinkingStart {
+            content_index: 0,
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ThinkingDelta {
+            content_index: 0,
+            delta: "t".into(),
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ThinkingEnd {
+            content_index: 0,
+            content: "t".into(),
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ToolCallStart {
+            content_index: 0,
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ToolCallDelta {
+            content_index: 0,
+            delta: "{".into(),
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::ToolCallEnd {
+            content_index: 0,
+            tool_call: tc,
+            partial: msg.clone(),
+        },
+        AssistantMessageEvent::Done {
+            reason: StopReason::Stop,
+            message: msg.clone(),
+        },
+        AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: msg.clone(),
+        },
     ];
     for event in &events {
-        assert!(event.partial_message().is_some(), "partial_message() should be Some for {:?}", event);
+        assert!(
+            event.partial_message().is_some(),
+            "partial_message() should be Some for {:?}",
+            event
+        );
     }
 }
 
@@ -1007,16 +1098,76 @@ fn test_event_content_index_thinking_and_tool() {
     let msg = make_partial();
     let tc = ToolCall::new("id1", "func", json!({}));
 
-    assert_eq!(AssistantMessageEvent::ThinkingStart { content_index: 3, partial: msg.clone() }.content_index(), Some(3));
-    assert_eq!(AssistantMessageEvent::ThinkingDelta { content_index: 4, delta: "".into(), partial: msg.clone() }.content_index(), Some(4));
-    assert_eq!(AssistantMessageEvent::ThinkingEnd { content_index: 5, content: "".into(), partial: msg.clone() }.content_index(), Some(5));
-    assert_eq!(AssistantMessageEvent::ToolCallStart { content_index: 6, partial: msg.clone() }.content_index(), Some(6));
-    assert_eq!(AssistantMessageEvent::ToolCallDelta { content_index: 7, delta: "".into(), partial: msg.clone() }.content_index(), Some(7));
-    assert_eq!(AssistantMessageEvent::ToolCallEnd { content_index: 8, tool_call: tc, partial: msg.clone() }.content_index(), Some(8));
+    assert_eq!(
+        AssistantMessageEvent::ThinkingStart {
+            content_index: 3,
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(3)
+    );
+    assert_eq!(
+        AssistantMessageEvent::ThinkingDelta {
+            content_index: 4,
+            delta: "".into(),
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(4)
+    );
+    assert_eq!(
+        AssistantMessageEvent::ThinkingEnd {
+            content_index: 5,
+            content: "".into(),
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(5)
+    );
+    assert_eq!(
+        AssistantMessageEvent::ToolCallStart {
+            content_index: 6,
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(6)
+    );
+    assert_eq!(
+        AssistantMessageEvent::ToolCallDelta {
+            content_index: 7,
+            delta: "".into(),
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(7)
+    );
+    assert_eq!(
+        AssistantMessageEvent::ToolCallEnd {
+            content_index: 8,
+            tool_call: tc,
+            partial: msg.clone()
+        }
+        .content_index(),
+        Some(8)
+    );
 
     // Done and Error have no content_index
-    assert_eq!(AssistantMessageEvent::Done { reason: StopReason::Stop, message: msg.clone() }.content_index(), None);
-    assert_eq!(AssistantMessageEvent::Error { reason: StopReason::Error, error: msg }.content_index(), None);
+    assert_eq!(
+        AssistantMessageEvent::Done {
+            reason: StopReason::Stop,
+            message: msg.clone()
+        }
+        .content_index(),
+        None
+    );
+    assert_eq!(
+        AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: msg
+        }
+        .content_index(),
+        None
+    );
 }
 
 #[test]
@@ -1037,7 +1188,10 @@ fn test_event_delta_thinking_and_tool_call() {
     assert_eq!(tc_delta.delta(), Some("{\"arg\":"));
 
     // Non-delta events return None
-    let done = AssistantMessageEvent::Done { reason: StopReason::Stop, message: msg };
+    let done = AssistantMessageEvent::Done {
+        reason: StopReason::Stop,
+        message: msg,
+    };
     assert_eq!(done.delta(), None);
 }
 
@@ -1053,7 +1207,10 @@ fn test_provider_as_str_all_variants() {
     assert_eq!(Provider::GoogleAntigravity.as_str(), "google-antigravity");
     assert_eq!(Provider::GoogleVertex.as_str(), "google-vertex");
     assert_eq!(Provider::OpenAIResponses.as_str(), "openai-responses");
-    assert_eq!(Provider::AzureOpenAIResponses.as_str(), "azure-openai-responses");
+    assert_eq!(
+        Provider::AzureOpenAIResponses.as_str(),
+        "azure-openai-responses"
+    );
     assert_eq!(Provider::OpenAICodex.as_str(), "openai-codex");
     assert_eq!(Provider::GitHubCopilot.as_str(), "github-copilot");
     assert_eq!(Provider::Cerebras.as_str(), "cerebras");
@@ -1064,28 +1221,70 @@ fn test_provider_as_str_all_variants() {
     assert_eq!(Provider::OpenCode.as_str(), "opencode");
     assert_eq!(Provider::OpenCodeGo.as_str(), "opencode-go");
     assert_eq!(Provider::Ollama.as_str(), "ollama");
-    assert_eq!(Provider::Custom("my-provider".to_string()).as_str(), "my-provider");
+    assert_eq!(
+        Provider::Custom("my-provider".to_string()).as_str(),
+        "my-provider"
+    );
 }
 
 #[test]
 fn test_provider_from_string_all_variants() {
-    assert_eq!(Provider::from("amazon-bedrock".to_string()), Provider::AmazonBedrock);
-    assert_eq!(Provider::from("google-gemini-cli".to_string()), Provider::GoogleGeminiCli);
-    assert_eq!(Provider::from("google-antigravity".to_string()), Provider::GoogleAntigravity);
-    assert_eq!(Provider::from("google-vertex".to_string()), Provider::GoogleVertex);
-    assert_eq!(Provider::from("openai-responses".to_string()), Provider::OpenAIResponses);
-    assert_eq!(Provider::from("azure-openai-responses".to_string()), Provider::AzureOpenAIResponses);
-    assert_eq!(Provider::from("openai-codex".to_string()), Provider::OpenAICodex);
-    assert_eq!(Provider::from("github-copilot".to_string()), Provider::GitHubCopilot);
+    assert_eq!(
+        Provider::from("amazon-bedrock".to_string()),
+        Provider::AmazonBedrock
+    );
+    assert_eq!(
+        Provider::from("google-gemini-cli".to_string()),
+        Provider::GoogleGeminiCli
+    );
+    assert_eq!(
+        Provider::from("google-antigravity".to_string()),
+        Provider::GoogleAntigravity
+    );
+    assert_eq!(
+        Provider::from("google-vertex".to_string()),
+        Provider::GoogleVertex
+    );
+    assert_eq!(
+        Provider::from("openai-responses".to_string()),
+        Provider::OpenAIResponses
+    );
+    assert_eq!(
+        Provider::from("azure-openai-responses".to_string()),
+        Provider::AzureOpenAIResponses
+    );
+    assert_eq!(
+        Provider::from("openai-codex".to_string()),
+        Provider::OpenAICodex
+    );
+    assert_eq!(
+        Provider::from("github-copilot".to_string()),
+        Provider::GitHubCopilot
+    );
     assert_eq!(Provider::from("cerebras".to_string()), Provider::Cerebras);
-    assert_eq!(Provider::from("vercel-ai-gateway".to_string()), Provider::VercelAiGateway);
+    assert_eq!(
+        Provider::from("vercel-ai-gateway".to_string()),
+        Provider::VercelAiGateway
+    );
     assert_eq!(Provider::from("mistral".to_string()), Provider::Mistral);
-    assert_eq!(Provider::from("minimax-cn".to_string()), Provider::MiniMaxCN);
-    assert_eq!(Provider::from("huggingface".to_string()), Provider::HuggingFace);
+    assert_eq!(
+        Provider::from("minimax-cn".to_string()),
+        Provider::MiniMaxCN
+    );
+    assert_eq!(
+        Provider::from("huggingface".to_string()),
+        Provider::HuggingFace
+    );
     assert_eq!(Provider::from("opencode".to_string()), Provider::OpenCode);
-    assert_eq!(Provider::from("opencode-go".to_string()), Provider::OpenCodeGo);
+    assert_eq!(
+        Provider::from("opencode-go".to_string()),
+        Provider::OpenCodeGo
+    );
     assert_eq!(Provider::from("ollama".to_string()), Provider::Ollama);
-    assert_eq!(Provider::from("unknown-provider".to_string()), Provider::Custom("unknown-provider".to_string()));
+    assert_eq!(
+        Provider::from("unknown-provider".to_string()),
+        Provider::Custom("unknown-provider".to_string())
+    );
 }
 
 // ============================================================================

@@ -24,12 +24,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use tiy_core::{
-    agent::*,
-    models::get_model,
-    thinking::ThinkingLevel,
-    types::*,
-};
+use tiy_core::{agent::*, models::get_model, thinking::ThinkingLevel, types::*};
 
 /// Resolve an env var with fallback.
 fn env_or(primary: &str, fallback: &str) -> Option<String> {
@@ -270,14 +265,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         messages
             .into_iter()
             .filter_map(|m| match m {
-                AgentMessage::Custom {
-                    message_type,
-                    data,
-                } => {
+                AgentMessage::Custom { message_type, data } => {
                     // Convert "note" custom messages to user messages
                     if message_type == "note" {
                         let text = data["text"].as_str().unwrap_or("[note]");
-                        Some(Message::User(UserMessage::text(format!("[Note: {}]", text))))
+                        Some(Message::User(UserMessage::text(format!(
+                            "[Note: {}]",
+                            text
+                        ))))
                     } else {
                         None // skip other custom types
                     }
@@ -303,7 +298,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match event {
             AgentEvent::AgentStart => println!("  [event] AgentStart"),
             AgentEvent::TurnStart => println!("  [event] TurnStart"),
-            AgentEvent::MessageUpdate { assistant_event, .. } => {
+            AgentEvent::MessageUpdate {
+                assistant_event, ..
+            } => {
                 if let AssistantMessageEvent::TextDelta { delta, .. } = assistant_event.as_ref() {
                     print!("{}", delta); // Stream text to stdout
                 }
@@ -336,16 +333,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             AgentEvent::TurnEnd { tool_results, .. } => {
-                println!(
-                    "  [event] TurnEnd (tool_results={})",
-                    tool_results.len()
-                );
+                println!("  [event] TurnEnd (tool_results={})", tool_results.len());
             }
             AgentEvent::AgentEnd { messages } => {
-                println!(
-                    "  [event] AgentEnd ({} new messages)",
-                    messages.len()
-                );
+                println!("  [event] AgentEnd ({} new messages)", messages.len());
             }
         }
     });
@@ -380,7 +371,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if api_key.is_some() {
         println!("  Sending prompt...\n");
-        match agent.prompt("What is 15 * 7? Use the calculator tool.").await {
+        match agent
+            .prompt("What is 15 * 7? Use the calculator tool.")
+            .await
+        {
             Ok(messages) => {
                 println!("\n\n  Prompt completed: {} new messages", messages.len());
             }

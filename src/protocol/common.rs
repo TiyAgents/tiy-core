@@ -23,9 +23,7 @@ pub fn resolve_base_url<'a>(
     model_base_url: Option<&'a str>,
     default: &'a str,
 ) -> &'a str {
-    options_base_url
-        .or(model_base_url)
-        .unwrap_or(default)
+    options_base_url.or(model_base_url).unwrap_or(default)
 }
 
 /// Apply the `on_payload` hook (if set) and serialize the request body.

@@ -600,7 +600,8 @@ async fn test_stream_safety_finish_reason() {
             "finishReason": "SAFETY"
         }],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
-    }).to_string()]);
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -633,7 +634,8 @@ async fn test_stream_recitation_finish_reason() {
             "finishReason": "RECITATION"
         }],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
-    }).to_string()]);
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -705,13 +707,15 @@ async fn test_stream_function_call_after_text() {
     let sse_body = google_sse(vec![
         &json!({
             "candidates": [{"content": {"parts": [{"text": "Let me search"}], "role": "model"}}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "candidates": [{"content": {"parts": [{
                 "functionCall": {"name": "search", "args": {"q": "test"}}
             }], "role": "model"}, "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 10}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -748,8 +752,14 @@ async fn test_stream_function_call_after_text() {
     assert_eq!(result.tool_calls()[0].name, "search");
 
     // Verify TextEnd was emitted before tool call
-    let text_ends: Vec<_> = events.iter().filter(|e| matches!(e, AssistantMessageEvent::TextEnd { .. })).collect();
-    assert!(!text_ends.is_empty(), "TextEnd should be emitted when function call arrives");
+    let text_ends: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AssistantMessageEvent::TextEnd { .. }))
+        .collect();
+    assert!(
+        !text_ends.is_empty(),
+        "TextEnd should be emitted when function call arrives"
+    );
 }
 
 #[tokio::test]
@@ -763,13 +773,15 @@ async fn test_stream_function_call_after_thinking() {
                 "text": "reasoning...",
                 "thought": true
             }], "role": "model"}}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "candidates": [{"content": {"parts": [{
                 "functionCall": {"name": "calc", "args": {"expr": "1+1"}}
             }], "role": "model"}, "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 10}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -805,8 +817,14 @@ async fn test_stream_function_call_after_thinking() {
     assert_eq!(result.tool_calls().len(), 1);
 
     // Verify ThinkingEnd was emitted
-    let thinking_ends: Vec<_> = events.iter().filter(|e| matches!(e, AssistantMessageEvent::ThinkingEnd { .. })).collect();
-    assert!(!thinking_ends.is_empty(), "ThinkingEnd should be emitted when function call arrives");
+    let thinking_ends: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, AssistantMessageEvent::ThinkingEnd { .. }))
+        .collect();
+    assert!(
+        !thinking_ends.is_empty(),
+        "ThinkingEnd should be emitted when function call arrives"
+    );
 }
 
 #[tokio::test]
@@ -817,7 +835,9 @@ async fn test_stream_done_line_ignored() {
     let sse_body = google_sse(vec![&json!({
         "candidates": [{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP"}],
         "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1}
-    }).to_string()]) + "data: [DONE]\n\n";
+    })
+    .to_string()])
+        + "data: [DONE]\n\n";
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -851,7 +871,8 @@ async fn test_stream_blocklist_finish_reason() {
             "finishReason": "BLOCKLIST"
         }],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}
-    }).to_string()]);
+    })
+    .to_string()]);
 
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
@@ -910,10 +931,14 @@ async fn test_stream_with_rich_context_multiturn() {
                 thinking_signature: Some("sig1".to_string()),
                 redacted: false,
             }),
-            ContentBlock::Text(TextContent { text: "response".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "response".to_string(),
+                text_signature: None,
+            }),
         ])
         .stop_reason(StopReason::Stop)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
     ctx.add_message(Message::User(UserMessage::text("now use a tool")));
     let asst2 = AssistantMessage::builder()
@@ -921,21 +946,39 @@ async fn test_stream_with_rich_context_multiturn() {
         .provider(Provider::Google)
         .model("gemini-2.0-flash")
         .content(vec![ContentBlock::ToolCall(ToolCall {
-            id: "tc_1".to_string(), name: "search".to_string(),
-            arguments: json!({"q": "test"}), thought_signature: Some("sig2".to_string()),
+            id: "tc_1".to_string(),
+            name: "search".to_string(),
+            arguments: json!({"q": "test"}),
+            thought_signature: Some("sig2".to_string()),
         })])
-        .stop_reason(StopReason::ToolUse).build().unwrap();
+        .stop_reason(StopReason::ToolUse)
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst2));
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_1", "search", "result data", false)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "tc_1",
+        "search",
+        "result data",
+        false,
+    )));
     let asst_err = AssistantMessage::builder()
         .api(Api::GoogleGenerativeAi)
         .provider(Provider::Google)
         .model("gemini-2.0-flash")
-        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
-        .stop_reason(StopReason::Error).build().unwrap();
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "err".to_string(),
+            text_signature: None,
+        })])
+        .stop_reason(StopReason::Error)
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst_err));
     ctx.add_message(Message::User(UserMessage::text("continue")));
-    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    ctx.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type":"object","properties":{"q":{"type":"string"}}}),
+    )]);
 
     let model = make_model(&server.uri());
     let provider = GoogleProtocol::new();
@@ -973,11 +1016,21 @@ async fn test_stream_with_error_tool_result() {
         .provider(Provider::Google)
         .model("gemini-2.0-flash")
         .content(vec![ContentBlock::ToolCall(ToolCall {
-            id: "tc_e".to_string(), name: "fn1".to_string(),
-            arguments: json!({}), thought_signature: None,
-        })]).stop_reason(StopReason::ToolUse).build().unwrap();
+            id: "tc_e".to_string(),
+            name: "fn1".to_string(),
+            arguments: json!({}),
+            thought_signature: None,
+        })])
+        .stop_reason(StopReason::ToolUse)
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_e", "fn1", "error occurred", true)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "tc_e",
+        "fn1",
+        "error occurred",
+        true,
+    )));
     ctx.add_message(Message::User(UserMessage::text("retry")));
 
     let model = make_model(&server.uri());
@@ -1000,7 +1053,9 @@ async fn test_stream_vertex_ai_mode() {
 
     // Vertex AI URL format: /v1/publishers/google/models/{model}:streamGenerateContent
     Mock::given(method("POST"))
-        .and(path("/v1/publishers/google/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(path(
+            "/v1/publishers/google/models/gemini-2.0-flash:streamGenerateContent",
+        ))
         .and(query_param("alt", "sse"))
         .and(header("authorization", "Bearer vertex-key"))
         .respond_with(
@@ -1058,7 +1113,10 @@ async fn test_stream_with_image_user_content() {
     ctx.add_message(Message::User(UserMessage {
         role: Role::User,
         content: UserContent::Blocks(vec![
-            ContentBlock::Text(TextContent { text: "Describe this".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "Describe this".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::Image(ImageContent {
                 mime_type: "image/png".to_string(),
                 data: "iVBORw0KGgo=".to_string(),
@@ -1094,10 +1152,7 @@ async fn test_stream_http_error_response() {
     Mock::given(method("POST"))
         .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
         .and(query_param("alt", "sse"))
-        .respond_with(
-            ResponseTemplate::new(503)
-                .set_body_string("Service unavailable"),
-        )
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service unavailable"))
         .mount(&server)
         .await;
 

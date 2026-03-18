@@ -769,8 +769,16 @@ async fn test_stream_multiple_tool_calls_by_index() {
     let model = make_model(&server.uri());
     let mut context = make_context("test", "use tools");
     context.set_tools(vec![
-        Tool::new("tool_a", "Tool A", json!({"type": "object", "properties": {"x": {"type": "integer"}}})),
-        Tool::new("tool_b", "Tool B", json!({"type": "object", "properties": {"y": {"type": "integer"}}})),
+        Tool::new(
+            "tool_a",
+            "Tool A",
+            json!({"type": "object", "properties": {"x": {"type": "integer"}}}),
+        ),
+        Tool::new(
+            "tool_b",
+            "Tool B",
+            json!({"type": "object", "properties": {"y": {"type": "integer"}}}),
+        ),
     ]);
     let options = make_options("key");
 
@@ -897,11 +905,13 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
     let sse_body = sse_response(vec![
         &json!({
             "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": null}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 50, "completion_tokens": 5}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -922,33 +932,57 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
         .provider(Provider::OpenAI)
         .model("gpt-4o-mini")
         .content(vec![
-            ContentBlock::Text(TextContent { text: "Let me search".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "Let me search".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::ToolCall(ToolCall {
-                id: "tc_1".to_string(), name: "search".to_string(),
-                arguments: json!({"q": "test"}), thought_signature: None,
+                id: "tc_1".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"q": "test"}),
+                thought_signature: None,
             }),
         ])
         .stop_reason(StopReason::ToolUse)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
     // Tool result
-    ctx.add_message(Message::ToolResult(ToolResultMessage::text("tc_1", "search", "found it", false)));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "tc_1", "search", "found it", false,
+    )));
     // Errored assistant (should be skipped)
     let asst_err = AssistantMessage::builder()
-        .api(Api::OpenAICompletions).provider(Provider::OpenAI).model("gpt-4o-mini")
-        .content(vec![ContentBlock::Text(TextContent { text: "err".to_string(), text_signature: None })])
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .model("gpt-4o-mini")
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "err".to_string(),
+            text_signature: None,
+        })])
         .stop_reason(StopReason::Error)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst_err));
     // Aborted assistant (should be skipped)
     let asst_abort = AssistantMessage::builder()
-        .api(Api::OpenAICompletions).provider(Provider::OpenAI).model("gpt-4o-mini")
-        .content(vec![ContentBlock::Text(TextContent { text: "abort".to_string(), text_signature: None })])
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .model("gpt-4o-mini")
+        .content(vec![ContentBlock::Text(TextContent {
+            text: "abort".to_string(),
+            text_signature: None,
+        })])
         .stop_reason(StopReason::Aborted)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst_abort));
     ctx.add_message(Message::User(UserMessage::text("continue")));
-    ctx.set_tools(vec![Tool::new("search", "Search", json!({"type":"object","properties":{"q":{"type":"string"}}}))]);
+    ctx.set_tools(vec![Tool::new(
+        "search",
+        "Search",
+        json!({"type":"object","properties":{"q":{"type":"string"}}}),
+    )]);
 
     let provider = OpenAICompletionsProtocol::new();
     let model = make_model(&server.uri());
@@ -963,7 +997,8 @@ async fn test_stream_multiturn_with_tool_calls_and_results() {
 async fn test_stream_with_image_user_content() {
     let server = MockServer::start().await;
 
-    let sse_body = sse_response(vec![
+    let sse_body =
+        sse_response(vec![
         &json!({
             "choices": [{"index": 0, "delta": {"content": "I see an image"}, "finish_reason": null}]
         }).to_string(),
@@ -987,7 +1022,10 @@ async fn test_stream_with_image_user_content() {
     ctx.add_message(Message::User(UserMessage {
         role: Role::User,
         content: UserContent::Blocks(vec![
-            ContentBlock::Text(TextContent { text: "What is this?".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "What is this?".to_string(),
+                text_signature: None,
+            }),
             ContentBlock::Image(ImageContent {
                 mime_type: "image/png".to_string(),
                 data: "iVBORw0KGgo=".to_string(),
@@ -1012,11 +1050,13 @@ async fn test_stream_with_thinking_in_assistant_context() {
     let sse_body = sse_response(vec![
         &json!({
             "choices": [{"index": 0, "delta": {"content": "continued"}, "finish_reason": null}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 30, "completion_tokens": 1}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -1032,17 +1072,23 @@ async fn test_stream_with_thinking_in_assistant_context() {
     let mut ctx = Context::with_system_prompt("system");
     ctx.add_message(Message::User(UserMessage::text("hello")));
     let asst = AssistantMessage::builder()
-        .api(Api::OpenAICompletions).provider(Provider::OpenAI).model("gpt-4o-mini")
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .model("gpt-4o-mini")
         .content(vec![
             ContentBlock::Thinking(ThinkingContent {
                 thinking: "Let me consider...".to_string(),
                 thinking_signature: Some("sig_1".to_string()),
                 redacted: false,
             }),
-            ContentBlock::Text(TextContent { text: "answer".to_string(), text_signature: None }),
+            ContentBlock::Text(TextContent {
+                text: "answer".to_string(),
+                text_signature: None,
+            }),
         ])
         .stop_reason(StopReason::Stop)
-        .build().unwrap();
+        .build()
+        .unwrap();
     ctx.add_message(Message::Assistant(asst));
     ctx.add_message(Message::User(UserMessage::text("go on")));
 
@@ -1062,11 +1108,13 @@ async fn test_stream_with_developer_role_compat() {
     let sse_body = sse_response(vec![
         &json!({
             "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
-        }).to_string(),
+        })
+        .to_string(),
         &json!({
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1}
-        }).to_string(),
+        })
+        .to_string(),
     ]);
 
     Mock::given(method("POST"))
@@ -1110,10 +1158,7 @@ async fn test_stream_http_error_response() {
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(429)
-                .set_body_string("Rate limit exceeded"),
-        )
+        .respond_with(ResponseTemplate::new(429).set_body_string("Rate limit exceeded"))
         .mount(&server)
         .await;
 
