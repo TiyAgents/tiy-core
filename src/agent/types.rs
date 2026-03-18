@@ -3,16 +3,39 @@
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use std::sync::Arc;
+
+// ============================================================================
+// AgentMessage
+// ============================================================================
 
 /// Agent message - can include custom message types.
+///
+/// The `Custom` variant allows applications to inject arbitrary domain-specific
+/// messages (e.g., artifacts, notifications) into the conversation. Custom messages
+/// are filtered out by the default `convert_to_llm` implementation; provide your
+/// own converter to handle them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum AgentMessage {
     User(UserMessage),
     Assistant(AssistantMessage),
     ToolResult(ToolResultMessage),
-    // Custom message types can be added here
+    /// Application-specific custom message.
+    /// Ignored by the default LLM conversion; callers should provide a custom
+    /// `convert_to_llm` to handle these.
+    #[serde(rename = "custom")]
+    Custom {
+        /// Custom message type identifier (e.g., "artifact", "notification").
+        #[serde(rename = "type")]
+        message_type: String,
+        /// Arbitrary payload.
+        data: serde_json::Value,
+    },
 }
+
+// --- From impls for AgentMessage ---
 
 impl From<UserMessage> for AgentMessage {
     fn from(msg: UserMessage) -> Self {
@@ -48,9 +71,28 @@ impl From<AgentMessage> for Option<Message> {
             AgentMessage::User(m) => Some(Message::User(m)),
             AgentMessage::Assistant(m) => Some(Message::Assistant(m)),
             AgentMessage::ToolResult(m) => Some(Message::ToolResult(m)),
+            AgentMessage::Custom { .. } => None,
         }
     }
 }
+
+/// Convenience: create a user text message from a `String`.
+impl From<String> for AgentMessage {
+    fn from(s: String) -> Self {
+        AgentMessage::User(UserMessage::text(s))
+    }
+}
+
+/// Convenience: create a user text message from a `&str`.
+impl From<&str> for AgentMessage {
+    fn from(s: &str) -> Self {
+        AgentMessage::User(UserMessage::text(s))
+    }
+}
+
+// ============================================================================
+// AgentTool
+// ============================================================================
 
 /// Agent tool with execution capability.
 #[derive(Debug, Clone)]
@@ -99,8 +141,12 @@ impl From<Tool> for AgentTool {
     }
 }
 
+// ============================================================================
+// AgentContext
+// ============================================================================
+
 /// Agent context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentContext {
     /// System prompt.
     pub system_prompt: String,
@@ -110,15 +156,9 @@ pub struct AgentContext {
     pub tools: Option<Vec<AgentTool>>,
 }
 
-impl Default for AgentContext {
-    fn default() -> Self {
-        Self {
-            system_prompt: String::new(),
-            messages: Vec::new(),
-            tools: None,
-        }
-    }
-}
+// ============================================================================
+// AgentEvent
+// ============================================================================
 
 /// Agent event types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,7 +180,7 @@ pub enum AgentEvent {
     /// Message updated (streaming).
     MessageUpdate {
         message: AgentMessage,
-        assistant_event: AssistantMessageEvent,
+        assistant_event: Box<AssistantMessageEvent>,
     },
     /// Message finished.
     MessageEnd { message: AgentMessage },
@@ -150,7 +190,7 @@ pub enum AgentEvent {
         tool_name: String,
         args: serde_json::Value,
     },
-    /// Tool execution progress.
+    /// Tool execution progress (streaming partial results from tools).
     ToolExecutionUpdate {
         tool_call_id: String,
         tool_name: String,
@@ -165,6 +205,10 @@ pub enum AgentEvent {
     },
 }
 
+// ============================================================================
+// Tool Execution Mode
+// ============================================================================
+
 /// Tool execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ToolExecutionMode {
@@ -175,8 +219,228 @@ pub enum ToolExecutionMode {
     Parallel,
 }
 
-/// Agent configuration.
+// ============================================================================
+// Queue Mode
+// ============================================================================
+
+/// Queue delivery mode for steering and follow-up messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum QueueMode {
+    /// Deliver all queued messages in one batch.
+    #[default]
+    All,
+    /// Deliver only the first message per turn.
+    OneAtATime,
+}
+
+// ============================================================================
+// ThinkingBudgets
+// ============================================================================
+
+/// Custom token budgets for each thinking level.
+///
+/// Allows overriding the default budget_tokens for each ThinkingLevel.
+/// Only relevant for providers that use token-based thinking budgets
+/// (e.g., Anthropic). Omitted levels use the provider default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThinkingBudgets {
+    /// Budget for Minimal level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimal: Option<u32>,
+    /// Budget for Low level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low: Option<u32>,
+    /// Budget for Medium level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medium: Option<u32>,
+    /// Budget for High level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<u32>,
+}
+
+impl ThinkingBudgets {
+    /// Get the custom budget for a thinking level, if set.
+    pub fn budget_for(&self, level: ThinkingLevel) -> Option<u32> {
+        match level {
+            ThinkingLevel::Minimal => self.minimal,
+            ThinkingLevel::Low => self.low,
+            ThinkingLevel::Medium => self.medium,
+            ThinkingLevel::High => self.high,
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
+// Transport (re-exported from crate::types)
+// ============================================================================
+
+pub use crate::types::Transport;
+
+// ============================================================================
+// Tool Call Hooks
+// ============================================================================
+
+/// Context provided to `before_tool_call` hooks.
 #[derive(Debug, Clone)]
+pub struct BeforeToolCallContext {
+    /// The assistant message that contained the tool call.
+    pub assistant_message: AssistantMessage,
+    /// The tool call being executed.
+    pub tool_call: ToolCall,
+    /// Parsed & validated arguments.
+    pub args: serde_json::Value,
+    /// The current conversation context.
+    pub context: Context,
+}
+
+/// Result returned by `before_tool_call` hooks.
+#[derive(Debug, Clone, Default)]
+pub struct BeforeToolCallResult {
+    /// Set to `true` to block execution of this tool call.
+    pub block: bool,
+    /// Optional reason shown to the LLM when the call is blocked.
+    pub reason: Option<String>,
+}
+
+impl BeforeToolCallResult {
+    /// Create a result that allows execution.
+    pub fn allow() -> Self {
+        Self {
+            block: false,
+            reason: None,
+        }
+    }
+
+    /// Create a result that blocks execution with an optional reason.
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            block: true,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Context provided to `after_tool_call` hooks.
+#[derive(Debug, Clone)]
+pub struct AfterToolCallContext {
+    /// The assistant message that contained the tool call.
+    pub assistant_message: AssistantMessage,
+    /// The tool call that was executed.
+    pub tool_call: ToolCall,
+    /// Arguments that were passed to the tool.
+    pub args: serde_json::Value,
+    /// The result from tool execution.
+    pub result: AgentToolResult,
+    /// Whether the tool execution reported an error.
+    pub is_error: bool,
+    /// The current conversation context.
+    pub context: Context,
+}
+
+/// Result returned by `after_tool_call` hooks.
+///
+/// Omitted (None) fields keep original values — no deep merge.
+#[derive(Debug, Clone, Default)]
+pub struct AfterToolCallResult {
+    /// Override the content blocks of the tool result.
+    pub content: Option<Vec<ContentBlock>>,
+    /// Override the details payload.
+    pub details: Option<serde_json::Value>,
+    /// Override the is_error flag.
+    pub is_error: Option<bool>,
+}
+
+// ============================================================================
+// Callback type aliases
+// ============================================================================
+
+/// Async callback for `before_tool_call`.
+///
+/// Receives the hook context and returns an optional result.
+/// Returning `None` is equivalent to allowing the call.
+pub type BeforeToolCallFn = Arc<
+    dyn Fn(
+            BeforeToolCallContext,
+        ) -> Pin<Box<dyn std::future::Future<Output = Option<BeforeToolCallResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Async callback for `after_tool_call`.
+///
+/// Receives the hook context and returns an optional result.
+/// Returning `None` keeps the original tool result unchanged.
+pub type AfterToolCallFn = Arc<
+    dyn Fn(
+            AfterToolCallContext,
+        ) -> Pin<Box<dyn std::future::Future<Output = Option<AfterToolCallResult>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Dynamic API key resolver.
+///
+/// Called before each LLM request. Receives the provider name string.
+/// Return `Some(key)` to override the static API key, or `None` to fall back
+/// to the configured key.
+pub type GetApiKeyFn = Arc<
+    dyn Fn(&str) -> Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Payload inspection / replacement hook (re-exported from crate::types).
+pub use crate::types::OnPayloadFn;
+
+/// Message conversion function: `AgentMessage[]` -> `Message[]`.
+///
+/// Called before each LLM request to convert agent-level messages (which may
+/// include custom types) into LLM-compatible messages.
+pub type ConvertToLlmFn = Arc<
+    dyn Fn(Vec<AgentMessage>) -> Pin<Box<dyn std::future::Future<Output = Vec<Message>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Context transformation function applied BEFORE `convert_to_llm`.
+///
+/// Use this for context window management (pruning old messages),
+/// injecting context from external sources, etc.
+pub type TransformContextFn = Arc<
+    dyn Fn(
+            Vec<AgentMessage>,
+        ) -> Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Tool execution update callback.
+///
+/// Passed to the `ToolExecutor` so tools can push streaming partial results.
+pub type ToolUpdateCallback = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
+
+/// Custom stream function type.
+///
+/// Allows replacing the default provider streaming with a custom implementation
+/// (e.g., proxy streaming through a server).
+pub type StreamFn = Arc<
+    dyn Fn(
+            &Model,
+            &Context,
+            StreamOptions,
+        )
+            -> Pin<Box<dyn std::future::Future<Output = crate::stream::AssistantMessageEventStream> + Send>>
+        + Send
+        + Sync,
+>;
+
+// ============================================================================
+// AgentConfig
+// ============================================================================
+
+/// Agent configuration.
+#[derive(Clone)]
 pub struct AgentConfig {
     /// Model to use.
     pub model: Model,
@@ -186,6 +450,33 @@ pub struct AgentConfig {
     pub tool_execution: ToolExecutionMode,
     /// Security and resource limits.
     pub security: crate::types::SecurityConfig,
+    /// Steering queue delivery mode.
+    pub steering_mode: QueueMode,
+    /// Follow-up queue delivery mode.
+    pub follow_up_mode: QueueMode,
+    /// Custom thinking budgets per level.
+    pub thinking_budgets: Option<ThinkingBudgets>,
+    /// Preferred transport.
+    pub transport: Transport,
+    /// Maximum retry delay in milliseconds. `None` = use default (60_000ms).
+    /// Set to `Some(0)` to disable the cap entirely.
+    pub max_retry_delay_ms: Option<u64>,
+}
+
+impl std::fmt::Debug for AgentConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentConfig")
+            .field("model", &self.model.id)
+            .field("thinking_level", &self.thinking_level)
+            .field("tool_execution", &self.tool_execution)
+            .field("security", &"SecurityConfig{...}")
+            .field("steering_mode", &self.steering_mode)
+            .field("follow_up_mode", &self.follow_up_mode)
+            .field("thinking_budgets", &self.thinking_budgets)
+            .field("transport", &self.transport)
+            .field("max_retry_delay_ms", &self.max_retry_delay_ms)
+            .finish()
+    }
 }
 
 impl AgentConfig {
@@ -196,9 +487,18 @@ impl AgentConfig {
             thinking_level: ThinkingLevel::default(),
             tool_execution: ToolExecutionMode::default(),
             security: crate::types::SecurityConfig::default(),
+            steering_mode: QueueMode::default(),
+            follow_up_mode: QueueMode::default(),
+            thinking_budgets: None,
+            transport: Transport::default(),
+            max_retry_delay_ms: None,
         }
     }
 }
+
+// ============================================================================
+// AgentToolResult
+// ============================================================================
 
 /// Tool result from execution.
 #[derive(Debug, Clone, PartialEq)]

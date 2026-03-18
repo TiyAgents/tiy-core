@@ -215,7 +215,7 @@ async fn test_agent_tool_execution_loop() {
     )]);
 
     // Set up tool executor
-    agent.set_tool_executor(|name: &str, _id: &str, _args: &serde_json::Value| {
+    agent.set_tool_executor_simple(|name: &str, _id: &str, _args: &serde_json::Value| {
         let name = name.to_string();
         async move {
             if name == "get_weather" {
@@ -309,7 +309,7 @@ async fn test_agent_max_turns_limit() {
     agent.set_provider(provider);
     agent.set_max_turns(3);
 
-    agent.set_tool_executor(|_name: &str, _id: &str, _args: &serde_json::Value| {
+    agent.set_tool_executor_simple(|_name: &str, _id: &str, _args: &serde_json::Value| {
         async move {
             AgentToolResult::text("ok")
         }
@@ -418,7 +418,7 @@ async fn test_agent_tool_execution_events() {
         _ => {}
     });
 
-    agent.set_tool_executor(
+    agent.set_tool_executor_simple(
         |_name: &str, _id: &str, _args: &serde_json::Value| async move {
             AgentToolResult::text("result")
         },
@@ -558,7 +558,7 @@ async fn test_agent_multiple_tool_calls() {
     let execution_count = Arc::new(AtomicUsize::new(0));
     let ec = execution_count.clone();
 
-    agent.set_tool_executor(move |_name: &str, _id: &str, _args: &serde_json::Value| {
+    agent.set_tool_executor_simple(move |_name: &str, _id: &str, _args: &serde_json::Value| {
         let ec = ec.clone();
         async move {
             ec.fetch_add(1, Ordering::SeqCst);
@@ -595,7 +595,7 @@ async fn test_agent_sequential_tool_execution() {
     agent.set_provider(provider);
     agent.set_tool_execution(ToolExecutionMode::Sequential);
 
-    agent.set_tool_executor(
+    agent.set_tool_executor_simple(
         |_name: &str, _id: &str, _args: &serde_json::Value| async move {
             AgentToolResult::text("sequential result")
         },

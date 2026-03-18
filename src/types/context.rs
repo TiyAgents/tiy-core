@@ -3,6 +3,8 @@
 use crate::types::Message;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Conversation context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,7 +164,35 @@ impl ToolBuilder {
 }
 
 /// Stream options.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Preferred transport for LLM communication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// Server-Sent Events (default).
+    #[default]
+    Sse,
+    /// WebSocket connection.
+    WebSocket,
+    /// Provider chooses automatically.
+    Auto,
+}
+
+/// Payload inspection / replacement hook.
+///
+/// Called with the serialized request body before it is sent to the provider.
+/// Return `Some(modified)` to replace the payload, or `None` to keep the original.
+pub type OnPayloadFn = Arc<
+    dyn Fn(
+            serde_json::Value,
+            crate::types::Model,
+        ) -> Pin<Box<dyn std::future::Future<Output = Option<serde_json::Value>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Stream options.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StreamOptions {
     /// Temperature for sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +215,16 @@ pub struct StreamOptions {
     /// Security and resource limits. When None, uses SecurityConfig::default().
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<crate::types::SecurityConfig>,
+    /// Payload inspection / replacement hook. Skipped during serialization.
+    #[serde(skip)]
+    pub on_payload: Option<OnPayloadFn>,
+    /// Preferred transport for LLM communication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<Transport>,
+    /// Maximum retry delay in milliseconds. `None` = use provider default.
+    /// Set to `Some(0)` to disable the cap entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_retry_delay_ms: Option<u64>,
 }
 
 /// Custom Debug implementation that redacts sensitive fields (api_key, headers).
@@ -207,7 +247,25 @@ impl std::fmt::Debug for StreamOptions {
                 "security",
                 &self.security.as_ref().map(|_| "SecurityConfig{...}"),
             )
+            .field("on_payload", &self.on_payload.as_ref().map(|_| "<fn>"))
+            .field("transport", &self.transport)
+            .field("max_retry_delay_ms", &self.max_retry_delay_ms)
             .finish()
+    }
+}
+
+impl PartialEq for StreamOptions {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare all fields except on_payload (can't compare fn pointers)
+        self.temperature == other.temperature
+            && self.max_tokens == other.max_tokens
+            && self.api_key == other.api_key
+            && self.base_url == other.base_url
+            && self.headers == other.headers
+            && self.session_id == other.session_id
+            && self.security == other.security
+            && self.transport == other.transport
+            && self.max_retry_delay_ms == other.max_retry_delay_ms
     }
 }
 
@@ -221,6 +279,9 @@ impl Default for StreamOptions {
             headers: None,
             session_id: None,
             security: None,
+            on_payload: None,
+            transport: None,
+            max_retry_delay_ms: None,
         }
     }
 }
