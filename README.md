@@ -53,8 +53,8 @@ graph TD
 | Layer | Path | Purpose |
 |---|---|---|
 | **Types** | `src/types/` | Provider-agnostic data model: `Message`, `ContentBlock`, `Model`, `Tool`, `Context`, `SecurityConfig` |
-| **Protocol** | `src/protocol/` | Wire-format implementations: `LLMProtocol` trait, 4 base protocols, shared infrastructure |
-| **Provider** | `src/provider/` | Service vendor facades (OpenAI, Anthropic, Google, etc.) + delegation providers |
+| **Protocol** | `src/protocol/` | Wire-format implementations ([full docs](./src/protocol/README.md)) |
+| **Provider** | `src/provider/` | Service vendor facades ([full docs](./src/provider/README.md)) |
 | **Stream** | `src/stream/` | Generic `EventStream<T, R>` implementing `futures::Stream` |
 | **Agent** | `src/agent/` | Stateful conversation manager with tool execution loop ([full docs](./src/agent/README.md)) |
 | **Transform** | `src/transform/` | Cross-provider message transformation (thinking blocks, tool call IDs, orphan resolution) |
@@ -185,37 +185,23 @@ The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), cont
 
 ## Supported Providers
 
-### Protocol Providers (implement wire format)
-
-| Provider | API | Env Var | Default Base URL |
-|---|---|---|---|
-| OpenAI (Completions) | Chat Completions | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
-| OpenAI (Responses) | Responses API | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
-| Anthropic | Messages API | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1` |
-| Google | Generative AI + Vertex AI | `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
-| Ollama | OpenAI-compatible | — | `http://localhost:11434` |
-
-### Delegation Providers (inject API key + compat, delegate to protocol)
-
-| Provider | Delegates To | Env Var |
+| Provider | Type | Env Var |
 |---|---|---|
-| xAI | OpenAI Completions | `XAI_API_KEY` |
-| Groq | OpenAI Completions | `GROQ_API_KEY` |
-| OpenRouter | OpenAI Completions | `OPENROUTER_API_KEY` |
-| ZAI | OpenAI Completions | `ZAI_API_KEY` |
-| MiniMax | Anthropic Messages | `MINIMAX_API_KEY` |
-| Kimi Coding | Anthropic Messages | `KIMI_API_KEY` |
-| Zenmux | Adaptive (see below) | `ZENMUX_API_KEY` |
+| OpenAI | Direct | `OPENAI_API_KEY` |
+| Anthropic | Direct | `ANTHROPIC_API_KEY` |
+| Google | Direct | `GOOGLE_API_KEY` |
+| Ollama | Direct | — |
+| xAI | Delegation → OpenAI Completions | `XAI_API_KEY` |
+| Groq | Delegation → OpenAI Completions | `GROQ_API_KEY` |
+| OpenRouter | Delegation → OpenAI Completions | `OPENROUTER_API_KEY` |
+| ZAI | Delegation → OpenAI Completions | `ZAI_API_KEY` |
+| MiniMax | Delegation → Anthropic | `MINIMAX_API_KEY` |
+| Kimi Coding | Delegation → Anthropic | `KIMI_API_KEY` |
+| Zenmux | Adaptive multi-protocol | `ZENMUX_API_KEY` |
 
-### Zenmux Adaptive Routing
+For detailed provider configuration, compat flags, Zenmux adaptive routing, and how to add new providers, see the **[Provider Documentation](./src/provider/README.md)**.
 
-Zenmux routes to different protocol providers based on model ID:
-
-| Model ID pattern | Routed Protocol | Base URL |
-|---|---|---|
-| Contains `google` or `gemini` | Google (Vertex AI) | `https://zenmux.ai/api/vertex-ai` |
-| Contains `openai` or `gpt` | OpenAI Responses | `https://zenmux.ai/api/v1` |
-| Everything else | Anthropic Messages | `https://zenmux.ai/api/anthropic/v1` |
+For wire-format protocol internals (SSE parsing, request building, delegation macros), see the **[Protocol Documentation](./src/protocol/README.md)**.
 
 ## API Key Resolution
 
@@ -418,7 +404,7 @@ src/
 │   ├── limits.rs       # SecurityConfig, HttpLimits, AgentLimits, StreamLimits, UrlPolicy, HeaderPolicy
 │   ├── events.rs       # AssistantMessageEvent (streaming events)
 │   └── usage.rs        # Token usage tracking
-├── protocol/           # Wire-format protocol implementations
+├── protocol/           # Wire-format protocol implementations (README.md)
 │   ├── traits.rs       # LLMProtocol trait
 │   ├── registry.rs     # Global ProtocolRegistry
 │   ├── common.rs       # Shared infrastructure (URL resolution, payload hooks, error handling)
@@ -427,7 +413,7 @@ src/
 │   ├── openai_responses.rs    # OpenAI Responses API protocol
 │   ├── anthropic.rs    # Anthropic Messages protocol
 │   └── google.rs       # Google GenAI + Vertex AI (dual-mode)
-├── provider/           # Service vendor facades
+├── provider/           # Service vendor facades (README.md)
 │   ├── openai.rs       # OpenAI → protocol::openai_responses
 │   ├── anthropic.rs    # Anthropic → protocol::anthropic
 │   ├── google.rs       # Google → protocol::google
