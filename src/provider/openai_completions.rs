@@ -116,15 +116,7 @@ impl LLMProvider for OpenAICompletionsProvider {
     ) -> AssistantMessageEventStream {
         let thinking_options = options.reasoning.map(OpenAIThinkingOptions::from_level);
 
-        let stream_options = StreamOptions {
-            temperature: options.base.temperature,
-            max_tokens: options.base.max_tokens,
-            api_key: options.base.api_key,
-            base_url: options.base.base_url,
-            headers: options.base.headers,
-            session_id: options.base.session_id,
-            security: options.base.security,
-        };
+        let stream_options = options.base;
 
         let stream = AssistantMessageEventStream::new_assistant_stream();
         let stream_clone = stream.clone();
@@ -611,6 +603,21 @@ async fn run_stream(
         reasoning_effort: None,
     };
 
+    // Apply on_payload hook if set
+    let body_string = if let Some(ref hook) = options.on_payload {
+        let request_json = serde_json::to_value(&request)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+        match hook(request_json.clone(), model.clone()).await {
+            Some(modified) => serde_json::to_string(&modified)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
+            None => serde_json::to_string(&request_json)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
+        }
+    } else {
+        serde_json::to_string(&request)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+    };
+
     let base = options
         .base_url
         .as_deref()
@@ -639,11 +646,10 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending OpenAI Completions request"
     );
-    let debug_body = serde_json::to_string(&request).unwrap_or_default();
-    let debug_preview = if debug_body.len() > 500 {
-        &debug_body[..500]
+    let debug_preview = if body_string.len() > 500 {
+        &body_string[..500]
     } else {
-        &debug_body
+        &body_string
     };
     tracing::debug!(request_body = %debug_preview, "Request payload");
 
@@ -673,7 +679,7 @@ async fn run_stream(
         .post(&url)
         .timeout(limits.http.request_timeout())
         .headers(headers)
-        .json(&request)
+        .body(body_string)
         .send()
         .await?;
 

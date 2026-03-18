@@ -476,6 +476,21 @@ async fn run_stream(
         thinking: None, // Thinking params can be set via SimpleStreamOptions
     };
 
+    // Apply on_payload hook if set
+    let body_string = if let Some(ref hook) = options.on_payload {
+        let request_json = serde_json::to_value(&request)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+        match hook(request_json.clone(), model.clone()).await {
+            Some(modified) => serde_json::to_string(&modified)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
+            None => serde_json::to_string(&request_json)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
+        }
+    } else {
+        serde_json::to_string(&request)
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+    };
+
     let base = options
         .base_url
         .as_deref()
@@ -504,11 +519,10 @@ async fn run_stream(
         has_tools = request.tools.is_some(),
         "Sending Anthropic Messages request"
     );
-    let debug_body = serde_json::to_string(&request).unwrap_or_default();
-    let debug_preview = if debug_body.len() > 500 {
-        &debug_body[..500]
+    let debug_preview = if body_string.len() > 500 {
+        &body_string[..500]
     } else {
-        &debug_body
+        &body_string
     };
     tracing::debug!(request_body = %debug_preview, "Request payload");
 
@@ -535,7 +549,7 @@ async fn run_stream(
     let response = client
         .post(&url)
         .headers(headers)
-        .json(&request)
+        .body(body_string)
         .timeout(limits.http.request_timeout())
         .send()
         .await?;
