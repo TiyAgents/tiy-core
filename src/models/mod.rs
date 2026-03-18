@@ -77,6 +77,11 @@ fn register_builtin_models(registry: &mut ModelRegistry) {
     for model in get_google_models() {
         registry.register(model);
     }
+
+    // DeepSeek models
+    for model in get_deepseek_models() {
+        registry.register(model);
+    }
 }
 
 fn get_openai_models() -> Vec<Model> {
@@ -195,6 +200,47 @@ fn get_google_models() -> Vec<Model> {
         .max_tokens(65536)
         .build()
         .unwrap()]
+}
+
+fn get_deepseek_models() -> Vec<Model> {
+    vec![
+        Model::builder()
+            .id("deepseek-r1")
+            .name("DeepSeek-R1")
+            .provider(Provider::DeepSeek)
+            .base_url("https://api.deepseek.com")
+            .reasoning(true)
+            .input(vec![crate::types::InputType::Text])
+            .cost(crate::types::Cost::new(0.55, 2.19, 0.14, 0.0))
+            .context_window(131072)
+            .max_tokens(65536)
+            .build()
+            .unwrap(),
+        Model::builder()
+            .id("deepseek-v3-0324")
+            .name("DeepSeek-V3-0324")
+            .provider(Provider::DeepSeek)
+            .base_url("https://api.deepseek.com")
+            .reasoning(true)
+            .input(vec![crate::types::InputType::Text])
+            .cost(crate::types::Cost::new(0.27, 1.10, 0.07, 0.0))
+            .context_window(131072)
+            .max_tokens(65536)
+            .build()
+            .unwrap(),
+        Model::builder()
+            .id("deepseek-chat")
+            .name("DeepSeek-V3")
+            .provider(Provider::DeepSeek)
+            .base_url("https://api.deepseek.com")
+            .reasoning(false)
+            .input(vec![crate::types::InputType::Text])
+            .cost(crate::types::Cost::new(0.27, 1.10, 0.07, 0.0))
+            .context_window(131072)
+            .max_tokens(8192)
+            .build()
+            .unwrap(),
+    ]
 }
 
 /// Global model registry (single instance shared by all functions).

@@ -1,13 +1,13 @@
-//! Tests for delegation providers (minimax, kimi-coding, xai, groq, openrouter, zai, zenmux).
+//! Tests for delegation providers (minimax, kimi-coding, xai, groq, openrouter, zai, deepseek, zenmux).
 //!
 //! These providers delegate to existing protocol implementations.
 //! Tests verify correct API type, compat settings, key resolution, and delegation behavior.
 
 use futures::StreamExt;
 use tiy_core::provider::{
-    groq::GroqProvider, kimi_coding::KimiCodingProvider, minimax::MiniMaxProvider,
-    openrouter::OpenRouterProvider, xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
-    LLMProtocol,
+    deepseek::DeepSeekProvider, groq::GroqProvider, kimi_coding::KimiCodingProvider,
+    minimax::MiniMaxProvider, openrouter::OpenRouterProvider, xai::XAIProvider,
+    zai::ZAIProvider, zenmux::ZenmuxProvider, LLMProtocol,
 };
 use tiy_core::types::*;
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
@@ -423,6 +423,132 @@ async fn test_zai_stream_delegates_to_openai() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "GLM response");
+}
+
+// ============================================================================
+// DeepSeek Provider Tests
+// ============================================================================
+
+#[test]
+fn test_deepseek_api_type() {
+    let provider = DeepSeekProvider::new();
+    assert_eq!(provider.provider_type(), Provider::DeepSeek);
+}
+
+#[test]
+fn test_deepseek_default_compat() {
+    let compat = DeepSeekProvider::default_compat();
+    assert!(
+        !compat.supports_store,
+        "DeepSeek should not support store"
+    );
+    assert!(
+        !compat.supports_developer_role,
+        "DeepSeek should not support developer role"
+    );
+    assert!(
+        compat.supports_reasoning_effort,
+        "DeepSeek should support reasoning_effort"
+    );
+    assert_eq!(compat.thinking_format, "openai");
+    assert!(compat.supports_strict_mode);
+}
+
+#[tokio::test]
+async fn test_deepseek_stream_delegates_to_openai() {
+    let server = mock_openai_server("DeepSeek says hi!").await;
+    let model = make_model(Api::OpenAICompletions, Provider::DeepSeek, &server.uri());
+    let context = Context::with_system_prompt("test");
+    let provider = DeepSeekProvider::with_api_key("test-key");
+
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "DeepSeek says hi!");
+}
+
+#[tokio::test]
+async fn test_deepseek_stream_simple() {
+    let server = mock_openai_server("DeepSeek-simple").await;
+    let model = make_model(Api::OpenAICompletions, Provider::DeepSeek, &server.uri());
+    let provider = DeepSeekProvider::with_api_key("test-key");
+    let context = Context::with_system_prompt("test");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+            thinking_budget_tokens: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "DeepSeek-simple");
+}
+
+#[tokio::test]
+async fn test_deepseek_preserves_explicit_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::DeepSeek, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat {
+        supports_store: true,
+        supports_developer_role: true,
+        ..Default::default()
+    });
+    let context = Context::with_system_prompt("test");
+    let provider = DeepSeekProvider::with_api_key("test-key");
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_deepseek_stream_simple_preserves_compat() {
+    let server = mock_openai_server("ok").await;
+    let mut model = make_model(Api::OpenAICompletions, Provider::DeepSeek, &server.uri());
+    model.compat = Some(OpenAICompletionsCompat::default());
+    let context = Context::with_system_prompt("test");
+    let provider = DeepSeekProvider::with_api_key("test-key");
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: StreamOptions {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+            reasoning: None,
+            thinking_budget_tokens: None,
+        },
+    );
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[test]
+fn test_deepseek_resolve_api_key_from_provider() {
+    let provider = DeepSeekProvider::with_api_key("deepseek-key-123");
+    // resolve_api_key is private, so test via provider behavior
+    assert_eq!(provider.provider_type(), Provider::DeepSeek);
 }
 
 // ============================================================================

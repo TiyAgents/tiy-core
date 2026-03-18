@@ -55,6 +55,7 @@ cargo run --example basic_usage      # Run example (requires API keys)
    | `groq` | `protocol::openai_completions` | `GROQ_API_KEY` |
    | `openrouter` | `protocol::openai_completions` | `OPENROUTER_API_KEY` |
    | `zai` | `protocol::openai_completions` | `ZAI_API_KEY` |
+   | `deepseek` | `protocol::openai_completions` | `DEEPSEEK_API_KEY` |
    | `minimax` | `protocol::anthropic` | `MINIMAX_API_KEY` |
    | `kimi_coding` | `protocol::anthropic` | `KIMI_API_KEY` |
    | `zenmux` | adaptive (see below) | `ZENMUX_API_KEY` |

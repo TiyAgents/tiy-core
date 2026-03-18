@@ -123,9 +123,12 @@ fn create_default_provider(provider: &Provider) -> Option<ArcProtocol> {
         Provider::XAI => Some(Arc::new(super::xai::XAIProvider::new())),
         Provider::Groq => Some(Arc::new(super::groq::GroqProvider::new())),
         Provider::OpenRouter => Some(Arc::new(super::openrouter::OpenRouterProvider::new())),
-        Provider::MiniMax | Provider::MiniMaxCN => Some(Arc::new(super::minimax::MiniMaxProvider::new())),
+        Provider::MiniMax | Provider::MiniMaxCN => {
+            Some(Arc::new(super::minimax::MiniMaxProvider::new()))
+        }
         Provider::KimiCoding => Some(Arc::new(super::kimi_coding::KimiCodingProvider::new())),
         Provider::ZAI => Some(Arc::new(super::zai::ZAIProvider::new())),
+        Provider::DeepSeek => Some(Arc::new(super::deepseek::DeepSeekProvider::new())),
         Provider::Zenmux => Some(Arc::new(super::zenmux::ZenmuxProvider::new())),
         _ => None,
     }

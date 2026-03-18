@@ -14,24 +14,25 @@ mod registry;
 pub(crate) mod delegation;
 
 // Provider facades
-pub mod openai;
 pub mod anthropic;
 pub mod google;
-pub mod ollama;
-pub mod xai;
 pub mod groq;
-pub mod openrouter;
-pub mod zai;
-pub mod minimax;
 pub mod kimi_coding;
+pub mod minimax;
+pub mod ollama;
+pub mod openai;
+pub mod openrouter;
+pub mod xai;
+pub mod zai;
+pub mod deepseek;
 pub mod zenmux;
 
 // Re-export protocol trait & type aliases (these stay in protocol/)
-pub use crate::protocol::{LLMProtocol, BoxedProtocol, ArcProtocol};
+pub use crate::protocol::{ArcProtocol, BoxedProtocol, LLMProtocol};
 
 // Re-export registry API (now lives here)
 pub use registry::{
-    global_registry, register_provider, get_provider, get_registered_providers, clear_providers,
+    clear_providers, get_provider, get_registered_providers, global_registry, register_provider,
     ProtocolRegistry,
 };
 
@@ -53,5 +54,6 @@ pub fn register_all_providers() {
     register_provider(Arc::new(minimax::MiniMaxProvider::new()));
     register_provider(Arc::new(kimi_coding::KimiCodingProvider::new()));
     register_provider(Arc::new(zai::ZAIProvider::new()));
+    register_provider(Arc::new(deepseek::DeepSeekProvider::new()));
     register_provider(Arc::new(zenmux::ZenmuxProvider::new()));
 }

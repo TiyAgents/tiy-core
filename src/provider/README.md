@@ -93,6 +93,7 @@ Providers that inject API keys, compat settings, and/or custom base URLs, then d
 | Groq | `groq.rs` | `GroqProvider` | `GROQ_API_KEY` | Model-aware: custom `reasoning_effort_map` for `qwen/qwen3-32b` |
 | OpenRouter | `openrouter.rs` | `OpenRouterProvider` | `OPENROUTER_API_KEY` | No compat injection; supports routing extensions via `open_router_routing` |
 | ZAI | `zai.rs` | `ZAIProvider` | `ZAI_API_KEY` | `thinking_format: "zai"` (uses `enable_thinking` parameter), `supports_developer_role: false` |
+| DeepSeek | `deepseek.rs` | `DeepSeekProvider` | `DEEPSEEK_API_KEY` | `supports_store: false`, `supports_developer_role: false`, `thinking_format: "openai"` |
 
 ### Anthropic-Compatible (→ Anthropic Messages Protocol)
 
@@ -157,6 +158,7 @@ provider/
 ├── groq.rs          # Groq → OpenAI Completions (macro-generated, model-aware compat)
 ├── openrouter.rs    # OpenRouter → OpenAI Completions (macro-generated, no compat)
 ├── zai.rs           # ZAI → OpenAI Completions (macro-generated, static compat)
+├── deepseek.rs      # DeepSeek → OpenAI Completions (macro-generated, static compat)
 ├── minimax.rs       # MiniMax → Anthropic (hand-written, dual env var)
 ├── kimi_coding.rs   # Kimi Coding → Anthropic (macro-generated)
 └── zenmux.rs        # Zenmux → adaptive 3-way routing (hand-written)
@@ -298,6 +300,7 @@ let stream = provider.stream(&model, &context, StreamOptions {
 | Groq | `groq.rs` | `GroqProvider` | `GROQ_API_KEY` | 模型感知：`qwen/qwen3-32b` 使用自定义 `reasoning_effort_map` |
 | OpenRouter | `openrouter.rs` | `OpenRouterProvider` | `OPENROUTER_API_KEY` | 无兼容性注入；支持通过 `open_router_routing` 进行路由扩展 |
 | ZAI | `zai.rs` | `ZAIProvider` | `ZAI_API_KEY` | `thinking_format: "zai"`（使用 `enable_thinking` 参数），`supports_developer_role: false` |
+| DeepSeek | `deepseek.rs` | `DeepSeekProvider` | `DEEPSEEK_API_KEY` | `supports_store: false`，`supports_developer_role: false`，`thinking_format: "openai"` |
 
 ### Anthropic 兼容（→ Anthropic Messages 协议）
 

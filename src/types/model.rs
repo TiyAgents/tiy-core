@@ -171,6 +171,9 @@ pub enum Provider {
     /// Kimi Coding.
     #[serde(rename = "kimi-coding")]
     KimiCoding,
+    /// DeepSeek.
+    #[serde(rename = "deepseek")]
+    DeepSeek,
     /// Zenmux.
     #[serde(rename = "zenmux")]
     Zenmux,
@@ -209,6 +212,7 @@ impl Provider {
             Provider::OpenCode => "opencode",
             Provider::OpenCodeGo => "opencode-go",
             Provider::KimiCoding => "kimi-coding",
+            Provider::DeepSeek => "deepseek",
             Provider::Zenmux => "zenmux",
             Provider::Ollama => "ollama",
             Provider::Custom(s) => s.as_str(),
@@ -249,6 +253,7 @@ impl From<String> for Provider {
             "opencode" => Provider::OpenCode,
             "opencode-go" => Provider::OpenCodeGo,
             "kimi-coding" => Provider::KimiCoding,
+            "deepseek" => Provider::DeepSeek,
             "zenmux" => Provider::Zenmux,
             "ollama" => Provider::Ollama,
             _ => Provider::Custom(s),
@@ -343,6 +348,9 @@ pub struct OpenAICompletionsCompat {
     /// Supports strict mode for tool calls.
     #[serde(default = "default_true")]
     pub supports_strict_mode: bool,
+    /// OpenRouter routing preferences (e.g., `{"only": ["anthropic"]}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_router_routing: Option<serde_json::Value>,
 }
 
 fn default_true() -> bool {
@@ -367,6 +375,7 @@ impl Default for OpenAICompletionsCompat {
             requires_thinking_as_text: false,
             thinking_format: "openai".to_string(),
             supports_strict_mode: true,
+            open_router_routing: None,
         }
     }
 }
