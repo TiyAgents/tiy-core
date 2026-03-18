@@ -34,8 +34,9 @@ All providers implement the same `LLMProtocol` trait, so switching from OpenAI t
        │              Provider Layer (this module)          │
        │  ┌──────────────────────┐  ┌────────────────────┐ │
        │  │  Direct Providers    │  │ Delegation Providers│ │
-       │  │  OpenAI, Anthropic,  │  │ xAI, Groq, ZAI,   │ │
-       │  │  Google, Ollama      │  │ OpenRouter, MiniMax,│ │
+       │  │  OpenAI, Anthropic,  │  │ OpenAI-Compatible, │ │
+       │  │  Google, Ollama      │  │ xAI, Groq, ZAI,    │ │
+       │  │                      │  │ OpenRouter, MiniMax,│ │
        │  │                      │  │ Kimi Coding, Zenmux │ │
        │  └──────────┬───────────┘  └──────────┬─────────┘ │
        └─────────────┼────────────────────────┼────────────┘
@@ -89,6 +90,7 @@ Providers that inject API keys, compat settings, and/or custom base URLs, then d
 
 | Provider | Module | Struct | Env Var | Compat Notes |
 |---|---|---|---|---|
+| OpenAI-Compatible | `openai_compatible.rs` | `OpenAICompatibleProvider` | `OPENAI_API_KEY` | Generic facade; uses caller-supplied `model.base_url` or `StreamOptions.base_url` |
 | xAI | `xai.rs` | `XAIProvider` | `XAI_API_KEY` | `supports_store: false`, `supports_developer_role: false`, `thinking_format: "openai"` |
 | Groq | `groq.rs` | `GroqProvider` | `GROQ_API_KEY` | Model-aware: custom `reasoning_effort_map` for `qwen/qwen3-32b` |
 | OpenRouter | `openrouter.rs` | `OpenRouterProvider` | `OPENROUTER_API_KEY` | No compat injection; supports routing extensions via `open_router_routing` |
@@ -154,6 +156,7 @@ provider/
 ├── anthropic.rs     # Anthropic → protocol::anthropic
 ├── google.rs        # Google → protocol::google (GenAI + Vertex dual-mode)
 ├── ollama.rs        # Ollama → protocol::openai_completions (localhost)
+├── openai_compatible.rs # OpenAI-Compatible → OpenAI Completions (macro-generated, generic facade)
 ├── xai.rs           # xAI → OpenAI Completions (macro-generated, static compat)
 ├── groq.rs          # Groq → OpenAI Completions (macro-generated, model-aware compat)
 ├── openrouter.rs    # OpenRouter → OpenAI Completions (macro-generated, no compat)
@@ -241,8 +244,9 @@ let stream = provider.stream(&model, &context, options);
        │              Provider 层（本模块）                   │
        │  ┌──────────────────────┐  ┌────────────────────┐ │
        │  │   直接提供商          │  │   委托提供商         │ │
-       │  │  OpenAI, Anthropic,  │  │ xAI, Groq, ZAI,   │ │
-       │  │  Google, Ollama      │  │ OpenRouter, MiniMax,│ │
+       │  │  OpenAI, Anthropic,  │  │ OpenAI-Compatible, │ │
+       │  │  Google, Ollama      │  │ xAI, Groq, ZAI,    │ │
+       │  │                      │  │ OpenRouter, MiniMax,│ │
        │  │                      │  │ Kimi Coding, Zenmux │ │
        │  └──────────┬───────────┘  └──────────┬─────────┘ │
        └─────────────┼────────────────────────┼────────────┘
@@ -296,6 +300,7 @@ let stream = provider.stream(&model, &context, StreamOptions {
 
 | 提供商 | 模块 | 结构体 | 环境变量 | 兼容性说明 |
 |---|---|---|---|---|
+| OpenAI-Compatible | `openai_compatible.rs` | `OpenAICompatibleProvider` | `OPENAI_API_KEY` | 通用门面；使用调用方提供的 `model.base_url` 或 `StreamOptions.base_url` |
 | xAI | `xai.rs` | `XAIProvider` | `XAI_API_KEY` | `supports_store: false`，`supports_developer_role: false`，`thinking_format: "openai"` |
 | Groq | `groq.rs` | `GroqProvider` | `GROQ_API_KEY` | 模型感知：`qwen/qwen3-32b` 使用自定义 `reasoning_effort_map` |
 | OpenRouter | `openrouter.rs` | `OpenRouterProvider` | `OPENROUTER_API_KEY` | 无兼容性注入；支持通过 `open_router_routing` 进行路由扩展 |
@@ -361,10 +366,12 @@ provider/
 ├── anthropic.rs     # Anthropic → protocol::anthropic
 ├── google.rs        # Google → protocol::google（GenAI + Vertex 双模式）
 ├── ollama.rs        # Ollama → protocol::openai_completions（本地）
+├── openai_compatible.rs # OpenAI-Compatible → OpenAI Completions（宏生成，通用门面）
 ├── xai.rs           # xAI → OpenAI Completions（宏生成，静态兼容性）
 ├── groq.rs          # Groq → OpenAI Completions（宏生成，模型感知兼容性）
 ├── openrouter.rs    # OpenRouter → OpenAI Completions（宏生成，无兼容性）
 ├── zai.rs           # ZAI → OpenAI Completions（宏生成，静态兼容性）
+├── deepseek.rs      # DeepSeek → OpenAI Completions（宏生成，静态兼容性）
 ├── minimax.rs       # MiniMax → Anthropic（手写，双环境变量）
 ├── kimi_coding.rs   # Kimi Coding → Anthropic（宏生成）
 └── zenmux.rs        # Zenmux → 自适应三路路由（手写）

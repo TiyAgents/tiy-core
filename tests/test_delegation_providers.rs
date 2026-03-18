@@ -1,4 +1,5 @@
-//! Tests for delegation providers (minimax, kimi-coding, xai, groq, openrouter, zai, deepseek, zenmux).
+//! Tests for delegation providers (openai-compatible, minimax, kimi-coding,
+//! xai, groq, openrouter, zai, deepseek, zenmux).
 //!
 //! These providers delegate to existing protocol implementations.
 //! Tests verify correct API type, compat settings, key resolution, and delegation behavior.
@@ -6,8 +7,9 @@
 use futures::StreamExt;
 use tiy_core::provider::{
     deepseek::DeepSeekProvider, groq::GroqProvider, kimi_coding::KimiCodingProvider,
-    minimax::MiniMaxProvider, openrouter::OpenRouterProvider, xai::XAIProvider,
-    zai::ZAIProvider, zenmux::ZenmuxProvider, LLMProtocol,
+    minimax::MiniMaxProvider, openai_compatible::OpenAICompatibleProvider,
+    openrouter::OpenRouterProvider, xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
+    LLMProtocol,
 };
 use tiy_core::types::*;
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
@@ -140,6 +142,47 @@ async fn mock_openai_server(text: &str) -> MockServer {
         .mount(&server)
         .await;
     server
+}
+
+// ============================================================================
+// OpenAI-Compatible Provider Tests
+// ============================================================================
+
+#[test]
+fn test_openai_compatible_api_type() {
+    let provider = OpenAICompatibleProvider::new();
+    assert_eq!(provider.provider_type(), Provider::OpenAICompatible);
+}
+
+#[test]
+fn test_openai_compatible_default() {
+    let provider = OpenAICompatibleProvider::default();
+    assert_eq!(provider.provider_type(), Provider::OpenAICompatible);
+}
+
+#[tokio::test]
+async fn test_openai_compatible_stream_delegates_to_openai() {
+    let server = mock_openai_server("Compatible response").await;
+    let model = make_model(
+        Api::OpenAICompletions,
+        Provider::OpenAICompatible,
+        &server.uri(),
+    );
+    let context = Context::with_system_prompt("test");
+    let provider = OpenAICompatibleProvider::with_api_key("test-key");
+
+    let stream = provider.stream(
+        &model,
+        &context,
+        StreamOptions {
+            api_key: Some("test-key".into()),
+            ..Default::default()
+        },
+    );
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Compatible response");
 }
 
 // ============================================================================
@@ -438,10 +481,7 @@ fn test_deepseek_api_type() {
 #[test]
 fn test_deepseek_default_compat() {
     let compat = DeepSeekProvider::default_compat();
-    assert!(
-        !compat.supports_store,
-        "DeepSeek should not support store"
-    );
+    assert!(!compat.supports_store, "DeepSeek should not support store");
     assert!(
         !compat.supports_developer_role,
         "DeepSeek should not support developer role"

@@ -99,6 +99,7 @@ fn test_api_serde_all_known_variants() {
 #[test]
 fn test_provider_as_str() {
     assert_eq!(Provider::OpenAI.as_str(), "openai");
+    assert_eq!(Provider::OpenAICompatible.as_str(), "openai-compatible");
     assert_eq!(Provider::Anthropic.as_str(), "anthropic");
     assert_eq!(Provider::Google.as_str(), "google");
     assert_eq!(Provider::Groq.as_str(), "groq");
@@ -110,6 +111,10 @@ fn test_provider_as_str() {
 #[test]
 fn test_provider_from_string() {
     assert_eq!(Provider::from("openai".to_string()), Provider::OpenAI);
+    assert_eq!(
+        Provider::from("openai-compatible".to_string()),
+        Provider::OpenAICompatible
+    );
     assert_eq!(Provider::from("anthropic".to_string()), Provider::Anthropic);
     assert_eq!(Provider::from("google".to_string()), Provider::Google);
     assert_eq!(Provider::from("groq".to_string()), Provider::Groq);
@@ -1206,6 +1211,7 @@ fn test_provider_as_str_all_variants() {
     assert_eq!(Provider::GoogleGeminiCli.as_str(), "google-gemini-cli");
     assert_eq!(Provider::GoogleAntigravity.as_str(), "google-antigravity");
     assert_eq!(Provider::GoogleVertex.as_str(), "google-vertex");
+    assert_eq!(Provider::OpenAICompatible.as_str(), "openai-compatible");
     assert_eq!(Provider::OpenAIResponses.as_str(), "openai-responses");
     assert_eq!(
         Provider::AzureOpenAIResponses.as_str(),
@@ -1244,6 +1250,10 @@ fn test_provider_from_string_all_variants() {
     assert_eq!(
         Provider::from("google-vertex".to_string()),
         Provider::GoogleVertex
+    );
+    assert_eq!(
+        Provider::from("openai-compatible".to_string()),
+        Provider::OpenAICompatible
     );
     assert_eq!(
         Provider::from("openai-responses".to_string()),

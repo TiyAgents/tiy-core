@@ -56,6 +56,7 @@ impl OpenAICompletionsProtocol {
         // Try environment variable based on provider
         let env_key = match provider {
             Provider::OpenAI => std::env::var("OPENAI_API_KEY").ok(),
+            Provider::OpenAICompatible => std::env::var("OPENAI_API_KEY").ok(),
             Provider::Groq => std::env::var("GROQ_API_KEY").ok(),
             Provider::XAI => std::env::var("XAI_API_KEY").ok(),
             Provider::Cerebras => std::env::var("CEREBRAS_API_KEY").ok(),

@@ -15,16 +15,17 @@ pub(crate) mod delegation;
 
 // Provider facades
 pub mod anthropic;
+pub mod deepseek;
 pub mod google;
 pub mod groq;
 pub mod kimi_coding;
 pub mod minimax;
 pub mod ollama;
 pub mod openai;
+pub mod openai_compatible;
 pub mod openrouter;
 pub mod xai;
 pub mod zai;
-pub mod deepseek;
 pub mod zenmux;
 
 // Re-export protocol trait & type aliases (these stay in protocol/)
@@ -45,6 +46,7 @@ pub use registry::{
 pub fn register_all_providers() {
     use std::sync::Arc;
     register_provider(Arc::new(openai::OpenAIProvider::new()));
+    register_provider(Arc::new(openai_compatible::OpenAICompatibleProvider::new()));
     register_provider(Arc::new(anthropic::AnthropicProvider::new()));
     register_provider(Arc::new(google::GoogleProvider::new()));
     register_provider(Arc::new(ollama::OllamaProvider::new()));

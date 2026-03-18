@@ -18,7 +18,7 @@ tiy-core is a Rust library that provides a single, provider-agnostic interface f
 
 ## Highlights
 
-- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 8 delegation providers (xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProtocol` trait.
+- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 9 delegation providers (OpenAI-Compatible, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProtocol` trait.
 - **Streaming-first** — `EventStream<T, R>` backed by `parking_lot::Mutex<VecDeque>` implements `futures::Stream`. Every provider returns an `AssistantMessageEventStream` with fine-grained deltas: text, thinking, tool call arguments, and completion events.
 - **Tool / Function calling** — Define tools via JSON Schema, validate arguments with the `jsonschema` crate, and execute tools in parallel or sequentially within the agent loop.
 - **Stateful Agent runtime** — `Agent` manages a full conversation loop: stream LLM → detect tool calls → execute tools → re-prompt → repeat. Supports steering (interrupt mid-turn), follow-up queues, event subscription (observer pattern), abort, and configurable max turns (default 25).
@@ -39,14 +39,15 @@ graph TD
     D --> D3[Anthropic Messages]
     D --> D4[Google GenAI / Vertex]
     D --> D5[Ollama]
-    E --> E1[xAI → OpenAI Completions]
-    E --> E2[Groq → OpenAI Completions]
-    E --> E3[OpenRouter → OpenAI Completions]
-    E --> E4[ZAI → OpenAI Completions]
-    E --> E5[DeepSeek → OpenAI Completions]
-    E --> E6[MiniMax → Anthropic]
-    E --> E7[Kimi Coding → Anthropic]
-    E --> E8[Zenmux → adaptive routing]
+    E --> E1[OpenAI-Compatible → OpenAI Completions]
+    E --> E2[xAI → OpenAI Completions]
+    E --> E3[Groq → OpenAI Completions]
+    E --> E4[OpenRouter → OpenAI Completions]
+    E --> E5[ZAI → OpenAI Completions]
+    E --> E6[DeepSeek → OpenAI Completions]
+    E --> E7[MiniMax → Anthropic]
+    E --> E8[Kimi Coding → Anthropic]
+    E --> E9[Zenmux → adaptive routing]
 ```
 
 ### Core Layers
@@ -192,6 +193,7 @@ The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), cont
 | Anthropic | Direct | `ANTHROPIC_API_KEY` |
 | Google | Direct | `GOOGLE_API_KEY` |
 | Ollama | Direct | — |
+| OpenAI-Compatible | Delegation → OpenAI Completions | `OPENAI_API_KEY` |
 | xAI | Delegation → OpenAI Completions | `XAI_API_KEY` |
 | Groq | Delegation → OpenAI Completions | `GROQ_API_KEY` |
 | OpenRouter | Delegation → OpenAI Completions | `OPENROUTER_API_KEY` |
