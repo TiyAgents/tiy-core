@@ -116,3 +116,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Smoke Check
+
+You can verify the published GitHub Pages snapshot manually before wiring it
+into an application:
+
+```bash
+curl -fsSL https://tiyagents.github.io/tiy-core/catalog/manifest.json
+curl -fsSL https://tiyagents.github.io/tiy-core/catalog/catalog.json -o /tmp/catalog.json
+python3 -m json.tool /tmp/catalog.json >/dev/null
+```
+
+For an application startup flow, the minimal stale-while-revalidate pattern
+looks like this:
+
+```rust,no_run
+use std::path::PathBuf;
+use tiy_core::catalog::{
+    load_catalog_metadata_store, refresh_catalog_snapshot, CatalogRemoteConfig,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let snapshot_path = PathBuf::from("/path/to/cache/catalog.json");
+
+    // 1. Load local snapshot if it already exists.
+    let _local_store = load_catalog_metadata_store(&snapshot_path)?;
+
+    // 2. Refresh in the background or during startup.
+    let _refresh = refresh_catalog_snapshot(
+        &snapshot_path,
+        &CatalogRemoteConfig::default(),
+    )
+    .await?;
+
+    // 3. Reload after a successful refresh if you need the newest snapshot now.
+    let _updated_store = load_catalog_metadata_store(&snapshot_path)?;
+    Ok(())
+}
+```
