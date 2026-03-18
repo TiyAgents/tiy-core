@@ -98,8 +98,16 @@ impl LLMProtocol for OpenAICompletionsProtocol {
         let api_key = self.resolve_api_key(&options, &model.provider);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                options,
+                api_key,
+                None,
+                stream_clone,
+            )
+            .await
             {
                 tracing::error!("Stream error: {}", e);
             }
@@ -127,7 +135,7 @@ impl LLMProtocol for OpenAICompletionsProtocol {
         let api_key = self.resolve_api_key(&stream_options, &model.provider);
 
         tokio::spawn(async move {
-            if let Err(e) = run_stream_with_thinking(
+            if let Err(e) = run_stream(
                 client,
                 &model,
                 &context,
@@ -144,6 +152,15 @@ impl LLMProtocol for OpenAICompletionsProtocol {
 
         stream
     }
+}
+
+// ============================================================================
+// Compat Resolution
+// ============================================================================
+
+/// Resolve compat settings for the model, using defaults when model.compat is None.
+fn resolve_compat(model: &Model) -> OpenAICompletionsCompat {
+    model.compat.clone().unwrap_or_default()
 }
 
 // ============================================================================
@@ -168,6 +185,17 @@ struct ChatCompletionRequest {
     stream_options: Option<StreamOptionsConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    store: Option<bool>,
+    /// ZAI / Qwen thinking format: top-level enable_thinking flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable_thinking: Option<bool>,
+    /// Qwen chat-template thinking format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chat_template_kwargs: Option<serde_json::Value>,
+    /// OpenRouter routing preferences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +215,10 @@ struct OpenAIMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Extra fields for provider-specific data (e.g. reasoning_content).
+    /// Flattened into the top-level JSON object during serialization.
+    #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
+    extra_fields: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -196,7 +228,7 @@ enum OpenAIContent {
     Parts(Vec<OpenAIContentPart>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OpenAIContentPart {
     #[serde(rename = "type")]
     content_type: String,
@@ -204,9 +236,12 @@ struct OpenAIContentPart {
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_url: Option<ImageUrl>,
+    /// Cache control hint (for OpenRouter + Anthropic models).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImageUrl {
     url: String,
 }
@@ -237,6 +272,8 @@ struct OpenAIFunctionDef {
     name: String,
     description: String,
     parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
 }
 
 /// Streaming response chunk.
@@ -314,15 +351,12 @@ struct CompletionTokensDetails {
 
 /// Convert context to OpenAI messages.
 fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
+    let compat = resolve_compat(model);
     let mut messages = Vec::new();
 
     // Add system prompt
     if let Some(ref prompt) = context.system_prompt {
-        let use_developer = model.reasoning
-            && model
-                .compat
-                .as_ref()
-                .map_or(false, |c| c.supports_developer_role);
+        let use_developer = model.reasoning && compat.supports_developer_role;
         let role = if use_developer { "developer" } else { "system" };
 
         messages.push(OpenAIMessage {
@@ -331,28 +365,52 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            extra_fields: HashMap::new(),
         });
     }
+
+    // Track last message role for requiresAssistantAfterToolResult logic
+    let mut last_was_tool_result = false;
 
     // Convert messages
     for msg in &context.messages {
         match msg {
             Message::User(user_msg) => {
+                // P1-3: Insert synthetic assistant message between tool result and user
+                if last_was_tool_result && compat.requires_assistant_after_tool_result {
+                    messages.push(OpenAIMessage {
+                        role: "assistant".to_string(),
+                        content: Some(OpenAIContent::Text(
+                            "I have processed the tool results.".to_string(),
+                        )),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                        extra_fields: HashMap::new(),
+                    });
+                }
+
                 let openai_msg = convert_user_message(user_msg, model);
                 messages.push(openai_msg);
+                last_was_tool_result = false;
             }
             Message::Assistant(assistant_msg) => {
-                let openai_msg = convert_assistant_message(assistant_msg, model);
+                let openai_msg = convert_assistant_message(assistant_msg, model, &compat);
                 if let Some(msg) = openai_msg {
                     messages.push(msg);
                 }
+                last_was_tool_result = false;
             }
             Message::ToolResult(tool_result) => {
                 let openai_msg = convert_tool_result(tool_result, model);
                 messages.push(openai_msg);
+                last_was_tool_result = true;
             }
         }
     }
+
+    // P1-5: OpenRouter Anthropic cache_control injection
+    maybe_add_openrouter_anthropic_cache_control(&mut messages, model);
 
     messages
 }
@@ -365,6 +423,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            extra_fields: HashMap::new(),
         },
         UserContent::Blocks(blocks) => {
             let parts: Vec<OpenAIContentPart> = blocks
@@ -374,6 +433,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
                         content_type: "text".to_string(),
                         text: Some(sanitize_surrogates(&t.text)),
                         image_url: None,
+                        cache_control: None,
                     }),
                     ContentBlock::Image(img) => {
                         if model.supports_image() {
@@ -383,6 +443,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
                                 image_url: Some(ImageUrl {
                                     url: format!("data:{};base64,{}", img.mime_type, img.data),
                                 }),
+                                cache_control: None,
                             })
                         } else {
                             None
@@ -399,6 +460,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
+                    extra_fields: HashMap::new(),
                 }
             } else {
                 OpenAIMessage {
@@ -407,6 +469,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
                     tool_calls: None,
                     tool_call_id: None,
                     name: None,
+                    extra_fields: HashMap::new(),
                 }
             }
         }
@@ -416,6 +479,7 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
 fn convert_assistant_message(
     assistant_msg: &AssistantMessage,
     _model: &Model,
+    compat: &OpenAICompletionsCompat,
 ) -> Option<OpenAIMessage> {
     // Skip error/aborted messages
     if assistant_msg.stop_reason == StopReason::Error
@@ -424,8 +488,28 @@ fn convert_assistant_message(
         return None;
     }
 
+    // Handle thinking blocks
+    let thinking_blocks: Vec<_> = assistant_msg
+        .content
+        .iter()
+        .filter_map(|b| b.as_thinking())
+        .filter(|t| !t.thinking.trim().is_empty() && !t.redacted)
+        .collect();
+
+    let thinking_text = if !thinking_blocks.is_empty() {
+        Some(
+            thinking_blocks
+                .iter()
+                .map(|t| t.thinking.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    } else {
+        None
+    };
+
     // Get text content
-    let text_content: String = assistant_msg
+    let mut text_content: String = assistant_msg
         .content
         .iter()
         .filter_map(|b| b.as_text())
@@ -433,6 +517,15 @@ fn convert_assistant_message(
         .map(|t| sanitize_surrogates(&t.text))
         .collect::<Vec<_>>()
         .join("");
+
+    // P0-2: If requires_thinking_as_text, prepend thinking to text content
+    if compat.requires_thinking_as_text {
+        if let Some(ref thinking) = thinking_text {
+            let mut combined = format!("<thinking>\n{}\n</thinking>\n", thinking);
+            combined.push_str(&text_content);
+            text_content = combined;
+        }
+    }
 
     // Get tool calls
     let tool_calls: Vec<OpenAIToolCall> = assistant_msg
@@ -450,17 +543,9 @@ fn convert_assistant_message(
         .collect();
 
     // Skip if no content and no tool calls
-    if text_content.is_empty() && tool_calls.is_empty() {
+    if text_content.is_empty() && tool_calls.is_empty() && thinking_text.is_none() {
         return None;
     }
-
-    // Handle thinking blocks
-    let thinking_blocks: Vec<_> = assistant_msg
-        .content
-        .iter()
-        .filter_map(|b| b.as_thinking())
-        .filter(|t| !t.thinking.trim().is_empty())
-        .collect();
 
     let content = if text_content.is_empty() {
         None
@@ -468,7 +553,23 @@ fn convert_assistant_message(
         Some(OpenAIContent::Text(text_content))
     };
 
-    // Add thinking as a separate field if the model supports it
+    let mut extra_fields = HashMap::new();
+
+    // P0-2: Add thinking as reasoning_content field (when not requires_thinking_as_text)
+    if !compat.requires_thinking_as_text {
+        if let Some(ref thinking) = thinking_text {
+            // Use the appropriate field name based on thinking_format
+            let field_name = match compat.thinking_format.as_str() {
+                "zai" | "qwen" | "qwen-chat-template" => "reasoning_content",
+                _ => "reasoning_content", // Standard OpenAI field
+            };
+            extra_fields.insert(
+                field_name.to_string(),
+                serde_json::Value::String(thinking.clone()),
+            );
+        }
+    }
+
     let msg = OpenAIMessage {
         role: "assistant".to_string(),
         content,
@@ -479,20 +580,8 @@ fn convert_assistant_message(
         },
         tool_call_id: None,
         name: None,
+        extra_fields,
     };
-
-    // For models that support reasoning_content field
-    if !thinking_blocks.is_empty() {
-        let thinking_text = thinking_blocks
-            .iter()
-            .map(|t| t.thinking.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // This would need custom serialization to add the reasoning_content field
-        // For now, we'll skip adding thinking blocks
-        let _ = thinking_text;
-    }
 
     Some(msg)
 }
@@ -509,7 +598,7 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
     let requires_name = model
         .compat
         .as_ref()
-        .map_or(false, |c| c.requires_tool_result_name);
+        .is_some_and(|c| c.requires_tool_result_name);
 
     OpenAIMessage {
         role: "tool".to_string(),
@@ -525,11 +614,12 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
         } else {
             None
         },
+        extra_fields: HashMap::new(),
     }
 }
 
-/// Convert tools to OpenAI format.
-fn convert_tools(tools: &[Tool]) -> Vec<OpenAITool> {
+/// Convert tools to OpenAI format, respecting compat strict mode setting.
+fn convert_tools(tools: &[Tool], compat: &OpenAICompletionsCompat) -> Vec<OpenAITool> {
     tools
         .iter()
         .map(|t| OpenAITool {
@@ -538,9 +628,60 @@ fn convert_tools(tools: &[Tool]) -> Vec<OpenAITool> {
                 name: t.name.clone(),
                 description: t.description.clone(),
                 parameters: t.parameters.clone(),
+                // P1-2: Only include strict if provider supports it
+                strict: if compat.supports_strict_mode {
+                    Some(false)
+                } else {
+                    None
+                },
             },
         })
         .collect()
+}
+
+/// P1-5: Add cache_control to last user/assistant text part for OpenRouter + Anthropic models.
+fn maybe_add_openrouter_anthropic_cache_control(messages: &mut [OpenAIMessage], model: &Model) {
+    // Only apply for OpenRouter provider with Anthropic models
+    if model.provider != Provider::OpenRouter || !model.id.starts_with("anthropic/") {
+        return;
+    }
+
+    let cache_control_value = serde_json::json!({ "type": "ephemeral" });
+
+    // Walk backwards to find last user or assistant message with text content
+    for msg in messages.iter_mut().rev() {
+        if msg.role != "user" && msg.role != "assistant" {
+            continue;
+        }
+
+        match &mut msg.content {
+            Some(OpenAIContent::Parts(parts)) => {
+                // Find last text part and add cache_control
+                for part in parts.iter_mut().rev() {
+                    if part.content_type == "text" {
+                        part.cache_control = Some(cache_control_value);
+                        return;
+                    }
+                }
+            }
+            Some(OpenAIContent::Text(_text)) => {
+                // Convert to Parts format so we can add cache_control
+                let text_val = if let Some(OpenAIContent::Text(t)) = msg.content.take() {
+                    t
+                } else {
+                    return;
+                };
+                msg.content = Some(OpenAIContent::Parts(vec![OpenAIContentPart {
+                    content_type: "text".to_string(),
+                    text: Some(text_val),
+                    image_url: None,
+                    cache_control: Some(cache_control_value),
+                }]));
+                return;
+            }
+            _ => continue,
+        }
+    }
 }
 
 /// Sanitize Unicode surrogates.
@@ -555,6 +696,19 @@ fn sanitize_surrogates(text: &str) -> String {
 }
 
 // ============================================================================
+// Thinking / Reasoning Effort Resolution
+// ============================================================================
+
+/// Resolve the reasoning_effort value, applying the compat reasoning_effort_map if present.
+fn resolve_reasoning_effort(effort: &str, compat: &OpenAICompletionsCompat) -> String {
+    // Check if there's a mapped value for this effort level
+    if let Some(mapped) = compat.reasoning_effort_map.get(effort) {
+        return mapped.clone();
+    }
+    effort.to_string()
+}
+
+// ============================================================================
 // Streaming Implementation
 // ============================================================================
 
@@ -564,9 +718,11 @@ async fn run_stream(
     context: &Context,
     options: StreamOptions,
     api_key: String,
+    thinking_options: Option<OpenAIThinkingOptions>,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
+    let compat = resolve_compat(model);
 
     let mut output = AssistantMessage::builder()
         .api(model.api.clone().unwrap_or(Api::OpenAICompletions))
@@ -577,17 +733,72 @@ async fn run_stream(
         .build()?;
 
     let messages = convert_messages(context, model);
-    let tools = context.tools.as_ref().map(|t| convert_tools(&t));
+    let tools = context.tools.as_ref().map(|t| convert_tools(t, &compat));
 
     // Determine which max tokens field to use
-    let max_tokens_field = model
-        .compat
-        .as_ref()
-        .and_then(|c| c.max_tokens_field.as_deref());
+    let max_tokens_field = compat.max_tokens_field.as_deref();
     let (max_tokens, max_completion_tokens) = match max_tokens_field {
         Some("max_tokens") => (options.max_tokens, None),
         _ => (None, options.max_tokens),
     };
+
+    // P1-4: Conditional stream_options based on compat
+    let stream_options = if compat.supports_usage_in_streaming {
+        Some(StreamOptionsConfig {
+            include_usage: true,
+        })
+    } else {
+        None
+    };
+
+    // P1-1: store = false when provider supports it (privacy)
+    let store = if compat.supports_store {
+        Some(false)
+    } else {
+        None
+    };
+
+    // P0-1: Resolve reasoning / thinking parameters based on compat.thinking_format
+    let mut reasoning_effort = None;
+    let mut enable_thinking = None;
+    let mut chat_template_kwargs = None;
+
+    if model.reasoning {
+        let has_thinking = thinking_options
+            .as_ref()
+            .and_then(|t| t.reasoning_effort.as_ref())
+            .is_some();
+
+        match compat.thinking_format.as_str() {
+            "zai" => {
+                // ZAI uses top-level enable_thinking: bool
+                enable_thinking = Some(has_thinking);
+            }
+            "qwen" => {
+                // Qwen uses top-level enable_thinking: bool
+                enable_thinking = Some(has_thinking);
+            }
+            "qwen-chat-template" => {
+                // Qwen chat template uses chat_template_kwargs.enable_thinking
+                chat_template_kwargs = Some(serde_json::json!({
+                    "enable_thinking": has_thinking
+                }));
+            }
+            _ => {
+                // Standard OpenAI format: use reasoning_effort
+                if compat.supports_reasoning_effort {
+                    if let Some(ref thinking_opts) = thinking_options {
+                        if let Some(ref effort) = thinking_opts.reasoning_effort {
+                            reasoning_effort = Some(resolve_reasoning_effort(effort, &compat));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // P2-1: OpenRouter routing preferences
+    let provider_routing = compat.open_router_routing.clone();
 
     let request = ChatCompletionRequest {
         model: model.id.clone(),
@@ -597,10 +808,12 @@ async fn run_stream(
         max_tokens,
         max_completion_tokens,
         tools,
-        stream_options: Some(StreamOptionsConfig {
-            include_usage: true,
-        }),
-        reasoning_effort: None,
+        stream_options,
+        reasoning_effort,
+        store,
+        enable_thinking,
+        chat_template_kwargs,
+        provider: provider_routing,
     };
 
     // Apply on_payload hook if set
@@ -648,8 +861,15 @@ async fn run_stream(
 
     if !response.status().is_success() {
         super::common::handle_error_response(
-            response, &url, model, &limits, &mut output, &stream, "OpenAI Completions",
-        ).await;
+            response,
+            &url,
+            model,
+            &limits,
+            &mut output,
+            &stream,
+            "OpenAI Completions",
+        )
+        .await;
         return Ok(());
     }
 
@@ -727,7 +947,7 @@ async fn run_stream(
                         // Handle text content
                         if let Some(ref content) = delta.content {
                             if !content.is_empty() {
-                                if current_block.as_ref().map_or(true, |b| !b.is_text()) {
+                                if current_block.as_ref().is_none_or(|b| !b.is_text()) {
                                     if let Some(block) = current_block.take() {
                                         output.content.push(block);
                                     }
@@ -759,7 +979,7 @@ async fn run_stream(
 
                         if let Some(content) = reasoning {
                             if !content.is_empty() {
-                                if current_block.as_ref().map_or(true, |b| !b.is_thinking()) {
+                                if current_block.as_ref().is_none_or(|b| !b.is_thinking()) {
                                     if let Some(block) = current_block.take() {
                                         output.content.push(block);
                                     }
@@ -788,8 +1008,8 @@ async fn run_stream(
                         for tc in &delta.tool_calls {
                             let index = tc.index.unwrap_or(0);
 
-                            let is_new = current_tool_index.map_or(true, |i| i != index)
-                                || current_block.as_ref().map_or(true, |b| !b.is_tool_call());
+                            let is_new = (current_tool_index != Some(index))
+                                || current_block.as_ref().is_none_or(|b| !b.is_tool_call());
 
                             if is_new {
                                 // Finish previous block
@@ -828,9 +1048,7 @@ async fn run_stream(
                                         tool_call.name = name.clone();
                                     }
                                     if let Some(ref args) = func.arguments {
-                                        let partial = partial_tool_args
-                                            .entry(index)
-                                            .or_insert_with(String::new);
+                                        let partial = partial_tool_args.entry(index).or_default();
                                         partial.push_str(args);
                                         tool_call.arguments = parse_streaming_json(partial);
 
@@ -863,21 +1081,6 @@ async fn run_stream(
     Ok(())
 }
 
-async fn run_stream_with_thinking(
-    client: Client,
-    model: &Model,
-    context: &Context,
-    options: StreamOptions,
-    api_key: String,
-    thinking_options: Option<OpenAIThinkingOptions>,
-    stream: AssistantMessageEventStream,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // For now, just run without thinking options
-    // TODO: Add reasoning_effort to request when model supports it
-    let _ = thinking_options;
-    run_stream(client, model, context, options, api_key, stream).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,5 +1105,124 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
+    }
+
+    #[test]
+    fn test_resolve_reasoning_effort_with_map() {
+        let mut compat = OpenAICompletionsCompat::default();
+        compat
+            .reasoning_effort_map
+            .insert("high".to_string(), "default".to_string());
+        compat
+            .reasoning_effort_map
+            .insert("minimal".to_string(), "default".to_string());
+
+        assert_eq!(resolve_reasoning_effort("high", &compat), "default");
+        assert_eq!(resolve_reasoning_effort("minimal", &compat), "default");
+        assert_eq!(resolve_reasoning_effort("medium", &compat), "medium"); // no mapping
+    }
+
+    #[test]
+    fn test_store_and_strict_mode() {
+        // Provider that supports store and strict
+        let compat = OpenAICompletionsCompat::default();
+        assert!(compat.supports_store);
+        assert!(compat.supports_strict_mode);
+
+        // Provider that doesn't support store/strict
+        let compat = OpenAICompletionsCompat {
+            supports_store: false,
+            supports_strict_mode: false,
+            ..Default::default()
+        };
+
+        let tools = vec![Tool {
+            name: "test".to_string(),
+            description: "A test tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+
+        let converted = convert_tools(&tools, &compat);
+        assert!(converted[0].function.strict.is_none());
+
+        let compat_with_strict = OpenAICompletionsCompat::default();
+        let converted = convert_tools(&tools, &compat_with_strict);
+        assert_eq!(converted[0].function.strict, Some(false));
+    }
+
+    #[test]
+    fn test_thinking_as_text_in_assistant_message() {
+        let compat = OpenAICompletionsCompat {
+            requires_thinking_as_text: true,
+            ..Default::default()
+        };
+
+        let msg = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("test")
+            .stop_reason(StopReason::Stop)
+            .usage(Usage::default())
+            .content(vec![
+                ContentBlock::Thinking(ThinkingContent::new("My reasoning")),
+                ContentBlock::Text(TextContent::new("My answer")),
+            ])
+            .build()
+            .unwrap();
+
+        let model = Model::builder()
+            .id("test")
+            .name("Test")
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let converted = convert_assistant_message(&msg, &model, &compat).unwrap();
+        if let Some(OpenAIContent::Text(text)) = &converted.content {
+            assert!(text.contains("<thinking>"));
+            assert!(text.contains("My reasoning"));
+            assert!(text.contains("My answer"));
+        } else {
+            panic!("Expected text content");
+        }
+        assert!(converted.extra_fields.is_empty());
+    }
+
+    #[test]
+    fn test_reasoning_content_in_assistant_message() {
+        let compat = OpenAICompletionsCompat::default();
+
+        let msg = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("test")
+            .stop_reason(StopReason::Stop)
+            .usage(Usage::default())
+            .content(vec![
+                ContentBlock::Thinking(ThinkingContent::new("My reasoning")),
+                ContentBlock::Text(TextContent::new("My answer")),
+            ])
+            .build()
+            .unwrap();
+
+        let model = Model::builder()
+            .id("test")
+            .name("Test")
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let converted = convert_assistant_message(&msg, &model, &compat).unwrap();
+        assert!(converted.extra_fields.contains_key("reasoning_content"));
+        assert_eq!(
+            converted.extra_fields["reasoning_content"],
+            serde_json::Value::String("My reasoning".to_string())
+        );
     }
 }
