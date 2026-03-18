@@ -69,9 +69,16 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tiy-core = { git = "https://github.com/TiyAgents/tiy-core.git" }
+tiy-core = "0.1.0"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+```
+
+For local development before publishing, you can still use:
+
+```toml
+[dependencies]
+tiy-core = { path = "../tiy-core" }
 ```
 
 ### Streaming Completion
@@ -197,6 +204,23 @@ The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), cont
 For detailed provider configuration, compat flags, Zenmux adaptive routing, and how to add new providers, see the **[Provider Documentation](./src/provider/README.md)**.
 
 For wire-format protocol internals (SSE parsing, request building, delegation macros), see the **[Protocol Documentation](./src/protocol/README.md)**.
+
+## Publishing
+
+To make downstream projects depend on `tiy-core` without a Git URL, publish the crate to crates.io and then depend on it by version:
+
+```bash
+cargo login
+cargo package
+cargo publish
+```
+
+After publishing, consumers can keep using:
+
+```toml
+[dependencies]
+tiy-core = "0.1.0"
+```
 
 ## API Key Resolution
 

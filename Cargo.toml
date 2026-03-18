@@ -5,6 +5,10 @@ edition = "2021"
 description = "Unified LLM API and stateful Agent runtime in Rust"
 license = "MIT"
 authors = ["TiyAgents Team"]
+readme = "README.md"
+repository = "https://github.com/TiyAgents/tiy-core"
+homepage = "https://github.com/TiyAgents/tiy-core"
+documentation = "https://docs.rs/tiy-core"
 keywords = ["llm", "ai", "agent", "openai", "anthropic"]
 categories = ["api-bindings", "asynchronous"]
 
