@@ -183,6 +183,14 @@ agent.set_get_api_key(|provider_name: &str| async move {
     // Useful for expiring OAuth tokens
     fetch_token_for(provider_name).await
 });
+
+// Signal-aware variant for cancellable token refresh flows
+agent.set_get_api_key_with_signal(|provider_name: &str, abort_signal| async move {
+    tokio::select! {
+        _ = abort_signal.cancelled() => None,
+        token = fetch_token_for(provider_name) => token,
+    }
+});
 ```
 
 ### Tool Execution
@@ -238,6 +246,7 @@ agent.set_tool_execution(ToolExecutionMode::Sequential);  // one at a time, chec
 #### beforeToolCall
 
 Called after argument validation, before tool execution. Can block a tool call.
+`ctx.abort_signal` is cancelled when `agent.abort()` is called.
 
 ```rust
 agent.set_before_tool_call(|ctx: BeforeToolCallContext| async move {
@@ -252,6 +261,7 @@ agent.set_before_tool_call(|ctx: BeforeToolCallContext| async move {
 #### afterToolCall
 
 Called after tool execution, before the result is committed. Can override content, details, or is_error, and the final `ToolResultMessage.details` preserves the override.
+`ctx.abort_signal` is cancelled when `agent.abort()` is called.
 
 ```rust
 agent.set_after_tool_call(|ctx: AfterToolCallContext| async move {
@@ -300,6 +310,13 @@ agent.set_transform_context(|messages: Vec<AgentMessage>| async move {
         messages
     }
 });
+
+agent.set_transform_context_with_signal(|messages: Vec<AgentMessage>, abort_signal| async move {
+    tokio::select! {
+        _ = abort_signal.cancelled() => messages,
+        transformed = expensive_transform(messages) => transformed,
+    }
+});
 ```
 
 #### convertToLlm
@@ -333,6 +350,10 @@ Replace the default provider streaming entirely.
 agent.set_stream_fn(|model, context, options| async move {
     // Route to a custom backend, proxy, etc.
     my_proxy_stream(model, context, options).await
+});
+
+agent.set_stream_fn_with_signal(|model, context, options, abort_signal| async move {
+    my_proxy_stream_with_cancel(model, context, options, abort_signal).await
 });
 ```
 
@@ -716,9 +737,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `AfterToolCallFn` | `(AfterToolCallContext) -> Future<Option<AfterToolCallResult>>` | Override tool results |
 | `OnPayloadFn` | `(Value, Model) -> Future<Option<Value>>` | Inspect/replace HTTP body |
 | `ConvertToLlmFn` | `(Vec<AgentMessage>) -> Future<Vec<Message>>` | Custom message conversion |
-| `TransformContextFn` | `(Vec<AgentMessage>) -> Future<Vec<AgentMessage>>` | Context pre-processing |
-| `GetApiKeyFn` | `(&str) -> Future<Option<String>>` | Dynamic API key resolution |
-| `StreamFn` | `(&Model, &Context, StreamOptions) -> Future<EventStream>` | Custom stream implementation |
+| `TransformContextFn` | `(Vec<AgentMessage>, AbortSignal) -> Future<Vec<AgentMessage>>` | Context pre-processing |
+| `GetApiKeyFn` | `(&str, AbortSignal) -> Future<Option<String>>` | Dynamic API key resolution |
+| `StreamFn` | `(&Model, &Context, SimpleStreamOptions, AbortSignal) -> Future<EventStream>` | Custom stream implementation |
 | `ToolUpdateCallback` | `(Value) -> ()` | Streaming tool progress |
 
 ### Configuration Types
@@ -740,9 +761,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `AgentEnd` | `messages: Vec<AgentMessage>` | Loop completes (success or error) |
 | `TurnStart` | -- | Each LLM call begins |
 | `TurnEnd` | `message, tool_results` | LLM call + tools complete |
-| `MessageStart` | `message` | Prompt, injected queue message, finalized assistant message, or tool result committed |
+| `MessageStart` | `message` | Prompt, injected queue message, assistant stream start, or tool result committed |
 | `MessageUpdate` | `message, assistant_event` | Streaming deltas (text, thinking, tool call) |
 | `MessageEnd` | `message` | After `MessageStart` for the same committed message |
 | `ToolExecutionStart` | `tool_call_id, tool_name, args` | Before tool runs |
-| `ToolExecutionUpdate` | `tool_call_id, tool_name, partial_result` | Streaming tool progress |
+| `ToolExecutionUpdate` | `tool_call_id, tool_name, args, partial_result` | Streaming tool progress |
 | `ToolExecutionEnd` | `tool_call_id, tool_name, result, is_error` | Tool finished (`result` includes `content` and optional `details`) |

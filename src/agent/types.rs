@@ -6,10 +6,14 @@ use crate::types::*;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 // ============================================================================
 // AgentMessage
 // ============================================================================
+
+/// Shared cancellation signal used by agent hooks and provider requests.
+pub type AbortSignal = CancellationToken;
 
 /// Agent message - can include custom message types.
 ///
@@ -195,6 +199,7 @@ pub enum AgentEvent {
     ToolExecutionUpdate {
         tool_call_id: String,
         tool_name: String,
+        args: serde_json::Value,
         partial_result: serde_json::Value,
     },
     /// Tool execution finished.
@@ -293,6 +298,8 @@ pub struct BeforeToolCallContext {
     pub args: serde_json::Value,
     /// The current conversation context.
     pub context: Context,
+    /// Cancellation signal for the current agent run.
+    pub abort_signal: AbortSignal,
 }
 
 /// Result returned by `before_tool_call` hooks.
@@ -337,6 +344,8 @@ pub struct AfterToolCallContext {
     pub is_error: bool,
     /// The current conversation context.
     pub context: Context,
+    /// Cancellation signal for the current agent run.
+    pub abort_signal: AbortSignal,
 }
 
 /// Result returned by `after_tool_call` hooks.
@@ -388,7 +397,9 @@ pub type AfterToolCallFn = Arc<
 /// Return `Some(key)` to override the static API key, or `None` to fall back
 /// to the configured key.
 pub type GetApiKeyFn = Arc<
-    dyn Fn(&str) -> Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>> + Send + Sync,
+    dyn Fn(&str, AbortSignal) -> Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Payload inspection / replacement hook (re-exported from crate::types).
@@ -411,6 +422,7 @@ pub type ConvertToLlmFn = Arc<
 pub type TransformContextFn = Arc<
     dyn Fn(
             Vec<AgentMessage>,
+            AbortSignal,
         ) -> Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
         + Send
         + Sync,
@@ -429,12 +441,20 @@ pub type StreamFn = Arc<
     dyn Fn(
             &Model,
             &Context,
-            StreamOptions,
+            SimpleStreamOptions,
+            AbortSignal,
         ) -> Pin<
             Box<
                 dyn std::future::Future<Output = crate::stream::AssistantMessageEventStream> + Send,
             >,
         > + Send
+        + Sync,
+>;
+
+/// Dynamic queued-message supplier for steering/follow-up injection.
+pub type GetQueuedMessagesFn = Arc<
+    dyn Fn(AbortSignal) -> Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
+        + Send
         + Sync,
 >;
 
@@ -485,6 +505,10 @@ pub struct AgentHooks {
     pub on_payload: Option<OnPayloadFn>,
     /// Custom stream function (for proxy backends, etc.).
     pub stream_fn: Option<StreamFn>,
+    /// Dynamic steering-message supplier.
+    pub get_steering_messages: Option<GetQueuedMessagesFn>,
+    /// Dynamic follow-up-message supplier.
+    pub get_follow_up_messages: Option<GetQueuedMessagesFn>,
 }
 
 /// Additional options for the standalone agent loop APIs.

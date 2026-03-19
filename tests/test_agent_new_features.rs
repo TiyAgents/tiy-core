@@ -107,6 +107,18 @@ fn make_assistant_message(text: &str) -> AssistantMessage {
         .unwrap()
 }
 
+fn make_error_assistant_message(message: &str) -> AssistantMessage {
+    AssistantMessage::builder()
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .model("mock-model")
+        .content(vec![ContentBlock::Text(TextContent::new(""))])
+        .stop_reason(StopReason::Error)
+        .error_message(message)
+        .build()
+        .unwrap()
+}
+
 fn make_tool_call_message(
     tool_name: &str,
     tool_id: &str,
@@ -816,6 +828,35 @@ async fn test_prompt_and_tool_results_emit_message_lifecycle_events() {
 }
 
 #[tokio::test]
+async fn test_assistant_message_start_emits_once_before_message_end() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message("Hi!")]));
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+
+    let assistant_events = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let assistant_events_capture = Arc::clone(&assistant_events);
+    let _unsub = agent.subscribe(move |event| match event {
+        AgentEvent::MessageStart {
+            message: AgentMessage::Assistant(_),
+        } => assistant_events_capture
+            .lock()
+            .push("assistant_start".to_string()),
+        AgentEvent::MessageEnd {
+            message: AgentMessage::Assistant(_),
+        } => assistant_events_capture
+            .lock()
+            .push("assistant_end".to_string()),
+        _ => {}
+    });
+
+    let result = agent.prompt("hello").await;
+    assert!(result.is_ok());
+
+    let events = assistant_events.lock().clone();
+    assert_eq!(events, vec!["assistant_start", "assistant_end"]);
+}
+
+#[tokio::test]
 async fn test_standalone_agent_loop_apis_work() {
     let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message("Hi!")]));
     let context = AgentContext {
@@ -867,6 +908,210 @@ async fn test_standalone_agent_loop_apis_work() {
     assert!(stream_result.is_ok());
     assert!(event_types.contains(&"agent_start".to_string()));
     assert!(event_types.contains(&"agent_end".to_string()));
+}
+
+#[tokio::test]
+async fn test_terminal_error_assistant_is_persisted_to_state() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_error_assistant_message(
+        "provider exploded",
+    )]));
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+
+    let result = agent.prompt("boom").await;
+    assert!(matches!(result, Err(AgentError::ProviderError(_))));
+    assert_eq!(
+        *agent.state().error.read(),
+        Some("provider exploded".to_string())
+    );
+
+    let messages = agent.state().messages.read();
+    let last = messages.last().expect("terminal assistant message");
+    match last {
+        AgentMessage::Assistant(message) => {
+            assert_eq!(message.stop_reason, StopReason::Error);
+            assert_eq!(message.error_message.as_deref(), Some("provider exploded"));
+        }
+        other => panic!("expected assistant terminal error message, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_abort_persists_aborted_assistant_message() {
+    let agent = Arc::new(Agent::with_model(make_model()));
+    agent.set_stream_fn_with_signal(|_model, _context, _options, _signal| async move {
+        AssistantMessageEventStream::new_assistant_stream()
+    });
+
+    let agent_for_prompt = Arc::clone(&agent);
+    let prompt_task = tokio::spawn(async move { agent_for_prompt.prompt("wait").await });
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    agent.abort();
+
+    let result = prompt_task.await.unwrap();
+    assert!(matches!(result, Err(AgentError::Other(ref msg)) if msg == "Aborted"));
+    assert_eq!(*agent.state().error.read(), Some("Aborted".to_string()));
+
+    let messages = agent.state().messages.read();
+    let last = messages.last().expect("aborted assistant message");
+    match last {
+        AgentMessage::Assistant(message) => {
+            assert_eq!(message.stop_reason, StopReason::Aborted);
+            assert_eq!(message.error_message.as_deref(), Some("Aborted"));
+        }
+        other => panic!("expected assistant aborted message, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_standalone_continue_uses_dynamic_follow_up_supplier() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message(
+        "Follow-up handled",
+    )]));
+    let supplied = Arc::new(AtomicBool::new(false));
+    let supplied_clone = Arc::clone(&supplied);
+
+    let context = AgentContext {
+        system_prompt: String::new(),
+        messages: vec![
+            AgentMessage::User(UserMessage::text("initial")),
+            AgentMessage::Assistant(make_assistant_message("done")),
+        ],
+        tools: None,
+    };
+
+    let options = AgentLoopOptions {
+        provider: Some(provider),
+        hooks: AgentHooks {
+            get_follow_up_messages: Some(Arc::new(move |_signal| {
+                let supplied = Arc::clone(&supplied_clone);
+                Box::pin(async move {
+                    if supplied.swap(true, Ordering::SeqCst) {
+                        Vec::new()
+                    } else {
+                        vec![AgentMessage::User(UserMessage::text("queued follow-up"))]
+                    }
+                })
+            })),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let result = run_agent_loop_continue(context, AgentConfig::new(make_model()), options)
+        .await
+        .unwrap();
+
+    assert!(result.iter().any(|message| {
+        matches!(message, AgentMessage::User(user) if matches!(&user.content, UserContent::Text(text) if text == "queued follow-up"))
+    }));
+    assert!(result
+        .iter()
+        .any(|message| matches!(message, AgentMessage::Assistant(_))));
+}
+
+#[tokio::test]
+async fn test_standalone_continue_uses_dynamic_steering_supplier() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message(
+        "Steering handled",
+    )]));
+    let supplied = Arc::new(AtomicBool::new(false));
+    let supplied_clone = Arc::clone(&supplied);
+
+    let context = AgentContext {
+        system_prompt: String::new(),
+        messages: vec![
+            AgentMessage::User(UserMessage::text("initial")),
+            AgentMessage::Assistant(make_assistant_message("done")),
+        ],
+        tools: None,
+    };
+
+    let options = AgentLoopOptions {
+        provider: Some(provider),
+        hooks: AgentHooks {
+            get_steering_messages: Some(Arc::new(move |_signal| {
+                let supplied = Arc::clone(&supplied_clone);
+                Box::pin(async move {
+                    if supplied.swap(true, Ordering::SeqCst) {
+                        Vec::new()
+                    } else {
+                        vec![AgentMessage::User(UserMessage::text("queued steering"))]
+                    }
+                })
+            })),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let result = run_agent_loop_continue(context, AgentConfig::new(make_model()), options)
+        .await
+        .unwrap();
+
+    assert!(result.iter().any(|message| {
+        matches!(message, AgentMessage::User(user) if matches!(&user.content, UserContent::Text(text) if text == "queued steering"))
+    }));
+    assert!(result
+        .iter()
+        .any(|message| matches!(message, AgentMessage::Assistant(_))));
+}
+
+#[tokio::test]
+async fn test_transform_context_with_signal_is_cancelled_on_abort() {
+    let agent = Arc::new(Agent::with_model(make_model()));
+    let observed = Arc::new(AtomicBool::new(false));
+    let observed_clone = Arc::clone(&observed);
+
+    agent.set_transform_context_with_signal(move |messages, signal| {
+        let observed = Arc::clone(&observed_clone);
+        async move {
+            signal.cancelled().await;
+            observed.store(true, Ordering::SeqCst);
+            messages
+        }
+    });
+    agent.set_stream_fn_with_signal(|_model, _context, _options, _signal| async move {
+        AssistantMessageEventStream::new_assistant_stream()
+    });
+
+    let agent_for_prompt = Arc::clone(&agent);
+    let prompt_task = tokio::spawn(async move { agent_for_prompt.prompt("work").await });
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    agent.abort();
+
+    let _ = prompt_task.await.unwrap();
+    assert!(observed.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_stream_fn_with_signal_receives_abort() {
+    let agent = Arc::new(Agent::with_model(make_model()));
+    let observed = Arc::new(AtomicBool::new(false));
+    let observed_clone = Arc::clone(&observed);
+
+    agent.set_stream_fn_with_signal(move |_model, _context, _options, signal| {
+        let observed = Arc::clone(&observed_clone);
+        async move {
+            let stream = AssistantMessageEventStream::new_assistant_stream();
+            tokio::spawn(async move {
+                signal.cancelled().await;
+                observed.store(true, Ordering::SeqCst);
+            });
+            stream
+        }
+    });
+
+    let agent_for_prompt = Arc::clone(&agent);
+    let prompt_task = tokio::spawn(async move { agent_for_prompt.prompt("work").await });
+
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    agent.abort();
+
+    let _ = prompt_task.await.unwrap();
+    assert!(observed.load(Ordering::SeqCst));
 }
 
 // ============================================================================
@@ -1014,10 +1259,13 @@ async fn test_tool_execution_update_events() {
 
     let update_count = Arc::new(AtomicUsize::new(0));
     let uc = update_count.clone();
+    let observed_args = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let observed_args_capture = Arc::clone(&observed_args);
 
     let _unsub = agent.subscribe(move |event| {
-        if matches!(event, AgentEvent::ToolExecutionUpdate { .. }) {
+        if let AgentEvent::ToolExecutionUpdate { args, .. } = event {
             uc.fetch_add(1, Ordering::SeqCst);
+            observed_args_capture.lock().push(args.clone());
         }
     });
 
@@ -1045,6 +1293,7 @@ async fn test_tool_execution_update_events() {
         3,
         "Should receive 3 ToolExecutionUpdate events"
     );
+    assert!(observed_args.lock().iter().all(|args| *args == json!({})));
 }
 
 // ============================================================================
@@ -1122,6 +1371,7 @@ fn test_agent_event_tool_execution_update_serialization() {
     let event = AgentEvent::ToolExecutionUpdate {
         tool_call_id: "call_1".to_string(),
         tool_name: "my_tool".to_string(),
+        args: json!({"x": 1}),
         partial_result: json!({"progress": 50}),
     };
     let json = serde_json::to_value(&event).unwrap();

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Conversation context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -295,6 +296,9 @@ pub struct StreamOptions {
     /// Set to `Some(0)` to disable the cap entirely.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_retry_delay_ms: Option<u64>,
+    /// Optional cancellation token for aborting in-flight requests.
+    #[serde(skip)]
+    pub cancel_token: Option<CancellationToken>,
 }
 
 /// Custom Debug implementation that redacts sensitive fields (api_key, headers).
@@ -324,6 +328,10 @@ impl std::fmt::Debug for StreamOptions {
             .field("tool_choice", &self.tool_choice)
             .field("service_tier", &self.service_tier)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
+            .field(
+                "cancel_token",
+                &self.cancel_token.as_ref().map(|_| "<cancellation-token>"),
+            )
             .finish()
     }
 }
@@ -364,6 +372,7 @@ impl Default for StreamOptions {
             tool_choice: None,
             service_tier: None,
             max_retry_delay_ms: None,
+            cancel_token: None,
         }
     }
 }

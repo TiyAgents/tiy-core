@@ -426,7 +426,7 @@ fn test_agent_abort() {
     agent.abort();
 
     assert!(!agent.state().is_streaming());
-    assert!(!agent.has_queued_messages());
+    assert!(agent.has_queued_messages());
 }
 
 #[tokio::test]

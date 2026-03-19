@@ -10,7 +10,6 @@ use crate::transform::{normalize_tool_call_id, transform_messages};
 use crate::types::*;
 use crate::types::{SimpleStreamOptions, StreamOptions};
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -860,6 +859,7 @@ async fn run_stream(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
     let compat = resolve_compat(model);
+    let cancel_token = options.cancel_token.clone();
 
     let mut output = AssistantMessage::builder()
         .api(model.api.clone().unwrap_or(Api::OpenAICompletions))
@@ -993,13 +993,21 @@ async fn run_stream(
     // Add custom headers (H2: skip protected headers)
     super::common::apply_custom_headers(&mut headers, &options.headers, &limits.headers);
 
-    let response = client
+    let request = client
         .post(&url)
         .timeout(limits.http.request_timeout())
         .headers(headers)
-        .body(body_string)
-        .send()
-        .await?;
+        .body(body_string);
+    let Some(response) = super::common::send_request_with_cancel(
+        request,
+        cancel_token.as_ref(),
+        &mut output,
+        &stream,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
 
     if !response.status().is_success() {
         super::common::handle_error_response(
@@ -1026,7 +1034,14 @@ async fn run_stream(
     let mut line_buffer = String::new(); // Buffer for incomplete SSE lines
 
     let mut byte_stream = response.bytes_stream();
-    while let Some(chunk_result) = byte_stream.next().await {
+    while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
+        &mut byte_stream,
+        cancel_token.as_ref(),
+        &mut output,
+        &stream,
+    )
+    .await
+    {
         let chunk = chunk_result?;
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);

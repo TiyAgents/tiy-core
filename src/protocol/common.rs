@@ -12,9 +12,11 @@
 
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
+use futures::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 /// Resolve the effective base URL using 3-level fallback:
 /// `options.base_url` > `model.base_url` > `default`.
@@ -175,5 +177,59 @@ pub fn check_sse_buffer_overflow(
         true
     } else {
         false
+    }
+}
+
+/// Emit an aborted terminal assistant message and close the stream.
+pub fn emit_aborted(output: &mut AssistantMessage, stream: &AssistantMessageEventStream) {
+    output.stop_reason = StopReason::Aborted;
+    output.error_message = Some("Aborted".to_string());
+    stream.push(AssistantMessageEvent::Error {
+        reason: StopReason::Aborted,
+        error: output.clone(),
+    });
+    stream.end(None);
+}
+
+/// Await an HTTP request, but abort early when the cancellation token fires.
+pub async fn send_request_with_cancel(
+    request: reqwest::RequestBuilder,
+    cancel_token: Option<&CancellationToken>,
+    output: &mut AssistantMessage,
+    stream: &AssistantMessageEventStream,
+) -> Result<Option<reqwest::Response>, reqwest::Error> {
+    if let Some(cancel_token) = cancel_token {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                emit_aborted(output, stream);
+                Ok(None)
+            }
+            response = request.send() => response.map(Some),
+        }
+    } else {
+        request.send().await.map(Some)
+    }
+}
+
+/// Await the next item from a byte stream, but abort early when cancelled.
+pub async fn next_stream_item_with_cancel<S, T, E>(
+    source: &mut S,
+    cancel_token: Option<&CancellationToken>,
+    output: &mut AssistantMessage,
+    stream: &AssistantMessageEventStream,
+) -> Option<Result<T, E>>
+where
+    S: futures::Stream<Item = Result<T, E>> + Unpin,
+{
+    if let Some(cancel_token) = cancel_token {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                emit_aborted(output, stream);
+                None
+            }
+            item = source.next() => item,
+        }
+    } else {
+        source.next().await
     }
 }

@@ -1,10 +1,10 @@
 //! Agent implementation with full conversation loop.
 
 use crate::agent::{
-    AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentContext, AgentEvent, AgentHooks,
-    AgentLoopOptions, AgentMessage, AgentState, AgentStateSnapshot, AgentTool, AgentToolResult,
-    BeforeToolCallContext, BeforeToolCallFn, BeforeToolCallResult, QueueMode, ThinkingBudgets,
-    ToolExecutionMode, ToolExecutor, ToolUpdateCallback, Transport,
+    AbortSignal, AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentContext, AgentEvent,
+    AgentHooks, AgentLoopOptions, AgentMessage, AgentState, AgentStateSnapshot, AgentTool,
+    AgentToolResult, BeforeToolCallContext, BeforeToolCallFn, BeforeToolCallResult, QueueMode,
+    ThinkingBudgets, ToolExecutionMode, ToolExecutor, ToolUpdateCallback, Transport,
 };
 use crate::provider::{get_provider, ArcProtocol};
 use crate::stream::{AssistantMessageEventStream, EventStream};
@@ -90,6 +90,8 @@ pub struct Agent {
     api_key: RwLock<Option<String>>,
     /// Session ID for caching.
     session_id: RwLock<Option<String>>,
+    /// Cancellation signal for the active run, if any.
+    run_abort_signal: RwLock<Option<AbortSignal>>,
 }
 
 impl Agent {
@@ -118,6 +120,7 @@ impl Agent {
             defer_steering_until_turn_end: Arc::new(AtomicBool::new(false)),
             api_key: RwLock::new(None),
             session_id: RwLock::new(None),
+            run_abort_signal: RwLock::new(None),
         }
     }
 
@@ -148,6 +151,7 @@ impl Agent {
             defer_steering_until_turn_end: Arc::new(AtomicBool::new(false)),
             api_key: RwLock::new(options.api_key),
             session_id: RwLock::new(options.session_id),
+            run_abort_signal: RwLock::new(None),
         };
 
         agent.set_system_prompt(context.system_prompt);
@@ -182,8 +186,22 @@ impl Agent {
         F: Fn(&str) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Option<String>> + Send + 'static,
     {
-        let resolver = Arc::new(move |provider: &str| {
+        let resolver = Arc::new(move |provider: &str, _signal: AbortSignal| {
             let fut = resolver(provider);
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        });
+        self.hooks.write().get_api_key = Some(resolver);
+    }
+
+    /// Set a dynamic API key resolver with cancellation awareness.
+    pub fn set_get_api_key_with_signal<F, Fut>(&self, resolver: F)
+    where
+        F: Fn(&str, AbortSignal) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Option<String>> + Send + 'static,
+    {
+        let resolver = Arc::new(move |provider: &str, signal: AbortSignal| {
+            let fut = resolver(provider, signal);
             Box::pin(fut)
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         });
@@ -314,8 +332,22 @@ impl Agent {
         F: Fn(Vec<AgentMessage>) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Vec<AgentMessage>> + Send + 'static,
     {
-        let transform = Arc::new(move |msgs: Vec<AgentMessage>| {
+        let transform = Arc::new(move |msgs: Vec<AgentMessage>, _signal: AbortSignal| {
             let fut = transform(msgs);
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
+        });
+        self.hooks.write().transform_context = Some(transform);
+    }
+
+    /// Set the context transformation function with cancellation awareness.
+    pub fn set_transform_context_with_signal<F, Fut>(&self, transform: F)
+    where
+        F: Fn(Vec<AgentMessage>, AbortSignal) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<AgentMessage>> + Send + 'static,
+    {
+        let transform = Arc::new(move |msgs: Vec<AgentMessage>, signal: AbortSignal| {
+            let fut = transform(msgs, signal);
             Box::pin(fut)
                 as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
         });
@@ -353,8 +385,11 @@ impl Agent {
         Fut: std::future::Future<Output = AssistantMessageEventStream> + Send + 'static,
     {
         let stream_fn = Arc::new(
-            move |model: &Model, context: &Context, options: StreamOptions| {
-                let fut = stream_fn(model, context, options);
+            move |model: &Model,
+                  context: &Context,
+                  options: SimpleStreamOptions,
+                  _signal: AbortSignal| {
+                let fut = stream_fn(model, context, options.base);
                 Box::pin(fut)
                     as std::pin::Pin<
                         Box<dyn std::future::Future<Output = AssistantMessageEventStream> + Send>,
@@ -362,6 +397,55 @@ impl Agent {
             },
         );
         self.hooks.write().stream_fn = Some(stream_fn);
+    }
+
+    /// Set a custom stream function with full simple-stream options and cancellation.
+    pub fn set_stream_fn_with_signal<F, Fut>(&self, stream_fn: F)
+    where
+        F: Fn(&Model, &Context, SimpleStreamOptions, AbortSignal) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = AssistantMessageEventStream> + Send + 'static,
+    {
+        let stream_fn = Arc::new(
+            move |model: &Model,
+                  context: &Context,
+                  options: SimpleStreamOptions,
+                  signal: AbortSignal| {
+                let fut = stream_fn(model, context, options, signal);
+                Box::pin(fut)
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = AssistantMessageEventStream> + Send>,
+                    >
+            },
+        );
+        self.hooks.write().stream_fn = Some(stream_fn);
+    }
+
+    /// Set a dynamic steering-message supplier.
+    pub fn set_get_steering_messages<F, Fut>(&self, getter: F)
+    where
+        F: Fn(AbortSignal) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<AgentMessage>> + Send + 'static,
+    {
+        let getter = Arc::new(move |signal: AbortSignal| {
+            let fut = getter(signal);
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
+        });
+        self.hooks.write().get_steering_messages = Some(getter);
+    }
+
+    /// Set a dynamic follow-up-message supplier.
+    pub fn set_get_follow_up_messages<F, Fut>(&self, getter: F)
+    where
+        F: Fn(AbortSignal) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<AgentMessage>> + Send + 'static,
+    {
+        let getter = Arc::new(move |signal: AbortSignal| {
+            let fut = getter(signal);
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>>
+        });
+        self.hooks.write().get_follow_up_messages = Some(getter);
     }
 
     // ============================================================================
@@ -525,6 +609,9 @@ impl Agent {
         self.defer_steering_until_turn_end
             .store(false, Ordering::SeqCst);
         *self.session_id.write() = None;
+        if let Some(signal) = self.run_abort_signal.write().take() {
+            signal.cancel();
+        }
     }
 
     // ============================================================================
@@ -562,44 +649,94 @@ impl Agent {
         !self.steering_queue.lock().is_empty() || !self.follow_up_queue.lock().is_empty()
     }
 
-    /// Dequeue steering messages respecting the configured mode.
+    fn current_abort_signal(&self) -> AbortSignal {
+        self.run_abort_signal
+            .read()
+            .clone()
+            .unwrap_or_else(AbortSignal::new)
+    }
+
+    fn dequeue_local_messages(
+        queue: &Mutex<VecDeque<AgentMessage>>,
+        mode: QueueMode,
+    ) -> Vec<AgentMessage> {
+        let mut queue = queue.lock();
+        match mode {
+            QueueMode::All => queue.drain(..).collect(),
+            QueueMode::OneAtATime => {
+                if let Some(first) = queue.pop_front() {
+                    vec![first]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+    /// Dequeue steering messages from the local queue only.
     fn dequeue_steering_messages(&self) -> Vec<AgentMessage> {
         let mode = self.config.read().steering_mode;
-        let mut queue = self.steering_queue.lock();
+        Self::dequeue_local_messages(&self.steering_queue, mode)
+    }
+
+    async fn poll_queue_messages(
+        &self,
+        mode: QueueMode,
+        local: &Mutex<VecDeque<AgentMessage>>,
+        dynamic: &Option<
+            Arc<
+                dyn Fn(
+                        AbortSignal,
+                    ) -> std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Vec<AgentMessage>> + Send>,
+                    > + Send
+                    + Sync,
+            >,
+        >,
+    ) -> Vec<AgentMessage> {
+        let mut messages = Self::dequeue_local_messages(local, mode);
+        let dynamic_messages = if let Some(callback) = dynamic {
+            callback(self.current_abort_signal()).await
+        } else {
+            Vec::new()
+        };
+
         match mode {
-            QueueMode::All => queue.drain(..).collect(),
+            QueueMode::All => {
+                messages.extend(dynamic_messages);
+                messages
+            }
             QueueMode::OneAtATime => {
-                if let Some(first) = queue.pop_front() {
-                    vec![first]
+                if messages.is_empty() {
+                    dynamic_messages.into_iter().take(1).collect()
                 } else {
-                    Vec::new()
+                    messages.truncate(1);
+                    messages
                 }
             }
         }
     }
 
-    /// Dequeue follow-up messages respecting the configured mode.
-    fn dequeue_follow_up_messages(&self) -> Vec<AgentMessage> {
+    async fn poll_steering_messages(&self) -> Vec<AgentMessage> {
+        let mode = self.config.read().steering_mode;
+        let dynamic = self.hooks.read().get_steering_messages.clone();
+        self.poll_queue_messages(mode, &self.steering_queue, &dynamic)
+            .await
+    }
+
+    async fn poll_follow_up_messages(&self) -> Vec<AgentMessage> {
         let mode = self.config.read().follow_up_mode;
-        let mut queue = self.follow_up_queue.lock();
-        match mode {
-            QueueMode::All => queue.drain(..).collect(),
-            QueueMode::OneAtATime => {
-                if let Some(first) = queue.pop_front() {
-                    vec![first]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
+        let dynamic = self.hooks.read().get_follow_up_messages.clone();
+        self.poll_queue_messages(mode, &self.follow_up_queue, &dynamic)
+            .await
     }
 
-    fn dequeue_deferred_steering_messages(&self) -> Vec<AgentMessage> {
+    async fn dequeue_deferred_steering_messages(&self) -> Vec<AgentMessage> {
         if !self.defer_steering_until_turn_end.load(Ordering::SeqCst) {
             return Vec::new();
         }
 
-        let messages = self.dequeue_steering_messages();
+        let messages = self.poll_steering_messages().await;
         let still_has_queued = !self.steering_queue.lock().is_empty();
         self.defer_steering_until_turn_end
             .store(still_has_queued, Ordering::SeqCst);
@@ -630,8 +767,9 @@ impl Agent {
 
         // Step 1: transform_context (if set)
         let transform = self.hooks.read().transform_context.clone();
+        let abort_signal = self.current_abort_signal();
         let messages = if let Some(ref transform) = transform {
-            transform(messages).await
+            transform(messages, abort_signal).await
         } else {
             messages
         };
@@ -691,11 +829,12 @@ impl Agent {
         let transport = self.config.read().transport;
         let max_retry_delay_ms = self.config.read().max_retry_delay_ms;
         let session_id = self.session_id.read().clone();
+        let abort_signal = self.current_abort_signal();
 
         // Dynamic API key resolution: getApiKey > static api_key
         let get_api_key = self.hooks.read().get_api_key.clone();
         let api_key = if let Some(ref resolver) = get_api_key {
-            let dynamic = resolver(model.provider.as_str()).await;
+            let dynamic = resolver(model.provider.as_str(), abort_signal.clone()).await;
             dynamic.or_else(|| self.api_key.read().clone())
         } else {
             self.api_key.read().clone()
@@ -708,6 +847,7 @@ impl Agent {
             on_payload,
             transport: Some(transport),
             max_retry_delay_ms,
+            cancel_token: Some(abort_signal),
             ..Default::default()
         }
     }
@@ -741,27 +881,121 @@ impl Agent {
         }
     }
 
+    fn append_run_message(
+        &self,
+        new_messages: &mut Vec<AgentMessage>,
+        message: AgentMessage,
+        emit_start: bool,
+        emit_end: bool,
+    ) {
+        self.state.add_message(message.clone());
+        new_messages.push(message.clone());
+        if emit_start {
+            self.emit(AgentEvent::MessageStart {
+                message: message.clone(),
+            });
+        }
+        if emit_end {
+            self.emit(AgentEvent::MessageEnd { message });
+        }
+    }
+
+    fn append_terminal_error_message(
+        &self,
+        new_messages: &mut Vec<AgentMessage>,
+        error: &AgentError,
+    ) -> AgentMessage {
+        let model = self.config.read().model.clone();
+        let partial = self
+            .state
+            .stream_message
+            .read()
+            .clone()
+            .and_then(|message| match message {
+                AgentMessage::Assistant(assistant) => Some(assistant),
+                _ => None,
+            });
+        let (stop_reason, error_message) = stop_reason_and_message_for_error(error);
+        let terminal =
+            self.build_terminal_assistant_message(&model, partial, stop_reason, error_message);
+        let message = AgentMessage::Assistant(terminal);
+        self.append_run_message(new_messages, message.clone(), true, true);
+        message
+    }
+
+    fn build_terminal_assistant_message(
+        &self,
+        model: &Model,
+        partial: Option<AssistantMessage>,
+        stop_reason: StopReason,
+        error_message: impl Into<String>,
+    ) -> AssistantMessage {
+        let error_message = error_message.into();
+        let mut message = partial.unwrap_or_else(|| {
+            AssistantMessage::builder()
+                .api(effective_api_for_model(model))
+                .provider(model.provider.clone())
+                .model(model.id.clone())
+                .usage(Usage::default())
+                .stop_reason(stop_reason.clone())
+                .build()
+                .expect("terminal assistant message should be buildable")
+        });
+        message.api = effective_api_for_model(model);
+        message.provider = model.provider.clone();
+        message.model = model.id.clone();
+        message.stop_reason = stop_reason;
+        message.error_message = Some(error_message.clone());
+        if message.content.is_empty() {
+            message.content = vec![ContentBlock::Text(TextContent::new(""))];
+        }
+        message
+    }
+
     /// Run a single LLM turn: call provider, consume stream, return AssistantMessage.
     async fn run_turn(&self, provider: &ArcProtocol) -> Result<AssistantMessage, AgentError> {
         let context = self.build_context().await;
         let model = self.config.read().model.clone();
         let options = self.build_simple_stream_options().await;
         let stream_timeout = self.config.read().security.stream.result_timeout();
+        let abort_signal = self.current_abort_signal();
 
         // Create the stream (custom stream_fn or default provider via stream_simple)
         let stream_fn = self.hooks.read().stream_fn.clone();
         let mut stream: AssistantMessageEventStream = if let Some(ref custom_stream) = stream_fn {
-            custom_stream(&model, &context, options.base).await
+            custom_stream(&model, &context, options.clone(), abort_signal.clone()).await
         } else {
             provider.stream_simple(&model, &context, options)
         };
+        let mut emitted_message_start = false;
 
         // Process stream events
-        while let Some(event) = stream.next().await {
-            // Check abort
-            if self.abort_flag.load(Ordering::SeqCst) {
-                return Err(AgentError::Other("Aborted".to_string()));
-            }
+        loop {
+            let next_event = tokio::select! {
+                _ = abort_signal.cancelled() => {
+                    let partial = self
+                        .state
+                        .stream_message
+                        .read()
+                        .clone()
+                        .and_then(|message| match message {
+                            AgentMessage::Assistant(assistant) => Some(assistant),
+                            _ => None,
+                        });
+                    *self.state.stream_message.write() = None;
+                    return Ok(self.build_terminal_assistant_message(
+                        &model,
+                        partial,
+                        StopReason::Aborted,
+                        "Aborted",
+                    ));
+                }
+                event = stream.next() => event,
+            };
+
+            let Some(event) = next_event else {
+                break;
+            };
 
             // Check for steering messages
             if !self.defer_steering_until_turn_end.load(Ordering::SeqCst) {
@@ -785,6 +1019,10 @@ impl Agent {
                 AssistantMessageEvent::Start { partial } => {
                     *self.state.stream_message.write() =
                         Some(AgentMessage::Assistant(partial.clone()));
+                    self.emit(AgentEvent::MessageStart {
+                        message: AgentMessage::Assistant(partial.clone()),
+                    });
+                    emitted_message_start = true;
                     self.emit(AgentEvent::MessageUpdate {
                         message: AgentMessage::Assistant(partial.clone()),
                         assistant_event: Box::new(event.clone()),
@@ -826,13 +1064,10 @@ impl Agent {
 
         // Clear streaming message
         *self.state.stream_message.write() = None;
-
-        if result.stop_reason == StopReason::Error {
-            let error_msg = result
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "Unknown error".to_string());
-            return Err(AgentError::ProviderError(error_msg));
+        if !emitted_message_start {
+            self.emit(AgentEvent::MessageStart {
+                message: AgentMessage::Assistant(result.clone()),
+            });
         }
 
         Ok(result)
@@ -870,6 +1105,7 @@ impl Agent {
             ToolExecutionMode::Parallel => {
                 let max_parallel = security.agent.max_parallel_tool_calls;
                 let abort_flag = Arc::clone(&self.abort_flag);
+                let abort_signal = self.current_abort_signal();
 
                 let mut ordered_results: Vec<Option<ToolResultMessage>> =
                     vec![None; tool_calls.len()];
@@ -906,9 +1142,15 @@ impl Agent {
                     }
 
                     // beforeToolCall hook
-                    if let Some(result) =
-                        run_before_hook(&before_hook, assistant_msg, &tc_clone, &tc_args, context)
-                            .await
+                    if let Some(result) = run_before_hook(
+                        &before_hook,
+                        assistant_msg,
+                        &tc_clone,
+                        &tc_args,
+                        context,
+                        abort_signal.clone(),
+                    )
+                    .await
                     {
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
@@ -928,6 +1170,7 @@ impl Agent {
                     let assistant_msg_clone = assistant_msg.clone();
                     let context_clone = context.clone();
                     let subscribers = Arc::clone(&self.subscribers);
+                    let abort_signal = abort_signal.clone();
 
                     tool_futures.push(async move {
                         let (final_result, final_is_error) =
@@ -943,6 +1186,7 @@ impl Agent {
                                 context: &context_clone,
                                 tool_timeout,
                                 abort_flag: abort,
+                                abort_signal,
                             })
                             .await;
 
@@ -980,6 +1224,7 @@ impl Agent {
                 }
             }
             ToolExecutionMode::Sequential => {
+                let abort_signal = self.current_abort_signal();
                 for tc in &tool_calls {
                     if self.abort_flag.load(Ordering::SeqCst) {
                         break;
@@ -1016,9 +1261,15 @@ impl Agent {
                     }
 
                     // beforeToolCall hook
-                    if let Some(result) =
-                        run_before_hook(&before_hook, assistant_msg, &tc_clone, &tc_args, context)
-                            .await
+                    if let Some(result) = run_before_hook(
+                        &before_hook,
+                        assistant_msg,
+                        &tc_clone,
+                        &tc_args,
+                        context,
+                        abort_signal.clone(),
+                    )
+                    .await
                     {
                         let result_msg =
                             build_tool_result_message(tc_id.clone(), tc_name.clone(), result, true);
@@ -1047,6 +1298,7 @@ impl Agent {
                             context,
                             tool_timeout,
                             abort_flag,
+                            abort_signal: abort_signal.clone(),
                         })
                         .await;
 
@@ -1084,13 +1336,21 @@ impl Agent {
     }
 
     /// Run the agent loop: stream LLM → check tool calls → execute → loop.
-    async fn run_loop(&self) -> Result<Vec<AgentMessage>, AgentError> {
+    async fn run_loop(&self) -> AgentRunOutcome {
         let provider = if self.hooks.read().stream_fn.is_some() {
             // When a custom stream function is set, we don't need a provider.
             // Create a dummy Arc for the loop (won't be used).
             None
         } else {
-            Some(self.resolve_provider()?)
+            match self.resolve_provider() {
+                Ok(provider) => Some(provider),
+                Err(error) => {
+                    let mut messages = Vec::new();
+                    self.append_terminal_error_message(&mut messages, &error);
+                    *self.state.error.write() = Some(error.to_string());
+                    return AgentRunOutcome::error(messages, error);
+                }
+            }
         };
 
         let max_turns = *self.max_turns.read();
@@ -1104,10 +1364,16 @@ impl Agent {
         loop {
             // Check abort
             if self.abort_flag.load(Ordering::SeqCst) {
-                self.emit(AgentEvent::AgentEnd {
-                    messages: new_messages.clone(),
-                });
-                return Err(AgentError::Other("Aborted".to_string()));
+                let error = AgentError::Other("Aborted".to_string());
+                if !matches!(
+                    new_messages.last(),
+                    Some(AgentMessage::Assistant(message))
+                        if message.stop_reason == StopReason::Aborted
+                ) {
+                    self.append_terminal_error_message(&mut new_messages, &error);
+                }
+                *self.state.error.write() = Some(error.to_string());
+                return AgentRunOutcome::error(new_messages, error);
             }
 
             // Check max turns
@@ -1124,25 +1390,17 @@ impl Agent {
 
             match assistant_result {
                 Ok(assistant_msg) => {
-                    // Build context snapshot for tool hook use
-                    let context = self.build_context().await;
-
                     // Add assistant message to state and new_messages
                     let agent_msg = AgentMessage::Assistant(assistant_msg.clone());
-                    self.state.add_message(agent_msg.clone());
-                    new_messages.push(agent_msg.clone());
-
-                    self.emit(AgentEvent::MessageStart {
-                        message: agent_msg.clone(),
-                    });
-                    self.emit(AgentEvent::MessageEnd {
-                        message: agent_msg.clone(),
-                    });
+                    self.append_run_message(&mut new_messages, agent_msg.clone(), false, true);
 
                     // Check if there are tool calls
                     if assistant_msg.has_tool_calls()
                         && assistant_msg.stop_reason == StopReason::ToolUse
                     {
+                        // Build context snapshot for tool hook use after the assistant message
+                        // has been committed to state, matching the visible conversation.
+                        let context = self.build_context().await;
                         let tool_results = self.execute_tool_calls(&assistant_msg, &context).await;
 
                         for result in &tool_results {
@@ -1162,29 +1420,19 @@ impl Agent {
                             tool_results,
                         });
 
-                        let deferred_steering = self.dequeue_deferred_steering_messages();
+                        let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.state.add_message(msg.clone());
-                                new_messages.push(msg.clone());
-                                self.emit(AgentEvent::MessageStart {
-                                    message: msg.clone(),
-                                });
-                                self.emit(AgentEvent::MessageEnd { message: msg });
+                                self.append_run_message(&mut new_messages, msg, true, true);
                             }
                             turn_count += 1;
                             continue;
                         }
 
                         // Check for follow-up messages
-                        let follow_ups = self.dequeue_follow_up_messages();
+                        let follow_ups = self.poll_follow_up_messages().await;
                         for msg in follow_ups {
-                            self.state.add_message(msg.clone());
-                            new_messages.push(msg.clone());
-                            self.emit(AgentEvent::MessageStart {
-                                message: msg.clone(),
-                            });
-                            self.emit(AgentEvent::MessageEnd { message: msg });
+                            self.append_run_message(&mut new_messages, msg, true, true);
                         }
 
                         turn_count += 1;
@@ -1192,34 +1440,40 @@ impl Agent {
                     } else {
                         // No tool calls — conversation turn is complete
                         self.emit(AgentEvent::TurnEnd {
-                            message: agent_msg,
+                            message: agent_msg.clone(),
                             tool_results: Vec::new(),
                         });
 
-                        let deferred_steering = self.dequeue_deferred_steering_messages();
+                        if matches!(
+                            assistant_msg.stop_reason,
+                            StopReason::Error | StopReason::Aborted
+                        ) {
+                            *self.state.error.write() = Some(
+                                assistant_msg
+                                    .error_message
+                                    .clone()
+                                    .unwrap_or_else(|| assistant_msg.stop_reason.to_string()),
+                            );
+                            return AgentRunOutcome::error(
+                                new_messages,
+                                agent_error_from_assistant(&assistant_msg),
+                            );
+                        }
+
+                        let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.state.add_message(msg.clone());
-                                new_messages.push(msg.clone());
-                                self.emit(AgentEvent::MessageStart {
-                                    message: msg.clone(),
-                                });
-                                self.emit(AgentEvent::MessageEnd { message: msg });
+                                self.append_run_message(&mut new_messages, msg, true, true);
                             }
                             turn_count += 1;
                             continue;
                         }
 
                         // Check for follow-up messages
-                        let follow_ups = self.dequeue_follow_up_messages();
+                        let follow_ups = self.poll_follow_up_messages().await;
                         if !follow_ups.is_empty() {
                             for msg in follow_ups {
-                                self.state.add_message(msg.clone());
-                                new_messages.push(msg.clone());
-                                self.emit(AgentEvent::MessageStart {
-                                    message: msg.clone(),
-                                });
-                                self.emit(AgentEvent::MessageEnd { message: msg });
+                                self.append_run_message(&mut new_messages, msg, true, true);
                             }
                             turn_count += 1;
                             continue;
@@ -1234,36 +1488,43 @@ impl Agent {
                 }
                 Err(e) => {
                     *self.state.error.write() = Some(e.to_string());
-                    return Err(e);
+                    let terminal_message =
+                        self.append_terminal_error_message(&mut new_messages, &e);
+                    self.emit(AgentEvent::TurnEnd {
+                        message: terminal_message,
+                        tool_results: Vec::new(),
+                    });
+                    return AgentRunOutcome::error(new_messages, e);
                 }
             }
         }
 
-        Ok(new_messages)
+        AgentRunOutcome::ok(new_messages)
     }
 
     // ============================================================================
     // Prompt methods
     // ============================================================================
 
-    async fn finish_run(
-        &self,
-        result: Result<Vec<AgentMessage>, AgentError>,
-    ) -> Result<Vec<AgentMessage>, AgentError> {
+    async fn finish_run(&self, outcome: AgentRunOutcome) -> Result<Vec<AgentMessage>, AgentError> {
         self.state.set_streaming(false);
+        *self.state.stream_message.write() = None;
+        self.state.pending_tool_calls.write().clear();
+        self.run_abort_signal.write().take();
 
-        match result {
-            Ok(messages) => {
+        match outcome.error {
+            None => {
+                let messages = outcome.messages;
                 self.emit(AgentEvent::AgentEnd {
                     messages: messages.clone(),
                 });
                 Ok(messages)
             }
-            Err(e) => {
+            Some(error) => {
                 self.emit(AgentEvent::AgentEnd {
-                    messages: Vec::new(),
+                    messages: outcome.messages,
                 });
-                Err(e)
+                Err(error)
             }
         }
     }
@@ -1273,6 +1534,9 @@ impl Agent {
         messages: Vec<AgentMessage>,
     ) -> Result<Vec<AgentMessage>, AgentError> {
         self.abort_flag.store(false, Ordering::SeqCst);
+        *self.run_abort_signal.write() = Some(AbortSignal::new());
+        *self.state.error.write() = None;
+        *self.state.stream_message.write() = None;
 
         for message in &messages {
             self.state.add_message(message.clone());
@@ -1288,15 +1552,21 @@ impl Agent {
             });
         }
 
-        let result = self.run_loop().await;
-        self.finish_run(result).await
+        let mut outcome = self.run_loop().await;
+        let mut prefixed_messages = messages;
+        prefixed_messages.extend(outcome.messages);
+        outcome.messages = prefixed_messages;
+        self.finish_run(outcome).await
     }
 
     async fn continue_locked(&self) -> Result<Vec<AgentMessage>, AgentError> {
         self.abort_flag.store(false, Ordering::SeqCst);
+        *self.run_abort_signal.write() = Some(AbortSignal::new());
+        *self.state.error.write() = None;
+        *self.state.stream_message.write() = None;
         self.emit(AgentEvent::AgentStart);
-        let result = self.run_loop().await;
-        self.finish_run(result).await
+        let outcome = self.run_loop().await;
+        self.finish_run(outcome).await
     }
 
     /// Send a prompt to the agent.
@@ -1352,14 +1622,14 @@ impl Agent {
         };
 
         if last_is_assistant {
-            let steering = self.dequeue_steering_messages();
+            let steering = self.poll_steering_messages().await;
             if !steering.is_empty() {
                 self.defer_steering_until_turn_end
                     .store(!self.steering_queue.lock().is_empty(), Ordering::SeqCst);
                 return self.prompt_messages_locked(steering).await;
             }
 
-            let follow_ups = self.dequeue_follow_up_messages();
+            let follow_ups = self.poll_follow_up_messages().await;
             if !follow_ups.is_empty() {
                 return self.prompt_messages_locked(follow_ups).await;
             }
@@ -1376,8 +1646,10 @@ impl Agent {
         self.abort_flag.store(true, Ordering::SeqCst);
         self.defer_steering_until_turn_end
             .store(false, Ordering::SeqCst);
+        if let Some(signal) = self.run_abort_signal.read().clone() {
+            signal.cancel();
+        }
         self.state.set_streaming(false);
-        self.clear_all_queues();
     }
 
     /// Wait for the agent to become idle.
@@ -1468,6 +1740,7 @@ async fn run_before_hook(
     tc: &ToolCall,
     tc_args: &serde_json::Value,
     context: &Context,
+    abort_signal: AbortSignal,
 ) -> Option<AgentToolResult> {
     let hook = before_hook.as_ref()?;
     let ctx = BeforeToolCallContext {
@@ -1475,6 +1748,7 @@ async fn run_before_hook(
         tool_call: tc.clone(),
         args: tc_args.clone(),
         context: context.clone(),
+        abort_signal,
     };
     match hook(ctx).await {
         Some(result) if result.block => {
@@ -1534,6 +1808,7 @@ struct ToolExecCtx<'a> {
     context: &'a Context,
     tool_timeout: std::time::Duration,
     abort_flag: Arc<AtomicBool>,
+    abort_signal: AbortSignal,
 }
 
 /// Execute a tool call and apply the `after_tool_call` hook if set.
@@ -1556,6 +1831,7 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
         context,
         tool_timeout,
         abort_flag,
+        abort_signal,
     } = ctx;
     // Execute the tool
     let tool_result = if let Some(ref exec) = executor {
@@ -1563,10 +1839,12 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
         let subs = Arc::clone(subscribers);
         let update_tc_id = tc_id.to_string();
         let update_tc_name = tc_name.to_string();
+        let update_tc_args = tc_args.clone();
         let update_cb: ToolUpdateCallback = Arc::new(move |partial: serde_json::Value| {
             subs.emit(&AgentEvent::ToolExecutionUpdate {
                 tool_call_id: update_tc_id.clone(),
                 tool_name: update_tc_name.clone(),
+                args: update_tc_args.clone(),
                 partial_result: partial,
             });
         });
@@ -1613,6 +1891,7 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
             result: tool_result,
             is_error,
             context: context.clone(),
+            abort_signal,
         };
         if let Some(overrides) = hook(after_ctx).await {
             if let Some(content_override) = overrides.content {
@@ -1633,6 +1912,100 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
 impl Default for Agent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+struct AgentRunOutcome {
+    messages: Vec<AgentMessage>,
+    error: Option<AgentError>,
+}
+
+impl AgentRunOutcome {
+    fn ok(messages: Vec<AgentMessage>) -> Self {
+        Self {
+            messages,
+            error: None,
+        }
+    }
+
+    fn error(messages: Vec<AgentMessage>, error: AgentError) -> Self {
+        Self {
+            messages,
+            error: Some(error),
+        }
+    }
+}
+
+fn stop_reason_and_message_for_error(error: &AgentError) -> (StopReason, String) {
+    match error {
+        AgentError::Other(message) if message == "Aborted" => {
+            (StopReason::Aborted, message.clone())
+        }
+        AgentError::ProviderError(message) => (StopReason::Error, message.clone()),
+        other => (StopReason::Error, other.to_string()),
+    }
+}
+
+fn agent_error_from_assistant(message: &AssistantMessage) -> AgentError {
+    let error_message = message
+        .error_message
+        .clone()
+        .unwrap_or_else(|| message.stop_reason.to_string());
+    match message.stop_reason {
+        StopReason::Aborted => AgentError::Other("Aborted".to_string()),
+        StopReason::Error => AgentError::ProviderError(error_message),
+        _ => AgentError::Other(error_message),
+    }
+}
+
+fn effective_api_for_model(model: &Model) -> Api {
+    if let Some(api) = model.api.clone() {
+        return api;
+    }
+
+    match &model.provider {
+        Provider::OpenAI | Provider::OpenAIResponses | Provider::AzureOpenAIResponses => {
+            Api::OpenAIResponses
+        }
+        Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {
+            Api::AnthropicMessages
+        }
+        Provider::Google | Provider::GoogleGeminiCli | Provider::GoogleAntigravity => {
+            Api::GoogleGenerativeAi
+        }
+        Provider::GoogleVertex => Api::GoogleVertex,
+        Provider::Ollama => Api::Ollama,
+        Provider::Zenmux => {
+            let base = model.base_url.as_deref().unwrap_or("");
+            let id = model.id.to_ascii_lowercase();
+            if base.is_empty() || base.starts_with("https://zenmux.ai") {
+                if id.contains("google") || id.contains("gemini") {
+                    Api::GoogleVertex
+                } else if id.contains("openai") || id.contains("gpt") {
+                    Api::OpenAIResponses
+                } else {
+                    Api::AnthropicMessages
+                }
+            } else {
+                Api::OpenAICompletions
+            }
+        }
+        Provider::XAI
+        | Provider::Groq
+        | Provider::OpenRouter
+        | Provider::OpenAICompatible
+        | Provider::OpenAICodex
+        | Provider::GitHubCopilot
+        | Provider::Cerebras
+        | Provider::VercelAiGateway
+        | Provider::ZAI
+        | Provider::Mistral
+        | Provider::HuggingFace
+        | Provider::OpenCode
+        | Provider::OpenCodeGo
+        | Provider::DeepSeek => Api::OpenAICompletions,
+        Provider::AmazonBedrock => Api::BedrockConverseStream,
+        Provider::Custom(name) => Api::Custom(name.clone()),
     }
 }
 
@@ -1734,6 +2107,7 @@ impl crate::provider::LLMProtocol for DummyProvider {
     ) -> AssistantMessageEventStream {
         let stream = AssistantMessageEventStream::new_assistant_stream();
         let error_msg = AssistantMessage::builder()
+            .api(Api::Custom("dummy".to_string()))
             .provider(Provider::Custom("dummy".to_string()))
             .model("dummy")
             .stop_reason(StopReason::Error)

@@ -13,7 +13,6 @@ use crate::thinking::ThinkingLevel;
 use crate::transform::transform_messages;
 use crate::types::*;
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -574,6 +573,7 @@ async fn run_stream(
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
+    let cancel_token = options.cancel_token.clone();
     let base = super::common::resolve_base_url(
         options.base_url.as_deref(),
         model.base_url.as_deref(),
@@ -657,13 +657,21 @@ async fn run_stream(
     // Add custom headers
     super::common::apply_custom_headers(&mut headers, &options.headers, &limits.headers);
 
-    let response = client
+    let request = client
         .post(&url)
         .headers(headers)
         .body(body_string)
-        .timeout(limits.http.request_timeout())
-        .send()
-        .await?;
+        .timeout(limits.http.request_timeout());
+    let Some(response) = super::common::send_request_with_cancel(
+        request,
+        cancel_token.as_ref(),
+        &mut output,
+        &stream,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
 
     if !response.status().is_success() {
         super::common::handle_error_response(
@@ -692,7 +700,14 @@ async fn run_stream(
     let mut item_counter: usize = 0;
 
     let mut byte_stream = response.bytes_stream();
-    while let Some(chunk_result) = byte_stream.next().await {
+    while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
+        &mut byte_stream,
+        cancel_token.as_ref(),
+        &mut output,
+        &stream,
+    )
+    .await
+    {
         let chunk = chunk_result?;
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
