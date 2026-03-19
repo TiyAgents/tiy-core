@@ -11,6 +11,7 @@ const DEFAULT_VERTEX_BASE_URL: &str = "https://us-central1-aiplatform.googleapis
 
 use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
+use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -82,8 +83,16 @@ impl LLMProtocol for GoogleProtocol {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                options,
+                api_key,
+                None,
+                stream_clone,
+            )
+            .await
             {
                 tracing::error!("Google stream error: {}", e);
             }
@@ -98,7 +107,34 @@ impl LLMProtocol for GoogleProtocol {
         context: &Context,
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
-        self.stream(model, context, options.base)
+        let stream_options = options.base;
+        let thinking_config =
+            build_thinking_config(model, options.reasoning, options.thinking_budget_tokens);
+        let stream = AssistantMessageEventStream::new_assistant_stream();
+        let stream_clone = stream.clone();
+
+        let model = model.clone();
+        let context = context.clone();
+        let client = self.client.clone();
+        let api_key = self.resolve_api_key(&stream_options);
+
+        tokio::spawn(async move {
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                stream_options,
+                api_key,
+                thinking_config,
+                stream_clone,
+            )
+            .await
+            {
+                tracing::error!("Google stream error: {}", e);
+            }
+        });
+
+        stream
     }
 }
 
@@ -201,6 +237,116 @@ struct GoogleGenerationConfig {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<GoogleThinkingConfig>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleThinkingConfig {
+    include_thoughts: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
+}
+
+fn clamp_reasoning(level: ThinkingLevel) -> ThinkingLevel {
+    if matches!(level, ThinkingLevel::XHigh) {
+        ThinkingLevel::High
+    } else {
+        level
+    }
+}
+
+fn is_gemini3_pro_model(model: &Model) -> bool {
+    let id = model.id.to_lowercase();
+    let normalized = id.strip_prefix("models/").unwrap_or(&id);
+    normalized.contains("gemini-3") && normalized.contains("-pro")
+}
+
+fn is_gemini3_flash_model(model: &Model) -> bool {
+    let id = model.id.to_lowercase();
+    let normalized = id.strip_prefix("models/").unwrap_or(&id);
+    normalized.contains("gemini-3") && normalized.contains("-flash")
+}
+
+fn get_gemini3_thinking_level(level: ThinkingLevel, model: &Model) -> String {
+    if is_gemini3_pro_model(model) {
+        match level {
+            ThinkingLevel::Minimal | ThinkingLevel::Low => "LOW".to_string(),
+            ThinkingLevel::Medium | ThinkingLevel::High | ThinkingLevel::XHigh => {
+                "HIGH".to_string()
+            }
+            ThinkingLevel::Off => "LOW".to_string(),
+        }
+    } else {
+        match level {
+            ThinkingLevel::Minimal => "MINIMAL".to_string(),
+            ThinkingLevel::Low => "LOW".to_string(),
+            ThinkingLevel::Medium => "MEDIUM".to_string(),
+            ThinkingLevel::High | ThinkingLevel::XHigh => "HIGH".to_string(),
+            ThinkingLevel::Off => "LOW".to_string(),
+        }
+    }
+}
+
+fn default_google_budget(model: &Model, level: ThinkingLevel) -> i32 {
+    let level = clamp_reasoning(level);
+    if model.id.contains("2.5-pro") {
+        return match level {
+            ThinkingLevel::Minimal => 128,
+            ThinkingLevel::Low => 2048,
+            ThinkingLevel::Medium => 8192,
+            ThinkingLevel::High | ThinkingLevel::XHigh => 32768,
+            ThinkingLevel::Off => -1,
+        };
+    }
+
+    if model.id.contains("2.5-flash") {
+        return match level {
+            ThinkingLevel::Minimal => 128,
+            ThinkingLevel::Low => 2048,
+            ThinkingLevel::Medium => 8192,
+            ThinkingLevel::High | ThinkingLevel::XHigh => 24576,
+            ThinkingLevel::Off => -1,
+        };
+    }
+
+    -1
+}
+
+fn build_thinking_config(
+    model: &Model,
+    level: Option<ThinkingLevel>,
+    thinking_budget_tokens: Option<u32>,
+) -> Option<GoogleThinkingConfig> {
+    let Some(level) = level else {
+        return None;
+    };
+
+    if !model.reasoning {
+        return None;
+    }
+
+    let level = clamp_reasoning(level);
+    if is_gemini3_pro_model(model) || is_gemini3_flash_model(model) {
+        return Some(GoogleThinkingConfig {
+            include_thoughts: true,
+            thinking_budget: None,
+            thinking_level: Some(get_gemini3_thinking_level(level, model)),
+        });
+    }
+
+    Some(GoogleThinkingConfig {
+        include_thoughts: true,
+        thinking_budget: Some(
+            thinking_budget_tokens
+                .map(|tokens| tokens as i32)
+                .unwrap_or_else(|| default_google_budget(model, level)),
+        ),
+        thinking_level: None,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -430,6 +576,7 @@ async fn run_stream(
     context: &Context,
     options: StreamOptions,
     api_key: String,
+    thinking_config: Option<GoogleThinkingConfig>,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
@@ -458,6 +605,7 @@ async fn run_stream(
         generation_config: Some(GoogleGenerationConfig {
             temperature: options.temperature,
             max_output_tokens: options.max_tokens.or(Some(model.max_tokens)),
+            thinking_config,
         }),
         tools,
     };

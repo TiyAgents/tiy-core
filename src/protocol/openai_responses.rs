@@ -9,6 +9,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
+use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -84,8 +85,16 @@ impl LLMProtocol for OpenAIResponsesProtocol {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                options,
+                api_key,
+                None,
+                stream_clone,
+            )
+            .await
             {
                 tracing::error!("OpenAI Responses stream error: {}", e);
             }
@@ -100,7 +109,33 @@ impl LLMProtocol for OpenAIResponsesProtocol {
         context: &Context,
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
-        self.stream(model, context, options.base)
+        let stream_options = options.base;
+        let reasoning = build_reasoning(model, options.reasoning);
+        let stream = AssistantMessageEventStream::new_assistant_stream();
+        let stream_clone = stream.clone();
+
+        let model = model.clone();
+        let context = context.clone();
+        let client = self.client.clone();
+        let api_key = self.resolve_api_key(&stream_options);
+
+        tokio::spawn(async move {
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                stream_options,
+                api_key,
+                reasoning,
+                stream_clone,
+            )
+            .await
+            {
+                tracing::error!("OpenAI Responses stream error: {}", e);
+            }
+        });
+
+        stream
     }
 }
 
@@ -124,6 +159,8 @@ struct ResponsesRequest {
     tools: Option<Vec<ResponsesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ResponsesReasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<Vec<String>>,
 }
 
 /// Flat typed input item for Responses API.
@@ -173,12 +210,35 @@ struct ResponsesTool {
     parameters: serde_json::Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ResponsesReasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+}
+
+fn supports_xhigh(model: &Model) -> bool {
+    model.id.contains("gpt-5.2") || model.id.contains("gpt-5.3") || model.id.contains("gpt-5.4")
+}
+
+fn clamp_reasoning(level: ThinkingLevel, model: &Model) -> ThinkingLevel {
+    if matches!(level, ThinkingLevel::XHigh) && !supports_xhigh(model) {
+        ThinkingLevel::High
+    } else {
+        level
+    }
+}
+
+fn build_reasoning(model: &Model, level: Option<ThinkingLevel>) -> Option<ResponsesReasoning> {
+    if !model.reasoning {
+        return None;
+    }
+
+    level.map(|level| ResponsesReasoning {
+        effort: Some(clamp_reasoning(level, model).to_string()),
+        summary: Some("auto".to_string()),
+    })
 }
 
 // ============================================================================
@@ -378,6 +438,7 @@ async fn run_stream(
     context: &Context,
     options: StreamOptions,
     api_key: String,
+    reasoning: Option<ResponsesReasoning>,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
@@ -402,7 +463,10 @@ async fn run_stream(
         temperature: options.temperature,
         max_output_tokens,
         tools,
-        reasoning: None,
+        reasoning: reasoning.clone(),
+        include: reasoning
+            .as_ref()
+            .map(|_| vec!["reasoning.encrypted_content".to_string()]),
     };
 
     // Apply on_payload hook if set

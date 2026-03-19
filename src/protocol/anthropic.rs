@@ -8,6 +8,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
+use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -82,8 +83,17 @@ impl LLMProtocol for AnthropicProtocol {
         let api_key = self.resolve_api_key(&options);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                run_stream(client, &model, &context, options, api_key, stream_clone).await
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                options,
+                api_key,
+                None,
+                None,
+                stream_clone,
+            )
+            .await
             {
                 tracing::error!("Anthropic stream error: {}", e);
             }
@@ -98,7 +108,35 @@ impl LLMProtocol for AnthropicProtocol {
         context: &Context,
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
-        self.stream(model, context, options.base)
+        let stream_options = options.base;
+        let (thinking, output_config) =
+            build_thinking_options(model, options.reasoning, options.thinking_budget_tokens);
+        let stream = AssistantMessageEventStream::new_assistant_stream();
+        let stream_clone = stream.clone();
+
+        let model = model.clone();
+        let context = context.clone();
+        let client = self.client.clone();
+        let api_key = self.resolve_api_key(&stream_options);
+
+        tokio::spawn(async move {
+            if let Err(e) = run_stream(
+                client,
+                &model,
+                &context,
+                stream_options,
+                api_key,
+                thinking,
+                output_config,
+                stream_clone,
+            )
+            .await
+            {
+                tracing::error!("Anthropic stream error: {}", e);
+            }
+        });
+
+        stream
     }
 }
 
@@ -121,6 +159,8 @@ struct AnthropicRequest {
     tools: Option<Vec<AnthropicTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<AnthropicThinkingParam>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<AnthropicOutputConfig>,
 }
 
 /// Anthropic thinking parameter for the request.
@@ -128,11 +168,103 @@ struct AnthropicRequest {
 #[serde(untagged)]
 #[allow(dead_code)]
 enum AnthropicThinkingParam {
+    Adaptive {
+        #[serde(rename = "type")]
+        param_type: String,
+    },
     Budget {
         #[serde(rename = "type")]
         param_type: String,
         budget_tokens: u32,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicOutputConfig {
+    effort: String,
+}
+
+fn supports_xhigh(model: &Model) -> bool {
+    model.id.contains("gpt-5.2")
+        || model.id.contains("gpt-5.3")
+        || model.id.contains("gpt-5.4")
+        || model.id.contains("opus-4-6")
+        || model.id.contains("opus-4.6")
+}
+
+fn supports_adaptive_thinking(model_id: &str) -> bool {
+    model_id.contains("opus-4-6")
+        || model_id.contains("opus-4.6")
+        || model_id.contains("sonnet-4-6")
+        || model_id.contains("sonnet-4.6")
+}
+
+fn clamp_reasoning(level: ThinkingLevel, model: &Model) -> ThinkingLevel {
+    if matches!(level, ThinkingLevel::XHigh) && !supports_xhigh(model) {
+        ThinkingLevel::High
+    } else {
+        level
+    }
+}
+
+fn map_adaptive_effort(level: ThinkingLevel, model_id: &str) -> &'static str {
+    match level {
+        ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::XHigh => {
+            if model_id.contains("opus-4-6") || model_id.contains("opus-4.6") {
+                "max"
+            } else {
+                "high"
+            }
+        }
+        ThinkingLevel::Off => "high",
+    }
+}
+
+fn build_thinking_options(
+    model: &Model,
+    level: Option<ThinkingLevel>,
+    thinking_budget_tokens: Option<u32>,
+) -> (
+    Option<AnthropicThinkingParam>,
+    Option<AnthropicOutputConfig>,
+) {
+    let Some(level) = level else {
+        return (None, None);
+    };
+
+    if !model.reasoning {
+        return (None, None);
+    }
+
+    let level = clamp_reasoning(level, model);
+    if supports_adaptive_thinking(&model.id) {
+        (
+            Some(AnthropicThinkingParam::Adaptive {
+                param_type: "adaptive".to_string(),
+            }),
+            Some(AnthropicOutputConfig {
+                effort: map_adaptive_effort(level, &model.id).to_string(),
+            }),
+        )
+    } else {
+        let budget_level = if matches!(level, ThinkingLevel::XHigh) {
+            ThinkingLevel::High
+        } else {
+            level
+        };
+        (
+            Some(AnthropicThinkingParam::Budget {
+                param_type: "enabled".to_string(),
+                budget_tokens: thinking_budget_tokens.unwrap_or_else(|| {
+                    crate::thinking::ThinkingConfig::default_budget(budget_level)
+                }),
+            }),
+            None,
+        )
+    }
 }
 
 /// Anthropic message format.
@@ -450,6 +582,8 @@ async fn run_stream(
     context: &Context,
     options: StreamOptions,
     api_key: String,
+    thinking: Option<AnthropicThinkingParam>,
+    output_config: Option<AnthropicOutputConfig>,
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
@@ -471,9 +605,14 @@ async fn run_stream(
         system: context.system_prompt.clone(),
         max_tokens: options.max_tokens.unwrap_or(model.max_tokens),
         stream: true,
-        temperature: options.temperature,
+        temperature: if thinking.is_some() {
+            None
+        } else {
+            options.temperature
+        },
         tools,
-        thinking: None, // Thinking params can be set via SimpleStreamOptions
+        thinking,
+        output_config,
     };
 
     // Apply on_payload hook if set
