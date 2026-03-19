@@ -1,7 +1,9 @@
 //! Tests for Google Generative AI provider using wiremock for HTTP mocking.
 
 use futures::StreamExt;
+use parking_lot::Mutex;
 use serde_json::json;
+use std::sync::Arc;
 use tiy_core::protocol::google::GoogleProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
@@ -37,6 +39,21 @@ fn make_options(api_key: &str) -> StreamOptions {
         api_key: Some(api_key.to_string()),
         ..Default::default()
     }
+}
+
+fn make_options_with_capture(
+    api_key: &str,
+    captured: Arc<Mutex<Option<serde_json::Value>>>,
+) -> StreamOptions {
+    let mut options = make_options(api_key);
+    options.on_payload = Some(Arc::new(move |payload, _model| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            *captured.lock() = Some(payload.clone());
+            Some(payload)
+        })
+    }));
+    options
 }
 
 /// Build a Google SSE response body from JSON data chunks.
@@ -1024,6 +1041,65 @@ async fn test_stream_with_rich_context_multiturn() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "continued");
+}
+
+#[tokio::test]
+async fn test_stream_google_replays_cross_provider_thinking_as_text() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"continued"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":5}
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+    ctx.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::AnthropicMessages)
+            .provider(Provider::Anthropic)
+            .model("claude-3-5-sonnet")
+            .content(vec![
+                ContentBlock::Thinking(ThinkingContent::new("Deep thought")),
+                ContentBlock::Text(TextContent::new("answer")),
+            ])
+            .stop_reason(StopReason::Stop)
+            .build()
+            .unwrap(),
+    ));
+    ctx.add_message(Message::User(UserMessage::text("continue")));
+
+    let provider = GoogleProtocol::new();
+    let model = make_model(&server.uri());
+    let captured = Arc::new(Mutex::new(None));
+    let options = make_options_with_capture("test-key", captured.clone());
+
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let contents = payload["contents"]
+        .as_array()
+        .expect("contents should be an array");
+    let assistant_parts = contents[1]["parts"]
+        .as_array()
+        .expect("assistant parts should be an array");
+
+    assert_eq!(assistant_parts[0], json!({ "text": "Deep thought" }));
+    assert_eq!(assistant_parts[1], json!({ "text": "answer" }));
 }
 
 #[tokio::test]

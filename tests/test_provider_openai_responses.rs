@@ -1499,7 +1499,8 @@ async fn test_stream_usage_with_cached_tokens() {
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
-    assert_eq!(result.usage.input, 100);
+    assert_eq!(result.usage.input, 20);
     assert_eq!(result.usage.output, 5);
     assert_eq!(result.usage.cache_read, 80);
+    assert_eq!(result.usage.total_tokens, 105);
 }

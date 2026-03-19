@@ -6,6 +6,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::thinking::OpenAIThinkingOptions;
+use crate::transform::{normalize_tool_call_id, transform_messages};
 use crate::types::*;
 use crate::types::{SimpleStreamOptions, StreamOptions};
 use async_trait::async_trait;
@@ -308,6 +309,8 @@ struct ChunkDelta {
     #[serde(default)]
     reasoning_text: Option<String>,
     #[serde(default)]
+    reasoning_details: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
     tool_calls: Vec<ChunkToolCall>,
 }
 
@@ -346,14 +349,59 @@ struct CompletionTokensDetails {
     reasoning_tokens: Option<u64>,
 }
 
+fn apply_openai_usage(output: &mut AssistantMessage, usage: &ChunkUsage) {
+    let cached_tokens = usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cached_tokens)
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .completion_tokens_details
+        .as_ref()
+        .and_then(|details| details.reasoning_tokens)
+        .unwrap_or(0);
+
+    let input_tokens = usage.prompt_tokens.unwrap_or(0);
+    let completion_tokens = usage.completion_tokens.unwrap_or(0);
+
+    output.usage.input = input_tokens.saturating_sub(cached_tokens);
+    output.usage.output = completion_tokens + reasoning_tokens;
+    output.usage.cache_read = cached_tokens;
+    output.usage.total_tokens = output.usage.input + output.usage.output + output.usage.cache_read;
+}
+
 // ============================================================================
 // Message Conversion
 // ============================================================================
 
 /// Convert context to OpenAI messages.
+fn normalize_openai_tool_call_id(id: &str) -> String {
+    if id.contains('|') {
+        let call_id = id.split('|').next().unwrap_or(id);
+        return call_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(40)
+            .collect();
+    }
+
+    normalize_tool_call_id(id, &Provider::OpenAI)
+}
+
 fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
     let compat = resolve_compat(model);
     let mut messages = Vec::new();
+    let transformed = transform_messages(
+        &context.messages,
+        model,
+        Some(normalize_openai_tool_call_id),
+    );
 
     // Add system prompt
     if let Some(ref prompt) = context.system_prompt {
@@ -374,7 +422,7 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
     let mut last_was_tool_result = false;
 
     // Convert messages
-    for msg in &context.messages {
+    for msg in &transformed {
         match msg {
             Message::User(user_msg) => {
                 // P1-3: Insert synthetic assistant message between tool result and user
@@ -522,7 +570,10 @@ fn convert_assistant_message(
     // P0-2: If requires_thinking_as_text, prepend thinking to text content
     if compat.requires_thinking_as_text {
         if let Some(ref thinking) = thinking_text {
-            let mut combined = format!("<thinking>\n{}\n</thinking>\n", thinking);
+            let mut combined = thinking.clone();
+            if !text_content.is_empty() {
+                combined.push_str("\n\n");
+            }
             combined.push_str(&text_content);
             text_content = combined;
         }
@@ -543,6 +594,14 @@ fn convert_assistant_message(
         })
         .collect();
 
+    let reasoning_details: Vec<serde_json::Value> = assistant_msg
+        .content
+        .iter()
+        .filter_map(|b| b.as_tool_call())
+        .filter_map(|tc| tc.thought_signature.as_deref())
+        .filter_map(|sig| serde_json::from_str::<serde_json::Value>(sig).ok())
+        .collect();
+
     // Skip if no content and no tool calls
     if text_content.is_empty() && tool_calls.is_empty() && thinking_text.is_none() {
         return None;
@@ -559,16 +618,29 @@ fn convert_assistant_message(
     // P0-2: Add thinking as reasoning_content field (when not requires_thinking_as_text)
     if !compat.requires_thinking_as_text {
         if let Some(ref thinking) = thinking_text {
-            // Use the appropriate field name based on thinking_format
-            let field_name = match compat.thinking_format.as_str() {
-                "zai" | "qwen" | "qwen-chat-template" => "reasoning_content",
-                _ => "reasoning_content", // Standard OpenAI field
-            };
-            extra_fields.insert(
-                field_name.to_string(),
-                serde_json::Value::String(thinking.clone()),
-            );
+            if let Some(signature) = thinking_blocks
+                .iter()
+                .filter_map(|t| t.thinking_signature.as_ref())
+                .find(|sig| !sig.trim().is_empty())
+            {
+                extra_fields.insert(
+                    signature.clone(),
+                    serde_json::Value::String(thinking.clone()),
+                );
+            } else {
+                extra_fields.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(thinking.clone()),
+                );
+            }
         }
+    }
+
+    if !reasoning_details.is_empty() {
+        extra_fields.insert(
+            "reasoning_details".to_string(),
+            serde_json::Value::Array(reasoning_details),
+        );
     }
 
     let msg = OpenAIMessage {
@@ -921,9 +993,7 @@ async fn run_stream(
             if let Ok(chunk_data) = parsed {
                 // Handle usage
                 if let Some(usage) = &chunk_data.usage {
-                    output.usage.input = usage.prompt_tokens.unwrap_or(0);
-                    output.usage.output = usage.completion_tokens.unwrap_or(0);
-                    output.usage.total_tokens = output.usage.input + output.usage.output;
+                    apply_openai_usage(&mut output, usage);
                 }
 
                 for choice in &chunk_data.choices {
@@ -940,9 +1010,7 @@ async fn run_stream(
 
                     // Handle usage in choice (fallback for some providers)
                     if let Some(usage) = &choice.usage {
-                        output.usage.input = usage.prompt_tokens.unwrap_or(0);
-                        output.usage.output = usage.completion_tokens.unwrap_or(0);
-                        output.usage.total_tokens = output.usage.input + output.usage.output;
+                        apply_openai_usage(&mut output, usage);
                     }
 
                     if let Some(ref delta) = choice.delta {
@@ -1059,6 +1127,47 @@ async fn run_stream(
                                             delta: args.clone(),
                                             partial: output.clone(),
                                         });
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(reasoning_details) = &delta.reasoning_details {
+                            for detail in reasoning_details {
+                                let detail_id = detail
+                                    .get("id")
+                                    .and_then(|id| id.as_str())
+                                    .unwrap_or_default();
+                                let detail_type = detail
+                                    .get("type")
+                                    .and_then(|kind| kind.as_str())
+                                    .unwrap_or_default();
+                                let has_data = detail.get("data").is_some();
+
+                                if detail_type != "reasoning.encrypted"
+                                    || detail_id.is_empty()
+                                    || !has_data
+                                {
+                                    continue;
+                                }
+
+                                let detail_json = detail.to_string();
+
+                                if let Some(ContentBlock::ToolCall(ref mut tool_call)) =
+                                    current_block.as_mut()
+                                {
+                                    if tool_call.id == detail_id {
+                                        tool_call.thought_signature = Some(detail_json.clone());
+                                        continue;
+                                    }
+                                }
+
+                                for block in &mut output.content {
+                                    if let ContentBlock::ToolCall(tc) = block {
+                                        if tc.id == detail_id {
+                                            tc.thought_signature = Some(detail_json.clone());
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -1184,9 +1293,7 @@ mod tests {
 
         let converted = convert_assistant_message(&msg, &model, &compat).unwrap();
         if let Some(OpenAIContent::Text(text)) = &converted.content {
-            assert!(text.contains("<thinking>"));
-            assert!(text.contains("My reasoning"));
-            assert!(text.contains("My answer"));
+            assert_eq!(text, "My reasoning\n\nMy answer");
         } else {
             panic!("Expected text content");
         }

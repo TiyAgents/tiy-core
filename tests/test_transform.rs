@@ -171,19 +171,17 @@ fn test_transform_thinking_cross_model_converts_to_text() {
     let result = transform_messages(&messages, &target, None);
     assert_eq!(result.len(), 2);
     if let Message::Assistant(ref a) = result[1] {
-        // Thinking should be converted to text with [Reasoning] wrapper
+        // Thinking should be converted to plain text without tags
         assert!(a.content[0].is_text());
         let text = a.content[0].as_text().unwrap().text.as_str();
-        assert!(text.contains("[Reasoning]"));
-        assert!(text.contains("Deep thought here"));
-        assert!(text.contains("[/Reasoning]"));
+        assert_eq!(text, "Deep thought here");
     } else {
         panic!("Expected assistant message");
     }
 }
 
 #[test]
-fn test_transform_empty_thinking_becomes_empty_text() {
+fn test_transform_empty_thinking_is_dropped() {
     let target = make_model(Provider::OpenAI, Api::OpenAICompletions, "gpt-4o");
 
     let messages = vec![
@@ -202,8 +200,70 @@ fn test_transform_empty_thinking_becomes_empty_text() {
 
     let result = transform_messages(&messages, &target, None);
     if let Message::Assistant(ref a) = result[1] {
+        assert_eq!(a.content.len(), 1);
         assert!(a.content[0].is_text());
-        assert_eq!(a.content[0].as_text().unwrap().text, "");
+        assert_eq!(a.content[0].as_text().unwrap().text, "Answer");
+    }
+}
+
+#[test]
+fn test_transform_redacted_thinking_cross_model_is_dropped() {
+    let target = make_model(Provider::OpenAI, Api::OpenAICompletions, "gpt-4o");
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Anthropic,
+            Api::AnthropicMessages,
+            "claude-sonnet-4",
+            vec![
+                ContentBlock::Thinking(ThinkingContent {
+                    thinking: String::new(),
+                    thinking_signature: Some("opaque".to_string()),
+                    redacted: true,
+                }),
+                ContentBlock::Text(TextContent::new("Answer")),
+            ],
+            StopReason::Stop,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    if let Message::Assistant(ref a) = result[1] {
+        assert_eq!(a.content.len(), 1);
+        assert!(a.content[0].is_text());
+        assert_eq!(a.content[0].as_text().unwrap().text, "Answer");
+    } else {
+        panic!("Expected assistant message");
+    }
+}
+
+#[test]
+fn test_transform_tool_call_drops_thought_signature_cross_model() {
+    let target = make_model(Provider::OpenAI, Api::OpenAICompletions, "gpt-4o");
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Google,
+            Api::GoogleGenerativeAi,
+            "gemini-2.0-flash",
+            vec![ContentBlock::ToolCall(ToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"q": "test"}),
+                thought_signature: Some("sig_1".to_string()),
+            })],
+            StopReason::ToolUse,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    if let Message::Assistant(ref a) = result[1] {
+        let tool_call = a.content[0].as_tool_call().expect("expected tool call");
+        assert!(tool_call.thought_signature.is_none());
+    } else {
+        panic!("Expected assistant message");
     }
 }
 

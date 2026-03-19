@@ -1,7 +1,9 @@
 //! Tests for OpenAI Completions provider using wiremock for HTTP mocking.
 
 use futures::StreamExt;
+use parking_lot::Mutex;
 use serde_json::json;
+use std::sync::Arc;
 use tiy_core::protocol::openai_completions::OpenAICompletionsProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
@@ -37,6 +39,21 @@ fn make_options(api_key: &str) -> StreamOptions {
         api_key: Some(api_key.to_string()),
         ..Default::default()
     }
+}
+
+fn make_options_with_capture(
+    api_key: &str,
+    captured: Arc<Mutex<Option<serde_json::Value>>>,
+) -> StreamOptions {
+    let mut options = make_options(api_key);
+    options.on_payload = Some(Arc::new(move |payload, _model| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            *captured.lock() = Some(payload.clone());
+            Some(payload)
+        })
+    }));
+    options
 }
 
 fn sse_response(chunks: Vec<&str>) -> String {
@@ -435,9 +452,10 @@ async fn test_stream_usage_tracking() {
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
 
-    assert_eq!(result.usage.input, 100);
-    assert_eq!(result.usage.output, 50);
-    assert_eq!(result.usage.total_tokens, 150);
+    assert_eq!(result.usage.input, 70);
+    assert_eq!(result.usage.output, 60);
+    assert_eq!(result.usage.cache_read, 30);
+    assert_eq!(result.usage.total_tokens, 160);
 }
 
 #[tokio::test]
@@ -1202,6 +1220,137 @@ async fn test_stream_with_developer_role_compat() {
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn test_stream_openai_completions_replays_cross_provider_thinking_as_text() {
+    let server = MockServer::start().await;
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1}
+        })
+        .to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+    ctx.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::AnthropicMessages)
+            .provider(Provider::Anthropic)
+            .model("claude-3-5-sonnet")
+            .content(vec![
+                ContentBlock::Thinking(ThinkingContent::new("Let me reason")),
+                ContentBlock::Text(TextContent::new("answer")),
+            ])
+            .stop_reason(StopReason::Stop)
+            .build()
+            .unwrap(),
+    ));
+    ctx.add_message(Message::User(UserMessage::text("go on")));
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let captured = Arc::new(Mutex::new(None));
+    let options = make_options_with_capture("key", captured.clone());
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let messages = payload["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    let assistant = &messages[2];
+
+    assert_eq!(assistant["role"], json!("assistant"));
+    assert_eq!(assistant["content"], json!("Let me reasonanswer"));
+    assert!(assistant.get("reasoning_content").is_none());
+}
+
+#[tokio::test]
+async fn test_stream_openai_completions_normalizes_composite_tool_call_ids() {
+    let server = MockServer::start().await;
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1}
+        })
+        .to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("system");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+    ctx.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAI)
+            .model("gpt-4o")
+            .content(vec![ContentBlock::ToolCall(ToolCall::new(
+                "call_abc|fc_abc",
+                "search",
+                json!({"q": "test"}),
+            ))])
+            .stop_reason(StopReason::ToolUse)
+            .build()
+            .unwrap(),
+    ));
+    ctx.add_message(Message::ToolResult(ToolResultMessage::text(
+        "call_abc|fc_abc",
+        "search",
+        "done",
+        false,
+    )));
+    ctx.add_message(Message::User(UserMessage::text("continue")));
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let captured = Arc::new(Mutex::new(None));
+    let options = make_options_with_capture("key", captured.clone());
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let messages = payload["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    let assistant = &messages[2];
+    let tool_result = &messages[3];
+
+    assert_eq!(assistant["tool_calls"][0]["id"], json!("call_abc"));
+    assert_eq!(tool_result["tool_call_id"], json!("call_abc"));
 }
 
 #[tokio::test]

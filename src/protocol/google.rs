@@ -9,9 +9,12 @@ const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta
 /// Default base URL for Google Vertex AI API.
 const DEFAULT_VERTEX_BASE_URL: &str = "https://us-central1-aiplatform.googleapis.com";
 
+const SKIP_THOUGHT_SIGNATURE_VALIDATOR: &str = "skip_thought_signature_validator";
+
 use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::thinking::ThinkingLevel;
+use crate::transform::transform_messages;
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -214,6 +217,8 @@ impl GooglePart {
 struct GoogleFunctionCall {
     name: String,
     args: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -221,6 +226,8 @@ struct GoogleFunctionCall {
 struct GoogleFunctionResponse {
     name: String,
     response: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -360,7 +367,8 @@ struct GoogleTool {
 struct GoogleFunctionDeclaration {
     name: String,
     description: String,
-    parameters: serde_json::Value,
+    #[serde(rename = "parametersJsonSchema")]
+    parameters_json_schema: serde_json::Value,
 }
 
 // ============================================================================
@@ -389,6 +397,10 @@ struct GoogleUsageMetadata {
     #[serde(default)]
     candidates_token_count: u64,
     #[serde(default)]
+    cached_content_token_count: u64,
+    #[serde(default)]
+    total_token_count: u64,
+    #[serde(default)]
     #[allow(dead_code)]
     thoughts_token_count: u64,
 }
@@ -408,14 +420,37 @@ fn generate_tool_call_id(name: &str) -> String {
     format!("{}_{}", name, timestamp + counter as u128)
 }
 
+fn normalize_google_tool_call_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
+fn requires_google_tool_call_id(model_id: &str) -> bool {
+    let model_id = model_id.to_ascii_lowercase();
+    model_id.starts_with("claude-") || model_id.starts_with("gpt-oss-")
+}
+
 // ============================================================================
 // Message Conversion
 // ============================================================================
 
-fn convert_messages(context: &Context) -> Vec<GoogleContent> {
+fn convert_messages(context: &Context, target_model: &Model) -> Vec<GoogleContent> {
     let mut contents = Vec::new();
+    let transformed = transform_messages(
+        &context.messages,
+        target_model,
+        Some(normalize_google_tool_call_id),
+    );
 
-    for msg in &context.messages {
+    for msg in &transformed {
         match msg {
             Message::User(user_msg) => {
                 let parts = match &user_msg.content {
@@ -445,17 +480,29 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
                 });
             }
             Message::Assistant(assistant_msg) => {
-                if assistant_msg.stop_reason == StopReason::Error
-                    || assistant_msg.stop_reason == StopReason::Aborted
-                {
-                    continue;
-                }
-
+                let same_api = target_model
+                    .api
+                    .as_ref()
+                    .is_none_or(|api| *api == assistant_msg.api);
+                let is_same_model = assistant_msg.provider == target_model.provider
+                    && same_api
+                    && assistant_msg.model == target_model.id;
                 let mut parts = Vec::new();
                 for block in &assistant_msg.content {
                     match block {
                         ContentBlock::Text(t) if !t.text.trim().is_empty() => {
-                            parts.push(GooglePart::text(&t.text));
+                            parts.push(GooglePart {
+                                text: Some(t.text.clone()),
+                                thought: None,
+                                thought_signature: if is_same_model {
+                                    t.text_signature.clone()
+                                } else {
+                                    None
+                                },
+                                function_call: None,
+                                function_response: None,
+                                inline_data: None,
+                            });
                         }
                         ContentBlock::Thinking(t) if !t.thinking.trim().is_empty() => {
                             parts.push(GooglePart::thinking(
@@ -464,13 +511,25 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
                             ));
                         }
                         ContentBlock::ToolCall(tc) => {
+                            let effective_signature = tc.thought_signature.clone().or_else(|| {
+                                if target_model.id.to_ascii_lowercase().contains("gemini-3") {
+                                    Some(SKIP_THOUGHT_SIGNATURE_VALIDATOR.to_string())
+                                } else {
+                                    None
+                                }
+                            });
                             parts.push(GooglePart {
                                 text: None,
                                 thought: None,
-                                thought_signature: tc.thought_signature.clone(),
+                                thought_signature: effective_signature,
                                 function_call: Some(GoogleFunctionCall {
                                     name: tc.name.clone(),
                                     args: tc.arguments.clone(),
+                                    id: if requires_google_tool_call_id(&target_model.id) {
+                                        Some(tc.id.clone())
+                                    } else {
+                                        None
+                                    },
                                 }),
                                 function_response: None,
                                 inline_data: None,
@@ -499,7 +558,7 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
                 let response_value = if tool_result.is_error {
                     serde_json::json!({ "error": text })
                 } else {
-                    serde_json::json!({ "result": text })
+                    serde_json::json!({ "output": text })
                 };
 
                 let part = GooglePart {
@@ -510,6 +569,11 @@ fn convert_messages(context: &Context) -> Vec<GoogleContent> {
                     function_response: Some(GoogleFunctionResponse {
                         name: tool_result.tool_name.clone(),
                         response: response_value,
+                        id: if requires_google_tool_call_id(&target_model.id) {
+                            Some(tool_result.tool_call_id.clone())
+                        } else {
+                            None
+                        },
                     }),
                     inline_data: None,
                 };
@@ -539,7 +603,7 @@ fn convert_tools(tools: &[Tool]) -> Vec<GoogleTool> {
         .map(|t| GoogleFunctionDeclaration {
             name: t.name.clone(),
             description: t.description.clone(),
-            parameters: t.parameters.clone(),
+            parameters_json_schema: t.parameters.clone(),
         })
         .collect();
 
@@ -589,7 +653,7 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let contents = convert_messages(context);
+    let contents = convert_messages(context, model);
     let tools = context.tools.as_ref().map(|t| convert_tools(t));
 
     let system_instruction = context
@@ -747,8 +811,14 @@ async fn run_stream(
                     // Handle usage metadata
                     if let Some(ref usage) = chunk_data.usage_metadata {
                         output.usage.input = usage.prompt_token_count;
-                        output.usage.output = usage.candidates_token_count;
-                        output.usage.total_tokens = output.usage.input + output.usage.output;
+                        output.usage.output =
+                            usage.candidates_token_count + usage.thoughts_token_count;
+                        output.usage.cache_read = usage.cached_content_token_count;
+                        output.usage.total_tokens = if usage.total_token_count > 0 {
+                            usage.total_token_count
+                        } else {
+                            output.usage.input + output.usage.output + output.usage.cache_read
+                        };
                     }
 
                     if let Some(candidates) = chunk_data.candidates {
@@ -834,7 +904,10 @@ async fn run_stream(
                                             });
                                         }
 
-                                        let tool_call_id = generate_tool_call_id(&fc.name);
+                                        let tool_call_id = fc
+                                            .id
+                                            .clone()
+                                            .unwrap_or_else(|| generate_tool_call_id(&fc.name));
                                         let mut tool_call =
                                             ToolCall::new(&tool_call_id, &fc.name, fc.args.clone());
                                         tool_call.thought_signature =
@@ -893,6 +966,9 @@ async fn run_stream(
                                                 output.content.get_mut(idx)
                                             {
                                                 t.text.push_str(text_content);
+                                                if let Some(ref sig) = part.thought_signature {
+                                                    t.text_signature = Some(sig.clone());
+                                                }
                                             }
                                             stream.push(AssistantMessageEvent::TextDelta {
                                                 content_index: idx,
@@ -966,7 +1042,17 @@ mod tests {
         let mut context = Context::new();
         context.add_message(Message::User(UserMessage::text("Hello")));
 
-        let contents = convert_messages(&context);
+        let model = Model::builder()
+            .id("gemini-2.0-flash")
+            .name("Gemini 2.0 Flash")
+            .api(Api::GoogleGenerativeAi)
+            .provider(Provider::Google)
+            .context_window(1048576)
+            .max_tokens(8192)
+            .build()
+            .unwrap();
+
+        let contents = convert_messages(&context, &model);
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0].role, "user");
         assert_eq!(contents[0].parts.len(), 1);

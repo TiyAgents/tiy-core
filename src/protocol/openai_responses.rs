@@ -10,6 +10,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::thinking::ThinkingLevel;
+use crate::transform::transform_messages;
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -147,8 +148,10 @@ impl LLMProtocol for OpenAIResponsesProtocol {
 #[derive(Debug, Serialize)]
 struct ResponsesRequest {
     model: String,
-    input: Vec<ResponsesInputItem>,
+    input: Vec<serde_json::Value>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    store: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,31 +159,13 @@ struct ResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ResponsesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ResponsesReasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     include: Option<Vec<String>>,
-}
-
-/// Flat typed input item for Responses API.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum ResponsesInputItem {
-    #[serde(rename = "message")]
-    Message {
-        role: String,
-        content: ResponsesContent,
-    },
-    #[serde(rename = "function_call")]
-    FunctionCall {
-        id: String,
-        call_id: String,
-        name: String,
-        arguments: String,
-    },
-    #[serde(rename = "function_call_output")]
-    FunctionCallOutput { call_id: String, output: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -284,6 +269,8 @@ struct ResponseUsage {
     #[serde(default)]
     output_tokens: u64,
     #[serde(default)]
+    total_tokens: Option<u64>,
+    #[serde(default)]
     input_tokens_details: Option<InputTokensDetails>,
 }
 
@@ -297,10 +284,11 @@ struct InputTokensDetails {
 // Message Conversion
 // ============================================================================
 
-fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
+fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
+    let transformed = transform_messages(&context.messages, target_model, None);
 
-    for msg in &context.messages {
+    for msg in &transformed {
         match msg {
             Message::User(user_msg) => {
                 let content = match &user_msg.content {
@@ -326,17 +314,17 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                         ResponsesContent::Parts(parts)
                     }
                 };
-                items.push(ResponsesInputItem::Message {
-                    role: "user".to_string(),
-                    content,
-                });
+                items.push(serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                }));
             }
             Message::Assistant(assistant_msg) => {
-                if assistant_msg.stop_reason == StopReason::Error
-                    || assistant_msg.stop_reason == StopReason::Aborted
-                {
-                    continue;
-                }
+                let is_same_model = assistant_msg.provider == target_model.provider
+                    && assistant_msg.api
+                        == target_model.api.clone().unwrap_or(Api::OpenAIResponses)
+                    && assistant_msg.model == target_model.id;
 
                 // Collect text content
                 let text_content: String = assistant_msg
@@ -349,12 +337,27 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                     .join("");
 
                 if !text_content.is_empty() {
-                    items.push(ResponsesInputItem::Message {
-                        role: "assistant".to_string(),
-                        content: ResponsesContent::Parts(vec![ResponsesContentPart::OutputText {
+                    items.push(serde_json::json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": ResponsesContent::Parts(vec![ResponsesContentPart::OutputText {
                             text: text_content,
                         }]),
-                    });
+                    }));
+                }
+
+                for block in &assistant_msg.content {
+                    if let ContentBlock::Thinking(thinking) = block {
+                        if is_same_model {
+                            if let Some(signature) = &thinking.thinking_signature {
+                                if let Ok(reasoning_item) =
+                                    serde_json::from_str::<serde_json::Value>(signature)
+                                {
+                                    items.push(reasoning_item);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Add function calls as separate items
@@ -371,12 +374,18 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                             (tc.id.clone(), format!("fc_{}", tc.id))
                         };
 
-                        items.push(ResponsesInputItem::FunctionCall {
-                            id: item_id,
-                            call_id,
-                            name: tc.name.clone(),
-                            arguments: serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                        let mut function_call = serde_json::json!({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": tc.name,
+                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
                         });
+
+                        if is_same_model || !item_id.starts_with("fc_") {
+                            function_call["id"] = serde_json::Value::String(item_id);
+                        }
+
+                        items.push(function_call);
                     }
                 }
             }
@@ -401,14 +410,15 @@ fn convert_messages(context: &Context) -> Vec<ResponsesInputItem> {
                     tool_result.tool_call_id.clone()
                 };
 
-                items.push(ResponsesInputItem::FunctionCallOutput {
-                    call_id,
-                    output: if text.is_empty() {
+                items.push(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": if text.is_empty() {
                         "(no output)".to_string()
                     } else {
                         text
                     },
-                });
+                }));
             }
         }
     }
@@ -451,17 +461,29 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let input = convert_messages(context);
+    let mut input = convert_messages(context, model);
     let tools = context.tools.as_ref().map(|t| convert_tools(t));
     let max_output_tokens = super::common::clamp_openai_max_tokens(options.max_tokens);
+
+    if model.reasoning && reasoning.is_none() && model.id.starts_with("gpt-5") {
+        input.push(serde_json::json!({
+            "type": "message",
+            "role": "developer",
+            "content": ResponsesContent::Parts(vec![ResponsesContentPart::InputText {
+                text: "# Juice: 0 !important".to_string(),
+            }]),
+        }));
+    }
 
     let request = ResponsesRequest {
         model: model.id.clone(),
         input,
         stream: true,
+        store: Some(false),
         instructions: context.system_prompt.clone(),
         temperature: options.temperature,
         max_output_tokens,
+        prompt_cache_key: options.session_id.clone(),
         tools,
         reasoning: reasoning.clone(),
         include: reasoning
@@ -841,6 +863,33 @@ async fn run_stream(
                     }
                 }
 
+                "response.reasoning_summary_part.added" => {}
+
+                "response.reasoning_summary_part.done" => {
+                    if let Ok(ref val) = parsed {
+                        let output_index = val
+                            .get("output_index")
+                            .and_then(|i| i.as_u64())
+                            .unwrap_or(0) as usize;
+
+                        if let Some(info) = item_content_map.get(&output_index) {
+                            if info.item_type == ItemType::Reasoning {
+                                let idx = info.content_idx;
+                                if let Some(ContentBlock::Thinking(ref mut t)) =
+                                    output.content.get_mut(idx)
+                                {
+                                    t.thinking.push_str("\n\n");
+                                }
+                                stream.push(AssistantMessageEvent::ThinkingDelta {
+                                    content_index: idx,
+                                    delta: "\n\n".to_string(),
+                                    partial: output.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 "response.output_item.done" => {
                     if let Ok(ref val) = parsed {
                         let output_index = val
@@ -892,6 +941,13 @@ async fn run_stream(
                                     });
                                 }
                                 ItemType::Reasoning => {
+                                    if let Some(item) = val.get("item") {
+                                        if let Some(ContentBlock::Thinking(ref mut t)) =
+                                            output.content.get_mut(idx)
+                                        {
+                                            t.thinking_signature = Some(item.to_string());
+                                        }
+                                    }
                                     let content = output
                                         .content
                                         .get(idx)
@@ -920,13 +976,20 @@ async fn run_stream(
                         if let Some(ref resp) = completed.response {
                             // Update usage
                             if let Some(ref usage) = resp.usage {
-                                output.usage.input = usage.input_tokens;
+                                let cached_tokens = usage
+                                    .input_tokens_details
+                                    .as_ref()
+                                    .map(|details| details.cached_tokens)
+                                    .unwrap_or(0);
+                                output.usage.input =
+                                    usage.input_tokens.saturating_sub(cached_tokens);
                                 output.usage.output = usage.output_tokens;
-                                if let Some(ref details) = usage.input_tokens_details {
-                                    output.usage.cache_read = details.cached_tokens;
-                                }
-                                output.usage.total_tokens =
-                                    output.usage.input + output.usage.output;
+                                output.usage.cache_read = cached_tokens;
+                                output.usage.total_tokens = usage.total_tokens.unwrap_or(
+                                    output.usage.input
+                                        + output.usage.output
+                                        + output.usage.cache_read,
+                                );
                             }
 
                             // Update stop reason from status
@@ -1018,7 +1081,17 @@ mod tests {
         let mut context = Context::with_system_prompt("You are helpful.");
         context.add_message(Message::User(UserMessage::text("Hello")));
 
-        let items = convert_messages(&context);
+        let model = Model::builder()
+            .id("gpt-4o")
+            .name("GPT-4o")
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAI)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let items = convert_messages(&context, &model);
         assert_eq!(items.len(), 1);
     }
 
@@ -1050,7 +1123,17 @@ mod tests {
             false,
         )));
 
-        let items = convert_messages(&context);
+        let model = Model::builder()
+            .id("gpt-4o")
+            .name("GPT-4o")
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAI)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let items = convert_messages(&context, &model);
         assert_eq!(items.len(), 3); // user + function_call + function_call_output
     }
 }

@@ -9,6 +9,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
 use crate::thinking::ThinkingLevel;
+use crate::transform::{normalize_tool_call_id, transform_messages};
 use crate::types::*;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -431,10 +432,19 @@ struct MessageDeltaUsage {
 // ============================================================================
 
 /// Convert context to Anthropic messages.
-fn convert_messages(context: &Context) -> Vec<AnthropicMessage> {
-    let mut messages = Vec::new();
+fn normalize_anthropic_tool_call_id(id: &str) -> String {
+    normalize_tool_call_id(id, &Provider::Anthropic)
+}
 
-    for msg in &context.messages {
+fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMessage> {
+    let mut messages = Vec::new();
+    let transformed = transform_messages(
+        &context.messages,
+        target_model,
+        Some(normalize_anthropic_tool_call_id),
+    );
+
+    for msg in &transformed {
         match msg {
             Message::User(user_msg) => {
                 let content = match &user_msg.content {
@@ -465,12 +475,6 @@ fn convert_messages(context: &Context) -> Vec<AnthropicMessage> {
                 });
             }
             Message::Assistant(assistant_msg) => {
-                if assistant_msg.stop_reason == StopReason::Error
-                    || assistant_msg.stop_reason == StopReason::Aborted
-                {
-                    continue;
-                }
-
                 let mut blocks = Vec::new();
 
                 for block in &assistant_msg.content {
@@ -484,14 +488,31 @@ fn convert_messages(context: &Context) -> Vec<AnthropicMessage> {
                         }
                         ContentBlock::Thinking(t) => {
                             if t.redacted {
-                                blocks.push(AnthropicContentBlock::RedactedThinking {
-                                    data: t.thinking.clone(),
-                                });
+                                if let Some(signature) = &t.thinking_signature {
+                                    if !signature.trim().is_empty() {
+                                        blocks.push(AnthropicContentBlock::RedactedThinking {
+                                            data: signature.clone(),
+                                        });
+                                    }
+                                } else if !t.thinking.trim().is_empty() {
+                                    blocks.push(AnthropicContentBlock::Text {
+                                        text: t.thinking.clone(),
+                                    });
+                                }
                             } else if !t.thinking.trim().is_empty() {
-                                blocks.push(AnthropicContentBlock::Thinking {
-                                    thinking: t.thinking.clone(),
-                                    signature: t.thinking_signature.clone(),
-                                });
+                                if t.thinking_signature
+                                    .as_ref()
+                                    .is_some_and(|sig| !sig.trim().is_empty())
+                                {
+                                    blocks.push(AnthropicContentBlock::Thinking {
+                                        thinking: t.thinking.clone(),
+                                        signature: t.thinking_signature.clone(),
+                                    });
+                                } else {
+                                    blocks.push(AnthropicContentBlock::Text {
+                                        text: t.thinking.clone(),
+                                    });
+                                }
                             }
                         }
                         ContentBlock::ToolCall(tc) => {
@@ -596,7 +617,7 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let messages = convert_messages(context);
+    let messages = convert_messages(context, model);
     let tools = context.tools.as_ref().map(|t| convert_tools(t));
 
     let request = AnthropicRequest {
@@ -995,7 +1016,17 @@ mod tests {
         let mut context = Context::with_system_prompt("You are helpful.");
         context.add_message(Message::User(UserMessage::text("Hello")));
 
-        let messages = convert_messages(&context);
+        let model = Model::builder()
+            .id("claude-3-5-sonnet")
+            .name("Claude 3.5 Sonnet")
+            .api(Api::AnthropicMessages)
+            .provider(Provider::Anthropic)
+            .context_window(200000)
+            .max_tokens(8192)
+            .build()
+            .unwrap();
+
+        let messages = convert_messages(&context, &model);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
@@ -1010,7 +1041,17 @@ mod tests {
             "call_2", "tool_b", "result2", false,
         )));
 
-        let messages = convert_messages(&context);
+        let model = Model::builder()
+            .id("claude-3-5-sonnet")
+            .name("Claude 3.5 Sonnet")
+            .api(Api::AnthropicMessages)
+            .provider(Provider::Anthropic)
+            .context_window(200000)
+            .max_tokens(8192)
+            .build()
+            .unwrap();
+
+        let messages = convert_messages(&context, &model);
         // Tool results should be merged into a single user message
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");

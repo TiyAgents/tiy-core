@@ -56,57 +56,52 @@ fn transform_assistant_message(
     target_model: &Model,
     normalize_tool_call_id: Option<fn(&str) -> String>,
 ) -> AssistantMessage {
+    let same_api = target_model.api.as_ref().is_none_or(|api| *api == msg.api);
+    let is_same_model =
+        msg.provider == target_model.provider && same_api && msg.model == target_model.id;
+
     let mut new_msg = msg.clone();
 
     // Transform content blocks
     new_msg.content = msg
         .content
         .iter()
-        .map(|block| match block {
-            ContentBlock::Thinking(thinking) => {
-                // Convert thinking blocks based on target provider
-                transform_thinking_block(thinking, &msg.provider, &msg.model, target_model)
-            }
+        .flat_map(|block| match block {
+            ContentBlock::Thinking(thinking) => transform_thinking_block(thinking, is_same_model),
             ContentBlock::ToolCall(tc) => {
                 let mut new_tc = tc.clone();
                 if let Some(normalize) = normalize_tool_call_id {
                     new_tc.id = normalize(&new_tc.id);
                 }
-                ContentBlock::ToolCall(new_tc)
+                if !is_same_model {
+                    new_tc.thought_signature = None;
+                }
+                vec![ContentBlock::ToolCall(new_tc)]
             }
-            _ => block.clone(),
+            _ => vec![block.clone()],
         })
         .collect();
-
-    if let Some(api) = &target_model.api {
-        new_msg.api = api.clone();
-    }
-    new_msg.provider = target_model.provider.clone();
-    new_msg.model = target_model.id.clone();
 
     new_msg
 }
 
-fn transform_thinking_block(
-    thinking: &ThinkingContent,
-    source_provider: &Provider,
-    source_model: &str,
-    target_model: &Model,
-) -> ContentBlock {
+fn transform_thinking_block(thinking: &ThinkingContent, is_same_model: bool) -> Vec<ContentBlock> {
     // If same provider and model, keep thinking block
-    if *source_provider == target_model.provider && source_model == target_model.id {
-        return ContentBlock::Thinking(thinking.clone());
+    if is_same_model {
+        return vec![ContentBlock::Thinking(thinking.clone())];
     }
 
-    // For different providers, convert to text
-    // This avoids having the model mimic thinking tags
+    // Redacted thinking is only valid for the original provider/model.
+    if thinking.redacted {
+        return Vec::new();
+    }
+
     if thinking.thinking.trim().is_empty() {
-        ContentBlock::Text(TextContent::new(""))
+        Vec::new()
     } else {
-        ContentBlock::Text(TextContent::new(format!(
-            "[Reasoning]\n{}\n[/Reasoning]",
-            thinking.thinking
-        )))
+        vec![ContentBlock::Text(TextContent::new(
+            thinking.thinking.clone(),
+        ))]
     }
 }
 

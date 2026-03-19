@@ -1,7 +1,9 @@
 //! Tests for Anthropic Messages provider using wiremock for HTTP mocking.
 
 use futures::StreamExt;
+use parking_lot::Mutex;
 use serde_json::json;
+use std::sync::Arc;
 use tiy_core::protocol::anthropic::AnthropicProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
@@ -37,6 +39,21 @@ fn make_options(api_key: &str) -> StreamOptions {
         api_key: Some(api_key.to_string()),
         ..Default::default()
     }
+}
+
+fn make_options_with_capture(
+    api_key: &str,
+    captured: Arc<Mutex<Option<serde_json::Value>>>,
+) -> StreamOptions {
+    let mut options = make_options(api_key);
+    options.on_payload = Some(Arc::new(move |payload, _model| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            *captured.lock() = Some(payload.clone());
+            Some(payload)
+        })
+    }));
+    options
 }
 
 /// Build an Anthropic SSE response body from a list of (event_type, json_data) pairs.
@@ -1061,8 +1078,8 @@ async fn test_stream_with_redacted_thinking_in_context() {
         .model("claude-3-5-sonnet")
         .content(vec![
             ContentBlock::Thinking(ThinkingContent {
-                thinking: "redacted_data".to_string(),
-                thinking_signature: None,
+                thinking: "[Reasoning redacted]".to_string(),
+                thinking_signature: Some("opaque_redacted_payload".to_string()),
                 redacted: true,
             }),
             ContentBlock::Text(TextContent {
@@ -1078,12 +1095,100 @@ async fn test_stream_with_redacted_thinking_in_context() {
 
     let model = make_model(&server.uri());
     let provider = AnthropicProtocol::new();
-    let options = make_options("key");
+    let captured = Arc::new(Mutex::new(None));
+    let options = make_options_with_capture("key", captured.clone());
 
     let stream = provider.stream(&model, &ctx, options);
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "ok");
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let messages = payload["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    let assistant_blocks = messages[1]["content"]
+        .as_array()
+        .expect("assistant content should be blocks");
+
+    assert_eq!(
+        assistant_blocks[0],
+        json!({
+            "type": "redacted_thinking",
+            "data": "opaque_redacted_payload"
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_stream_with_missing_signature_thinking_in_context_downgrades_to_text() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        ("message_start", &json!({"type":"message_start","message":{"id":"msg_sig","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":20,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}).to_string()),
+        ("content_block_delta", &json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}).to_string()),
+        ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
+        ("message_delta", &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}).to_string()),
+        ("message_stop", &json!({"type":"message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut ctx = Context::with_system_prompt("test");
+    ctx.add_message(Message::User(UserMessage::text("hello")));
+    ctx.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::AnthropicMessages)
+            .provider(Provider::Anthropic)
+            .model("claude-3-5-sonnet")
+            .content(vec![
+                ContentBlock::Thinking(ThinkingContent {
+                    thinking: "Let me reason".to_string(),
+                    thinking_signature: None,
+                    redacted: false,
+                }),
+                ContentBlock::Text(TextContent::new("prev response")),
+            ])
+            .stop_reason(StopReason::Stop)
+            .build()
+            .unwrap(),
+    ));
+    ctx.add_message(Message::User(UserMessage::text("go on")));
+
+    let model = make_model(&server.uri());
+    let provider = AnthropicProtocol::new();
+    let captured = Arc::new(Mutex::new(None));
+    let options = make_options_with_capture("key", captured.clone());
+
+    let stream = provider.stream(&model, &ctx, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let messages = payload["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    let assistant_blocks = messages[1]["content"]
+        .as_array()
+        .expect("assistant content should be blocks");
+
+    assert_eq!(
+        assistant_blocks[0],
+        json!({
+            "type": "text",
+            "text": "Let me reason"
+        })
+    );
 }
 
 #[tokio::test]
