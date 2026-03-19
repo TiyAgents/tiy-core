@@ -147,6 +147,7 @@ pub(crate) fn extract_openrouter_models(
                 .and_then(|v| v.get("max_completion_tokens"))
                 .and_then(parse_u64);
             let modalities = collect_modalities(item);
+            let capabilities = collect_capabilities(item);
             let canonical_model_key = canonical_key_for(&id);
 
             Some(CatalogModelMetadata {
@@ -158,7 +159,7 @@ pub(crate) fn extract_openrouter_models(
                 max_output_tokens,
                 max_input_tokens: None,
                 modalities,
-                capabilities: None,
+                capabilities,
                 pricing: item.get("pricing").cloned(),
                 source: "openrouter".to_string(),
                 raw: item.clone(),
@@ -215,6 +216,63 @@ fn collect_modalities(item: &Value) -> Option<Vec<String>> {
     for modality in modalities {
         if seen.insert(modality.clone()) {
             deduped.push(modality);
+        }
+    }
+
+    if deduped.is_empty() {
+        None
+    } else {
+        Some(deduped)
+    }
+}
+
+fn collect_capabilities(item: &Value) -> Option<Vec<String>> {
+    let parameters = item
+        .get("supported_parameters")
+        .and_then(parse_string_array)?;
+
+    let mut capabilities = Vec::new();
+    for parameter in parameters {
+        match parameter.as_str() {
+            "reasoning" | "include_reasoning" => capabilities.push("reasoning".to_string()),
+            "tools" | "tool_choice" | "parallel_tool_calls" => {
+                capabilities.push("tools".to_string())
+            }
+            "response_format" | "structured_outputs" => {
+                capabilities.push("structured_outputs".to_string())
+            }
+            _ => {}
+        }
+    }
+
+    dedupe_strings(capabilities)
+}
+
+fn parse_string_array(value: &Value) -> Option<Vec<String>> {
+    match value {
+        Value::Array(values) => {
+            let items: Vec<String> = values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect();
+            if items.is_empty() {
+                None
+            } else {
+                Some(items)
+            }
+        }
+        Value::String(text) => Some(vec![text.to_string()]),
+        _ => None,
+    }
+}
+
+fn dedupe_strings(values: Vec<String>) -> Option<Vec<String>> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        if seen.insert(value.clone()) {
+            deduped.push(value);
         }
     }
 
@@ -291,5 +349,38 @@ mod tests {
         assert_eq!(second.canonical_model_key, "x-ai:grok-4.20-beta");
         assert_eq!(second.max_output_tokens, None);
         assert_eq!(second.context_window, Some(2000000));
+    }
+
+    #[test]
+    fn extracts_reasoning_capability_from_openrouter_supported_parameters() {
+        let payload = json!({
+            "data": [
+                {
+                    "id": "google/gemini-2.5-flash-image",
+                    "name": "Google: Gemini 2.5 Flash Image",
+                    "supported_parameters": ["max_tokens", "seed", "stop"]
+                },
+                {
+                    "id": "minimax/minimax-m2.7",
+                    "name": "MiniMax: M2.7",
+                    "supported_parameters": [
+                        "max_tokens",
+                        "include_reasoning",
+                        "reasoning",
+                        "tool_choice",
+                        "tools"
+                    ]
+                }
+            ]
+        });
+
+        let models = extract_openrouter_models(&payload).expect("payload should parse");
+        assert_eq!(models.len(), 2);
+
+        assert_eq!(models[0].capabilities, None);
+        assert_eq!(
+            models[1].capabilities,
+            Some(vec!["reasoning".to_string(), "tools".to_string()])
+        );
     }
 }

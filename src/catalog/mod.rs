@@ -1360,7 +1360,8 @@ fn extract_model_record(
             .or_else(|| collect_architecture_modalities(item))
             .or_else(|| collect_bool_keys(item.get("capabilities"), "supports_")),
         capabilities: optional_string_array(item, &["capabilities"])
-            .or_else(|| collect_capabilities_object(item.get("capabilities"))),
+            .or_else(|| collect_capabilities_object(item.get("capabilities")))
+            .or_else(|| collect_supported_parameter_capabilities(item)),
         raw: item.clone(),
     })
 }
@@ -1489,6 +1490,31 @@ fn collect_capabilities_object(value: Option<&Value>) -> Option<Vec<String>> {
     }
 }
 
+fn collect_supported_parameter_capabilities(item: &Value) -> Option<Vec<String>> {
+    let parameters = item
+        .get("supported_parameters")
+        .and_then(parse_string_array)?;
+
+    let mut items = Vec::new();
+    for parameter in parameters {
+        match parameter.as_str() {
+            "reasoning" | "include_reasoning" => items.push("reasoning".to_string()),
+            "tools" | "tool_choice" | "parallel_tool_calls" => items.push("tools".to_string()),
+            "response_format" | "structured_outputs" => {
+                items.push("structured_outputs".to_string())
+            }
+            _ => {}
+        }
+    }
+
+    let items = dedupe_strings(items);
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1520,6 +1546,30 @@ mod tests {
         assert_eq!(
             matched.metadata.canonical_model_key,
             "anthropic:claude-opus:4.6"
+        );
+    }
+
+    #[test]
+    fn extracts_capabilities_from_supported_parameters() {
+        let item = json!({
+            "supported_parameters": [
+                "max_tokens",
+                "include_reasoning",
+                "reasoning",
+                "tool_choice",
+                "tools",
+                "response_format",
+                "seed"
+            ]
+        });
+
+        assert_eq!(
+            collect_supported_parameter_capabilities(&item),
+            Some(vec![
+                "reasoning".to_string(),
+                "tools".to_string(),
+                "structured_outputs".to_string()
+            ])
         );
     }
 }

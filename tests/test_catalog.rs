@@ -149,6 +149,55 @@ async fn test_list_models_rejects_unsupported_provider() {
     }
 }
 
+#[tokio::test]
+async fn test_list_models_for_openrouter_extracts_reasoning_from_supported_parameters() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("authorization", "Bearer openrouter-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                {
+                    "id": "google/gemini-2.5-flash-image",
+                    "name": "Google: Gemini 2.5 Flash Image",
+                    "supported_parameters": ["max_tokens", "seed", "stop"]
+                },
+                {
+                    "id": "minimax/minimax-m2.7",
+                    "name": "MiniMax: M2.7",
+                    "supported_parameters": [
+                        "max_tokens",
+                        "include_reasoning",
+                        "reasoning",
+                        "tools",
+                        "tool_choice"
+                    ]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let result = list_models(FetchModelsRequest {
+        provider: Provider::OpenRouter,
+        api_key: Some("openrouter-key".to_string()),
+        base_url: Some(format!("{}/v1", server.uri())),
+        headers: None,
+    })
+    .await
+    .expect("openrouter list should succeed");
+
+    assert_eq!(result.models.len(), 2);
+    assert_eq!(result.models[0].raw_id, "google/gemini-2.5-flash-image");
+    assert_eq!(result.models[0].capabilities, None);
+    assert_eq!(result.models[1].raw_id, "minimax/minimax-m2.7");
+    assert_eq!(
+        result.models[1].capabilities,
+        Some(vec!["reasoning".to_string(), "tools".to_string()])
+    );
+}
+
 #[test]
 fn test_enrich_manual_model_uses_snapshot_metadata() {
     let store = InMemoryCatalogMetadataStore::new(vec![CatalogModelMetadata {
