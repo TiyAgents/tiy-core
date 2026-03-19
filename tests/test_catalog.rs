@@ -179,6 +179,25 @@ async fn test_list_models_for_openrouter_extracts_reasoning_from_supported_param
         .mount(&server)
         .await;
 
+    Mock::given(method("GET"))
+        .and(path("/v1/embeddings/models"))
+        .and(header("authorization", "Bearer openrouter-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                {
+                    "id": "openai/text-embedding-3-small",
+                    "name": "OpenAI: Text Embedding 3 Small",
+                    "context_length": 8192,
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["embeddings"]
+                    }
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
     let result = list_models(FetchModelsRequest {
         provider: Provider::OpenRouter,
         api_key: Some("openrouter-key".to_string()),
@@ -188,7 +207,7 @@ async fn test_list_models_for_openrouter_extracts_reasoning_from_supported_param
     .await
     .expect("openrouter list should succeed");
 
-    assert_eq!(result.models.len(), 2);
+    assert_eq!(result.models.len(), 3);
     assert_eq!(result.models[0].raw_id, "google/gemini-2.5-flash-image");
     assert_eq!(result.models[0].capabilities, None);
     assert_eq!(result.models[1].raw_id, "minimax/minimax-m2.7");
@@ -196,6 +215,84 @@ async fn test_list_models_for_openrouter_extracts_reasoning_from_supported_param
         result.models[1].capabilities,
         Some(vec!["reasoning".to_string(), "tools".to_string()])
     );
+    assert_eq!(result.models[2].raw_id, "openai/text-embedding-3-small");
+    assert_eq!(
+        result.models[2].modalities,
+        Some(vec!["text".to_string(), "embeddings".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn test_list_models_for_zenmux_merges_vertex_models() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/models"))
+        .and(header("authorization", "Bearer zenmux-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                {
+                    "id": "openai/gpt-5.4-mini",
+                    "display_name": "GPT-5.4 Mini",
+                    "context_length": 400000,
+                    "max_output_tokens": 128000,
+                    "input_modalities": ["text", "image"],
+                    "output_modalities": ["text"],
+                    "capabilities": {"reasoning": true}
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/vertex-ai/v1beta/models"))
+        .and(header("authorization", "Bearer zenmux-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [
+                {
+                    "name": "google/gemini-2.5-flash-image",
+                    "displayName": "Gemini 2.5 Flash Image",
+                    "description": "Image generation model",
+                    "inputTokenLimit": 32768,
+                    "outputTokenLimit": 8192,
+                    "thinking": false,
+                    "inputModalities": ["text", "image"],
+                    "outputModalities": ["image"]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let result = list_models(FetchModelsRequest {
+        provider: Provider::Zenmux,
+        api_key: Some("zenmux-key".to_string()),
+        base_url: Some(format!("{}/api/v1", server.uri())),
+        headers: None,
+    })
+    .await
+    .expect("zenmux list should succeed");
+
+    assert_eq!(result.models.len(), 2);
+    assert_eq!(result.models[0].raw_id, "openai/gpt-5.4-mini");
+    assert_eq!(
+        result.models[0].capabilities,
+        Some(vec!["reasoning".to_string()])
+    );
+    assert_eq!(result.models[1].raw_id, "google/gemini-2.5-flash-image");
+    assert_eq!(
+        result.models[1].display_name.as_deref(),
+        Some("Gemini 2.5 Flash Image")
+    );
+    assert_eq!(result.models[1].context_window, Some(32768));
+    assert_eq!(result.models[1].max_input_tokens, Some(32768));
+    assert_eq!(result.models[1].max_output_tokens, Some(8192));
+    assert_eq!(
+        result.models[1].modalities,
+        Some(vec!["text".to_string(), "image".to_string()])
+    );
+    assert_eq!(result.models[1].capabilities, None);
 }
 
 #[test]

@@ -830,11 +830,11 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
         | Provider::OpenAICompatible
         | Provider::XAI
         | Provider::Groq
-        | Provider::OpenRouter
         | Provider::ZAI
         | Provider::DeepSeek
-        | Provider::Zenmux
         | Provider::Ollama => Ok(Box::new(OpenAIModelsAdapter::new(provider.clone()))),
+        Provider::OpenRouter => Ok(Box::new(OpenRouterModelsAdapter::new(provider.clone()))),
+        Provider::Zenmux => Ok(Box::new(ZenmuxModelsAdapter::new(provider.clone()))),
         Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {
             Ok(Box::new(AnthropicModelsAdapter::new(provider.clone())))
         }
@@ -865,6 +865,134 @@ impl ModelListAdapter for OpenAIModelsAdapter {
         let url = join_url(&resolve_base_url(request)?, "models");
         let headers = build_openai_headers(&self.provider, request);
         send_json_request(&self.client, self.provider.clone(), &url, headers).await
+    }
+
+    fn extract_models(
+        &self,
+        raw: &Value,
+    ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
+        extract_openai_models(&self.provider, raw)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OpenRouterModelsAdapter {
+    provider: Provider,
+    client: Client,
+}
+
+impl OpenRouterModelsAdapter {
+    fn new(provider: Provider) -> Self {
+        Self {
+            provider,
+            client: build_client(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelListAdapter for OpenRouterModelsAdapter {
+    async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
+        let base_url = resolve_base_url(request)?;
+        let headers = build_openai_headers(&self.provider, request);
+
+        let models_url = join_url(&base_url, "models");
+        let models_response = send_json_request(
+            &self.client,
+            self.provider.clone(),
+            &models_url,
+            headers.clone(),
+        )
+        .await?;
+
+        let embeddings_url = join_url(&base_url, "embeddings/models");
+        let embeddings_response = send_optional_json_request(
+            &self.client,
+            self.provider.clone(),
+            &embeddings_url,
+            headers,
+        )
+        .await?;
+
+        let mut combined = value_array(&self.provider, &models_response, "data")?.clone();
+        if let Some(ref embeddings) = embeddings_response {
+            append_unique_models(
+                &mut combined,
+                value_array(&self.provider, embeddings, "data")?,
+            );
+        }
+
+        Ok(json!({
+            "data": combined,
+            "sources": {
+                "models": models_response,
+                "embeddings": embeddings_response,
+            }
+        }))
+    }
+
+    fn extract_models(
+        &self,
+        raw: &Value,
+    ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
+        extract_openai_models(&self.provider, raw)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ZenmuxModelsAdapter {
+    provider: Provider,
+    client: Client,
+}
+
+impl ZenmuxModelsAdapter {
+    fn new(provider: Provider) -> Self {
+        Self {
+            provider,
+            client: build_client(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelListAdapter for ZenmuxModelsAdapter {
+    async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
+        let base_url = resolve_base_url(request)?;
+        let headers = build_openai_headers(&self.provider, request);
+
+        let models_url = join_url(&base_url, "models");
+        let models_response = send_json_request(
+            &self.client,
+            self.provider.clone(),
+            &models_url,
+            headers.clone(),
+        )
+        .await?;
+
+        let vertex_models_url = derive_zenmux_vertex_models_url(&base_url)?;
+        let vertex_models_response = send_optional_json_request(
+            &self.client,
+            self.provider.clone(),
+            &vertex_models_url,
+            headers,
+        )
+        .await?;
+
+        let mut combined = value_array(&self.provider, &models_response, "data")?.clone();
+        if let Some(ref vertex_models) = vertex_models_response {
+            append_unique_models(
+                &mut combined,
+                value_array(&self.provider, vertex_models, "models")?,
+            );
+        }
+
+        Ok(json!({
+            "data": combined,
+            "sources": {
+                "models": models_response,
+                "vertex_models": vertex_models_response,
+            }
+        }))
     }
 
     fn extract_models(
@@ -968,6 +1096,39 @@ fn build_client() -> Client {
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_else(|_| Client::new())
+}
+
+fn derive_zenmux_vertex_models_url(base_url: &str) -> Result<String, ModelCatalogError> {
+    let mut url = Url::parse(base_url).map_err(|_| ModelCatalogError::MissingBaseUrl {
+        provider: Provider::Zenmux,
+    })?;
+    url.set_path("/api/vertex-ai/v1beta/models");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+fn append_unique_models(target: &mut Vec<Value>, incoming: &Vec<Value>) {
+    let mut seen_ids: HashSet<String> = target
+        .iter()
+        .filter_map(model_identifier)
+        .map(ToString::to_string)
+        .collect();
+
+    for item in incoming {
+        let Some(id) = model_identifier(item) else {
+            continue;
+        };
+        if seen_ids.insert(id.to_string()) {
+            target.push(item.clone());
+        }
+    }
+}
+
+fn model_identifier(item: &Value) -> Option<&str> {
+    item.get("id")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("name").and_then(Value::as_str))
 }
 
 fn resolve_base_url(request: &FetchModelsRequest) -> Result<String, ModelCatalogError> {
@@ -1263,6 +1424,42 @@ async fn send_json_request(
     send_json_request_with_query(client, provider, url, headers, &[]).await
 }
 
+async fn send_optional_json_request(
+    client: &Client,
+    provider: Provider,
+    url: &str,
+    headers: HeaderMap,
+) -> Result<Option<Value>, ModelCatalogError> {
+    let response = client
+        .get(url)
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|source| ModelCatalogError::Request {
+            provider: provider.clone(),
+            source,
+        })?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ModelCatalogError::Http {
+            provider,
+            status,
+            body,
+        });
+    }
+
+    response
+        .json::<Value>()
+        .await
+        .map(Some)
+        .map_err(|source| ModelCatalogError::Request { provider, source })
+}
+
 async fn send_json_request_with_query(
     client: &Client,
     provider: Provider,
@@ -1321,21 +1518,24 @@ fn extract_model_record(
     provider: &Provider,
     item: &Value,
 ) -> Result<ProviderExtractedModel, ModelCatalogError> {
-    let raw_id = item.get("id").and_then(Value::as_str).ok_or_else(|| {
-        ModelCatalogError::InvalidResponse {
-            provider: provider.clone(),
-            message: "model entry is missing string field `id`".to_string(),
-        }
+    let raw_id = model_identifier(item).ok_or_else(|| ModelCatalogError::InvalidResponse {
+        provider: provider.clone(),
+        message: "model entry is missing string field `id` or `name`".to_string(),
     })?;
 
     Ok(ProviderExtractedModel {
         provider: provider.clone(),
         raw_id: raw_id.to_string(),
-        display_name: optional_string(item, &["display_name", "name"]),
+        display_name: optional_string(item, &["display_name", "displayName", "name"]),
         description: optional_string(item, &["description"]),
         context_window: optional_u64(
             item,
-            &["context_window", "context_length", "max_context_length"],
+            &[
+                "context_window",
+                "context_length",
+                "max_context_length",
+                "inputTokenLimit",
+            ],
         )
         .or_else(|| {
             item.get("top_provider")
@@ -1348,19 +1548,24 @@ fn extract_model_record(
                 "max_completion_tokens",
                 "max_tokens",
                 "output_token_limit",
+                "outputTokenLimit",
             ],
         )
         .or_else(|| {
             item.get("top_provider")
                 .and_then(|v| optional_u64(v, &["max_completion_tokens", "max_output_tokens"]))
         }),
-        max_input_tokens: optional_u64(item, &["max_input_tokens", "input_token_limit"]),
+        max_input_tokens: optional_u64(
+            item,
+            &["max_input_tokens", "input_token_limit", "inputTokenLimit"],
+        ),
         created_at: optional_timestamp(item, &["created_at", "created"]),
-        modalities: optional_string_array(item, &["modalities", "supported_modalities"])
+        modalities: collect_declared_modalities(item)
             .or_else(|| collect_architecture_modalities(item))
             .or_else(|| collect_bool_keys(item.get("capabilities"), "supports_")),
         capabilities: optional_string_array(item, &["capabilities"])
             .or_else(|| collect_capabilities_object(item.get("capabilities")))
+            .or_else(|| collect_thinking_capability(item))
             .or_else(|| collect_supported_parameter_capabilities(item)),
         raw: item.clone(),
     })
@@ -1415,6 +1620,29 @@ fn parse_timestamp(value: &Value) -> Option<i64> {
 fn optional_string_array(item: &Value, keys: &[&str]) -> Option<Vec<String>> {
     keys.iter()
         .find_map(|key| parse_string_array(item.get(*key)?))
+}
+
+fn collect_declared_modalities(item: &Value) -> Option<Vec<String>> {
+    let mut values = Vec::new();
+    for key in [
+        "modalities",
+        "supported_modalities",
+        "input_modalities",
+        "output_modalities",
+        "inputModalities",
+        "outputModalities",
+    ] {
+        if let Some(items) = item.get(key).and_then(parse_string_array) {
+            values.extend(items);
+        }
+    }
+
+    let values = dedupe_strings(values);
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
 }
 
 fn parse_string_array(value: &Value) -> Option<Vec<String>> {
@@ -1487,6 +1715,14 @@ fn collect_capabilities_object(value: Option<&Value>) -> Option<Vec<String>> {
         None
     } else {
         Some(items)
+    }
+}
+
+fn collect_thinking_capability(item: &Value) -> Option<Vec<String>> {
+    if item.get("thinking").and_then(Value::as_bool) == Some(true) {
+        Some(vec!["reasoning".to_string()])
+    } else {
+        None
     }
 }
 

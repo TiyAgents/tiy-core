@@ -9,12 +9,15 @@ use tiy_core::catalog::{
 };
 
 const DEFAULT_OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
+const DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL: &str =
+    "https://openrouter.ai/api/v1/embeddings/models";
 
 struct Args {
     output: PathBuf,
     manifest_output: PathBuf,
     snapshot_url: String,
     source_url: String,
+    embeddings_source_url: String,
     version: Option<String>,
 }
 
@@ -32,9 +35,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?
         .error_for_status()?;
-
     let payload = response.json::<Value>().await?;
-    let models = extract_openrouter_models(&payload)?;
+
+    let embeddings_response = client
+        .get(&args.embeddings_source_url)
+        .header("accept", "application/json")
+        .send()
+        .await?
+        .error_for_status()?;
+    let embeddings_payload = embeddings_response.json::<Value>().await?;
+
+    let models = merge_openrouter_payloads(&payload, Some(&embeddings_payload))?;
 
     let generated_at = Utc::now().to_rfc3339();
     let version = args
@@ -62,6 +73,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut manifest_output = None;
     let mut snapshot_url = None;
     let mut source_url = DEFAULT_OPENROUTER_MODELS_URL.to_string();
+    let mut embeddings_source_url = DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL.to_string();
     let mut version = None;
 
     let mut iter = std::env::args().skip(1);
@@ -72,6 +84,11 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--snapshot-url" => snapshot_url = iter.next(),
             "--source-url" => {
                 source_url = iter.next().ok_or("--source-url requires a value")?;
+            }
+            "--embeddings-source-url" => {
+                embeddings_source_url = iter
+                    .next()
+                    .ok_or("--embeddings-source-url requires a value")?;
             }
             "--version" => version = iter.next(),
             "--help" | "-h" => {
@@ -93,6 +110,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         manifest_output,
         snapshot_url,
         source_url,
+        embeddings_source_url,
         version,
     })
 }
@@ -111,9 +129,22 @@ Required:
 
 Optional:
   --source-url <url>        Source models endpoint (default: {DEFAULT_OPENROUTER_MODELS_URL})
+  --embeddings-source-url <url>
+                            Source embeddings endpoint (default: {DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL})
   --version <value>         Override snapshot version
 "
     );
+}
+
+pub(crate) fn merge_openrouter_payloads(
+    models_payload: &Value,
+    embeddings_payload: Option<&Value>,
+) -> Result<Vec<CatalogModelMetadata>, Box<dyn std::error::Error>> {
+    let mut models = extract_openrouter_models(models_payload)?;
+    if let Some(embeddings_payload) = embeddings_payload {
+        append_unique_metadata(&mut models, extract_openrouter_models(embeddings_payload)?);
+    }
+    Ok(models)
 }
 
 pub(crate) fn extract_openrouter_models(
@@ -283,6 +314,21 @@ fn dedupe_strings(values: Vec<String>) -> Option<Vec<String>> {
     }
 }
 
+fn append_unique_metadata(
+    target: &mut Vec<CatalogModelMetadata>,
+    incoming: Vec<CatalogModelMetadata>,
+) {
+    let mut seen: HashSet<String> = target
+        .iter()
+        .map(|item| item.canonical_model_key.clone())
+        .collect();
+    for item in incoming {
+        if seen.insert(item.canonical_model_key.clone()) {
+            target.push(item);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +427,48 @@ mod tests {
         assert_eq!(
             models[1].capabilities,
             Some(vec!["reasoning".to_string(), "tools".to_string()])
+        );
+    }
+
+    #[test]
+    fn merges_embedding_models_into_snapshot_payload() {
+        let models_payload = json!({
+            "data": [
+                {
+                    "id": "openai/gpt-5.4-nano",
+                    "name": "OpenAI: GPT-5.4 Nano",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"]
+                    }
+                }
+            ]
+        });
+        let embeddings_payload = json!({
+            "data": [
+                {
+                    "id": "openai/text-embedding-3-small",
+                    "name": "OpenAI: Text Embedding 3 Small",
+                    "context_length": 8192,
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["embeddings"]
+                    }
+                }
+            ]
+        });
+
+        let models = merge_openrouter_payloads(&models_payload, Some(&embeddings_payload))
+            .expect("payloads should merge");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(
+            models[1].canonical_model_key,
+            "openai:text-embedding-3-small"
+        );
+        assert_eq!(
+            models[1].modalities,
+            Some(vec!["text".to_string(), "embeddings".to_string()])
         );
     }
 }

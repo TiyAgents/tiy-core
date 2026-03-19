@@ -47,6 +47,11 @@ Use a stale-while-revalidate startup strategy:
 
 `tiy-core` does not guess your cache directory. The application should choose the local path and pass it in.
 
+For ZenMux specifically, the library merges both the OpenAI-compatible
+`/api/v1/models` list and the Vertex-style `/api/vertex-ai/v1beta/models` list
+when fetching provider-native availability. This helps surface models such as
+image-generation entries that may only appear in the Vertex-style list.
+
 ## Snapshot Files
 
 The remote catalog publish flow uses two files:
@@ -81,7 +86,7 @@ cargo run --bin tiy-catalog-sync -- \
 
 Current behavior:
 
-- Fetches OpenRouter's model catalog
+- Fetches OpenRouter's chat/completions model catalog and embeddings catalog
 - Normalizes records into `CatalogModelMetadata`
 - Writes a snapshot file and manifest file
 
@@ -162,6 +167,9 @@ Recommended application behavior:
 2. Continue to persist and send the user-entered `raw_id` for inference calls.
 3. If no snapshot match is found, treat the model as usable but partially
    enriched.
+
+When the snapshot has been refreshed from OpenRouter, this same flow also works
+for embedding model IDs such as `openai/text-embedding-3-small`.
 
 ## Smoke Check
 
