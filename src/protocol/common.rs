@@ -85,6 +85,15 @@ pub fn debug_preview(body: &str, max_len: usize) -> &str {
     }
 }
 
+/// OpenAI-style APIs reject very small output-token limits.
+///
+/// Clamp any explicit token limit below 16 up to 16 before serializing the
+/// request payload. `None` is preserved as-is so providers can apply their own
+/// defaults.
+pub fn clamp_openai_max_tokens(max_tokens: Option<u32>) -> Option<u32> {
+    max_tokens.map(|value| value.max(16))
+}
+
 /// Inject custom headers, skipping protected headers per security policy (H2).
 pub fn apply_custom_headers(
     headers: &mut HeaderMap,

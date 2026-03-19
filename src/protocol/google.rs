@@ -128,6 +128,7 @@ struct GoogleSystemInstruction {
 #[serde(rename_all = "camelCase")]
 struct GoogleContent {
     role: String,
+    #[serde(default)]
     parts: Vec<GooglePart>,
 }
 
@@ -405,6 +406,20 @@ fn convert_tools(tools: &[Tool]) -> Vec<GoogleTool> {
     }
 }
 
+fn normalize_google_model_id(model_id: &str, is_vertex: bool) -> &str {
+    let model_id = model_id.strip_prefix("models/").unwrap_or(model_id);
+
+    let model_id = if is_vertex {
+        model_id
+            .strip_prefix("publishers/google/models/")
+            .unwrap_or(model_id)
+    } else {
+        model_id
+    };
+
+    model_id.strip_prefix("google/").unwrap_or(model_id)
+}
+
 // ============================================================================
 // Streaming Implementation
 // ============================================================================
@@ -472,15 +487,22 @@ async fn run_stream(
         return Ok(());
     }
 
+    // Native Google APIs already encode publisher/models in the URL path, so
+    // strip catalog-style prefixes such as `google/` from model IDs here.
+    let request_model_id = normalize_google_model_id(&model.id, is_vertex);
+
     // Vertex AI URL: {base}/v1/publishers/google/models/{model}:streamGenerateContent?alt=sse
     // Generative AI URL: {base}/models/{model}:streamGenerateContent?alt=sse
     let url = if is_vertex {
         format!(
             "{}/v1/publishers/google/models/{}:streamGenerateContent?alt=sse",
-            base, model.id
+            base, request_model_id
         )
     } else {
-        format!("{}/models/{}:streamGenerateContent?alt=sse", base, model.id)
+        format!(
+            "{}/models/{}:streamGenerateContent?alt=sse",
+            base, request_model_id
+        )
     };
 
     tracing::info!(

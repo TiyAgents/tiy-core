@@ -392,6 +392,7 @@ async fn run_stream(
 
     let input = convert_messages(context);
     let tools = context.tools.as_ref().map(|t| convert_tools(t));
+    let max_output_tokens = super::common::clamp_openai_max_tokens(options.max_tokens);
 
     let request = ResponsesRequest {
         model: model.id.clone(),
@@ -399,7 +400,7 @@ async fn run_stream(
         stream: true,
         instructions: context.system_prompt.clone(),
         temperature: options.temperature,
-        max_output_tokens: options.max_tokens,
+        max_output_tokens,
         tools,
         reasoning: None,
     };

@@ -895,6 +895,43 @@ async fn test_stream_blocklist_finish_reason() {
     assert_eq!(result.stop_reason, StopReason::Error);
 }
 
+#[tokio::test]
+async fn test_stream_max_tokens_without_parts() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {"role": "model"},
+            "finishReason": "MAX_TOKENS"
+        }],
+        "usageMetadata": {"promptTokenCount": 6, "candidatesTokenCount": 4, "totalTokenCount": 10}
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Length);
+    assert_eq!(result.text_content(), "");
+    assert_eq!(result.usage.input, 6);
+    assert_eq!(result.usage.output, 4);
+}
+
 // ============================================================================
 // Message conversion coverage: multi-turn with assistant/tool messages
 // ============================================================================
@@ -1087,6 +1124,80 @@ async fn test_stream_vertex_ai_mode() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "vertex response");
+}
+
+#[tokio::test]
+async fn test_stream_strips_google_vendor_prefix_in_generative_ai_mode() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"prefixed response"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.5-pro:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
+        .and(header("x-goog-api-key", "test-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut model = make_model(&server.uri());
+    model.id = "google/gemini-2.5-pro".to_string();
+
+    let context = make_context("test", "hello");
+    let options = make_options("test-key");
+    let provider = GoogleProtocol::new();
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "prefixed response");
+}
+
+#[tokio::test]
+async fn test_stream_strips_google_vendor_prefix_in_vertex_mode() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{"content":{"parts":[{"text":"vertex prefixed response"}],"role":"model"},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/v1/publishers/google/models/gemini-2.5-pro:streamGenerateContent",
+        ))
+        .and(query_param("alt", "sse"))
+        .and(header("authorization", "Bearer vertex-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut model = make_model(&server.uri());
+    model.id = "google/gemini-2.5-pro".to_string();
+    model.api = Some(Api::GoogleVertex);
+
+    let context = make_context("test", "hello");
+    let options = StreamOptions {
+        api_key: Some("vertex-key".to_string()),
+        ..Default::default()
+    };
+    let provider = GoogleProtocol::new();
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "vertex prefixed response");
 }
 
 #[tokio::test]

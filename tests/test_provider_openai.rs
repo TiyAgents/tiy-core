@@ -5,7 +5,7 @@ use serde_json::json;
 use tiy_core::protocol::openai_completions::OpenAICompletionsProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
@@ -143,6 +143,58 @@ async fn test_stream_simple_text_response() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "Hello world!");
+}
+
+#[tokio::test]
+async fn test_stream_clamps_small_max_completion_tokens_to_minimum() {
+    let server = MockServer::start().await;
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": "ok"},
+                "finish_reason": null
+            }]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2
+            }
+        })
+        .to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(json!({
+            "max_completion_tokens": 16
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let mut options = make_options("test-key");
+    options.max_tokens = Some(8);
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
 }
 
 #[tokio::test]

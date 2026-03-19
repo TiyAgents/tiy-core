@@ -735,12 +735,13 @@ async fn run_stream(
 
     let messages = convert_messages(context, model);
     let tools = context.tools.as_ref().map(|t| convert_tools(t, &compat));
+    let clamped_max_tokens = super::common::clamp_openai_max_tokens(options.max_tokens);
 
     // Determine which max tokens field to use
     let max_tokens_field = compat.max_tokens_field.as_deref();
     let (max_tokens, max_completion_tokens) = match max_tokens_field {
-        Some("max_tokens") => (options.max_tokens, None),
-        _ => (None, options.max_tokens),
+        Some("max_tokens") => (clamped_max_tokens, None),
+        _ => (None, clamped_max_tokens),
     };
 
     // P1-4: Conditional stream_options based on compat

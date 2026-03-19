@@ -5,7 +5,7 @@ use serde_json::json;
 use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
@@ -165,6 +165,94 @@ async fn test_stream_simple_text_response() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "Hello world!");
+}
+
+#[tokio::test]
+async fn test_stream_clamps_small_max_output_tokens_to_minimum() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        (
+            "response.output_item.added",
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_01",
+                    "role": "assistant",
+                    "content": []
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "ok"
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_item.done",
+            &json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_01"
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.completed",
+            &json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_01",
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "total_tokens": 12
+                    },
+                    "output": [
+                        {"type": "message", "id": "item_01"}
+                    ]
+                }
+            })
+            .to_string(),
+        ),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .and(body_partial_json(json!({
+            "max_output_tokens": 16
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let mut options = make_options("test-key");
+    options.max_tokens = Some(8);
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "ok");
 }
 
 #[tokio::test]
