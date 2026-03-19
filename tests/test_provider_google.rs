@@ -15,9 +15,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 // ============================================================================
 
 fn make_model(base_url: &str) -> Model {
+    make_model_with_id(base_url, "gemini-2.0-flash")
+}
+
+fn make_model_with_id(base_url: &str, id: &str) -> Model {
     Model::builder()
-        .id("gemini-2.0-flash")
-        .name("Gemini 2.0 Flash")
+        .id(id)
+        .name(id)
         .api(Api::GoogleGenerativeAi)
         .provider(Provider::Google)
         .base_url(base_url)
@@ -199,6 +203,166 @@ async fn test_stream_with_tool_call() {
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0].name, "get_weather");
     assert_eq!(tool_calls[0].arguments["city"], "Tokyo");
+}
+
+#[tokio::test]
+async fn test_stream_sends_tool_config_and_multimodal_function_response() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "done"}],
+                "role": "model"
+            },
+            "finishReason": "STOP"
+        }]
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-3-pro:streamGenerateContent"))
+        .and(header("x-goog-api-key", "test-key"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProtocol::new();
+    let model = make_model_with_id(&server.uri(), "gemini-3-pro");
+    let mut context = make_context("You are helpful.", "Render an icon");
+    context.set_tools(vec![Tool::new(
+        "render_icon",
+        "Render an icon",
+        json!({"type": "object", "properties": {"shape": {"type": "string"}}}),
+    )]);
+    context.add_message(Message::ToolResult(ToolResultMessage::new(
+        "call_1",
+        "render_icon",
+        vec![
+            ContentBlock::Text(TextContent::new("Rendered successfully")),
+            ContentBlock::Image(ImageContent::new("aGVsbG8=", "image/png")),
+        ],
+        false,
+    )));
+
+    let mut options = make_options_with_capture("test-key", captured.clone());
+    options.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Any));
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(
+        payload["toolConfig"]["functionCallingConfig"]["mode"],
+        json!("ANY")
+    );
+    assert_eq!(
+        payload["contents"][0]["parts"][1]["functionResponse"]["response"]["output"],
+        json!("Rendered successfully")
+    );
+    assert_eq!(
+        payload["contents"][0]["parts"][1]["functionResponse"]["parts"][0]["inlineData"]["mimeType"],
+        json!("image/png")
+    );
+}
+
+#[tokio::test]
+async fn test_stream_applies_model_aware_tool_call_id_rules() {
+    let server = MockServer::start().await;
+    let captured_claude = Arc::new(Mutex::new(None));
+    let captured_gemini = Arc::new(Mutex::new(None));
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "ok"}],
+                "role": "model"
+            },
+            "finishReason": "STOP"
+        }]
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/claude-3-7-sonnet:streamGenerateContent"))
+        .and(header("x-goog-api-key", "test-key"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body.clone())
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(header("x-goog-api-key", "test-key"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut context = Context::new();
+    context.add_message(Message::User(UserMessage::text("Use the tool")));
+    context.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::GoogleGenerativeAi)
+            .provider(Provider::Google)
+            .model("source-model")
+            .content(vec![ContentBlock::ToolCall(ToolCall::new(
+                "call/abc",
+                "get_weather",
+                json!({"city": "Tokyo"}),
+            ))])
+            .stop_reason(StopReason::ToolUse)
+            .build()
+            .unwrap(),
+    ));
+
+    let provider = GoogleProtocol::new();
+
+    let mut claude_options = make_options_with_capture("test-key", captured_claude.clone());
+    claude_options.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Auto));
+    let claude_stream = provider.stream(
+        &make_model_with_id(&server.uri(), "claude-3-7-sonnet"),
+        &context,
+        claude_options,
+    );
+    let _ = claude_stream.result().await;
+
+    let gemini_stream = provider.stream(
+        &make_model_with_id(&server.uri(), "gemini-2.0-flash"),
+        &context,
+        make_options_with_capture("test-key", captured_gemini.clone()),
+    );
+    let _ = gemini_stream.result().await;
+
+    let claude_payload = captured_claude
+        .lock()
+        .clone()
+        .expect("claude payload captured");
+    assert_eq!(
+        claude_payload["contents"][1]["parts"][0]["functionCall"]["id"],
+        json!("call_abc")
+    );
+
+    let gemini_payload = captured_gemini
+        .lock()
+        .clone()
+        .expect("gemini payload captured");
+    assert!(gemini_payload["contents"][1]["parts"][0]["functionCall"]["id"].is_null());
 }
 
 #[tokio::test]

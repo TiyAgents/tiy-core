@@ -156,6 +156,8 @@ struct GoogleRequest {
     generation_config: Option<GoogleGenerationConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<GoogleTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_config: Option<GoogleToolConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,6 +230,8 @@ struct GoogleFunctionResponse {
     response: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parts: Option<Vec<GooglePart>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -371,6 +375,18 @@ struct GoogleFunctionDeclaration {
     parameters_json_schema: serde_json::Value,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleToolConfig {
+    function_calling_config: GoogleFunctionCallingConfig,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleFunctionCallingConfig {
+    mode: String,
+}
+
 // ============================================================================
 // SSE Response Types
 // ============================================================================
@@ -411,16 +427,20 @@ struct GoogleUsageMetadata {
 
 static TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn generate_tool_call_id(name: &str) -> String {
+fn generate_tool_call_id(name: &str, model_id: &str) -> String {
     let counter = TOOL_CALL_COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("{}_{}", name, timestamp + counter as u128)
+    normalize_google_tool_call_id(&format!("{}_{}", name, timestamp + counter as u128), model_id)
 }
 
-fn normalize_google_tool_call_id(id: &str) -> String {
+fn normalize_google_tool_call_id(id: &str, model_id: &str) -> String {
+    if !requires_google_tool_call_id(model_id) {
+        return id.to_string();
+    }
+
     id.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -438,16 +458,77 @@ fn requires_google_tool_call_id(model_id: &str) -> bool {
     model_id.starts_with("claude-") || model_id.starts_with("gpt-oss-")
 }
 
+fn supports_multimodal_function_response(model_id: &str) -> bool {
+    let model_id = model_id
+        .to_ascii_lowercase()
+        .trim_start_matches("models/")
+        .to_string();
+    if let Some(rest) = model_id.strip_prefix("gemini-") {
+        if let Some(version) = rest.split(['-', '.']).next() {
+            if let Ok(major) = version.parse::<u32>() {
+                return major >= 3;
+            }
+        }
+    }
+    true
+}
+
+fn build_google_tool_config(
+    tools: Option<&[Tool]>,
+    tool_choice: Option<&ToolChoice>,
+) -> Option<GoogleToolConfig> {
+    if tools.is_none_or(|tools| tools.is_empty()) {
+        return None;
+    }
+
+    let mode = match tool_choice {
+        Some(ToolChoice::Mode(ToolChoiceMode::Auto)) => "AUTO",
+        Some(ToolChoice::Mode(ToolChoiceMode::None)) => "NONE",
+        Some(ToolChoice::Mode(ToolChoiceMode::Any | ToolChoiceMode::Required)) => "ANY",
+        Some(ToolChoice::Named(_)) => "ANY",
+        None => return None,
+    };
+
+    Some(GoogleToolConfig {
+        function_calling_config: GoogleFunctionCallingConfig {
+            mode: mode.to_string(),
+        },
+    })
+}
+
+fn resolve_google_tool_call_id(
+    provided_id: Option<&str>,
+    name: &str,
+    model_id: &str,
+    content: &[ContentBlock],
+) -> String {
+    if let Some(provided_id) = provided_id {
+        let normalized = normalize_google_tool_call_id(provided_id, model_id);
+        if !normalized.is_empty()
+            && !content.iter().any(|block| {
+                block.as_tool_call()
+                    .is_some_and(|tool_call| tool_call.id == normalized)
+            })
+        {
+            return normalized;
+        }
+    }
+
+    generate_tool_call_id(name, model_id)
+}
+
 // ============================================================================
 // Message Conversion
 // ============================================================================
 
 fn convert_messages(context: &Context, target_model: &Model) -> Vec<GoogleContent> {
     let mut contents = Vec::new();
+    let normalize_google_tool_call_id_for_model =
+        |id: &str| normalize_google_tool_call_id(id, &target_model.id);
     let transformed = transform_messages(
         &context.messages,
         target_model,
-        Some(normalize_google_tool_call_id),
+        Some(&normalize_google_tool_call_id_for_model),
     );
 
     for msg in &transformed {
@@ -554,11 +635,39 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<GoogleConten
                     .map(|t| t.text.as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
+                let image_parts: Vec<GooglePart> = tool_result
+                    .content
+                    .iter()
+                    .filter_map(|b| {
+                        b.as_image().map(|img| GooglePart {
+                            text: None,
+                            thought: None,
+                            thought_signature: None,
+                            function_call: None,
+                            function_response: None,
+                            inline_data: Some(GoogleInlineData {
+                                mime_type: img.mime_type.clone(),
+                                data: img.data.clone(),
+                            }),
+                        })
+                    })
+                    .collect();
+                let has_images = !image_parts.is_empty();
+                let supports_multimodal =
+                    has_images && supports_multimodal_function_response(&target_model.id);
 
                 let response_value = if tool_result.is_error {
                     serde_json::json!({ "error": text })
                 } else {
-                    serde_json::json!({ "output": text })
+                    serde_json::json!({
+                        "output": if !text.is_empty() {
+                            text.clone()
+                        } else if has_images {
+                            "(see attached image)".to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
                 };
 
                 let part = GooglePart {
@@ -571,6 +680,11 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<GoogleConten
                         response: response_value,
                         id: if requires_google_tool_call_id(&target_model.id) {
                             Some(tool_result.tool_call_id.clone())
+                        } else {
+                            None
+                        },
+                        parts: if supports_multimodal {
+                            Some(image_parts.clone())
                         } else {
                             None
                         },
@@ -590,6 +704,15 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<GoogleConten
                     role: "user".to_string(),
                     parts: vec![part],
                 });
+
+                if has_images && !supports_multimodal {
+                    let mut parts = vec![GooglePart::text("Tool result image:")];
+                    parts.extend(image_parts);
+                    contents.push(GoogleContent {
+                        role: "user".to_string(),
+                        parts,
+                    });
+                }
             }
         }
     }
@@ -672,6 +795,7 @@ async fn run_stream(
             thinking_config,
         }),
         tools,
+        tool_config: build_google_tool_config(context.tools.as_deref(), options.tool_choice.as_ref()),
     };
 
     // Apply on_payload hook if set
@@ -904,10 +1028,12 @@ async fn run_stream(
                                             });
                                         }
 
-                                        let tool_call_id = fc
-                                            .id
-                                            .clone()
-                                            .unwrap_or_else(|| generate_tool_call_id(&fc.name));
+                                        let tool_call_id = resolve_google_tool_call_id(
+                                            fc.id.as_deref(),
+                                            &fc.name,
+                                            &model.id,
+                                            &output.content,
+                                        );
                                         let mut tool_call =
                                             ToolCall::new(&tool_call_id, &fc.name, fc.args.clone());
                                         tool_call.thought_signature =
@@ -1060,8 +1186,8 @@ mod tests {
 
     #[test]
     fn test_generate_tool_call_id() {
-        let id1 = generate_tool_call_id("test_tool");
-        let id2 = generate_tool_call_id("test_tool");
+        let id1 = generate_tool_call_id("test_tool", "claude-3-7-sonnet");
+        let id2 = generate_tool_call_id("test_tool", "claude-3-7-sonnet");
         assert_ne!(id1, id2);
         assert!(id1.starts_with("test_tool_"));
     }

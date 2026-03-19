@@ -400,7 +400,7 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
     let transformed = transform_messages(
         &context.messages,
         model,
-        Some(normalize_openai_tool_call_id),
+        Some(&normalize_openai_tool_call_id),
     );
 
     // Add system prompt

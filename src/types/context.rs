@@ -3,6 +3,7 @@
 use crate::types::Message;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -178,6 +179,63 @@ pub enum Transport {
     Auto,
 }
 
+/// Prompt cache retention preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheRetention {
+    /// Disable provider-side prompt caching.
+    None,
+    /// Use the provider's default short-lived cache retention.
+    #[default]
+    Short,
+    /// Request the longest retention the provider supports.
+    Long,
+}
+
+/// Generic tool choice mode supported by multiple providers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    /// Provider-defined automatic tool selection.
+    Mode(ToolChoiceMode),
+    /// Force a specific named tool.
+    Named(ToolChoiceNamed),
+}
+
+/// Tool choice modes shared by multiple providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoiceMode {
+    Auto,
+    Any,
+    None,
+    Required,
+}
+
+/// Named tool selection payloads for provider-specific APIs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolChoiceNamed {
+    Tool { name: String },
+    Function { function: ToolChoiceFunction },
+}
+
+/// Named OpenAI-style function selector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ToolChoiceFunction {
+    pub name: String,
+}
+
+/// OpenAI Responses service tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAIServiceTier {
+    Auto,
+    Default,
+    Flex,
+    Priority,
+}
+
 /// Payload inspection / replacement hook.
 ///
 /// Called with the serialized request body before it is sent to the provider.
@@ -212,6 +270,9 @@ pub struct StreamOptions {
     /// Session ID for caching.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Prompt cache retention preference. Providers map this to their native settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_retention: Option<CacheRetention>,
     /// Security and resource limits. When None, uses SecurityConfig::default().
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<crate::types::SecurityConfig>,
@@ -221,6 +282,15 @@ pub struct StreamOptions {
     /// Preferred transport for LLM communication.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<Transport>,
+    /// Optional metadata to include in provider requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Optional tool choice preference for providers with explicit tool controls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    /// Optional OpenAI Responses service tier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<OpenAIServiceTier>,
     /// Maximum retry delay in milliseconds. `None` = use provider default.
     /// Set to `Some(0)` to disable the cap entirely.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -243,12 +313,16 @@ impl std::fmt::Debug for StreamOptions {
                     .map(|h| h.keys().cloned().collect::<Vec<_>>()),
             )
             .field("session_id", &self.session_id)
+            .field("cache_retention", &self.cache_retention)
             .field(
                 "security",
                 &self.security.as_ref().map(|_| "SecurityConfig{...}"),
             )
             .field("on_payload", &self.on_payload.as_ref().map(|_| "<fn>"))
             .field("transport", &self.transport)
+            .field("metadata", &self.metadata)
+            .field("tool_choice", &self.tool_choice)
+            .field("service_tier", &self.service_tier)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
             .finish()
     }
@@ -263,8 +337,12 @@ impl PartialEq for StreamOptions {
             && self.base_url == other.base_url
             && self.headers == other.headers
             && self.session_id == other.session_id
+            && self.cache_retention == other.cache_retention
             && self.security == other.security
             && self.transport == other.transport
+            && self.metadata == other.metadata
+            && self.tool_choice == other.tool_choice
+            && self.service_tier == other.service_tier
             && self.max_retry_delay_ms == other.max_retry_delay_ms
     }
 }
@@ -278,9 +356,13 @@ impl Default for StreamOptions {
             base_url: None,
             headers: None,
             session_id: None,
+            cache_retention: None,
             security: None,
             on_payload: None,
             transport: None,
+            metadata: None,
+            tool_choice: None,
+            service_tier: None,
             max_retry_delay_ms: None,
         }
     }

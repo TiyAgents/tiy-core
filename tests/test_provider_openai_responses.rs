@@ -1,7 +1,9 @@
 //! Tests for OpenAI Responses API provider using wiremock for HTTP mocking.
 
 use futures::StreamExt;
+use parking_lot::Mutex;
 use serde_json::json;
+use std::sync::Arc;
 use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
 use tiy_core::protocol::LLMProtocol;
 use tiy_core::types::*;
@@ -37,6 +39,21 @@ fn make_options(api_key: &str) -> StreamOptions {
         api_key: Some(api_key.to_string()),
         ..Default::default()
     }
+}
+
+fn make_options_with_capture(
+    api_key: &str,
+    captured: Arc<Mutex<Option<serde_json::Value>>>,
+) -> StreamOptions {
+    let mut options = make_options(api_key);
+    options.on_payload = Some(Arc::new(move |payload, _model| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            *captured.lock() = Some(payload.clone());
+            Some(payload)
+        })
+    }));
+    options
 }
 
 /// Build an SSE body from a list of (event_type, data_json) pairs.
@@ -364,6 +381,98 @@ async fn test_stream_with_tool_call() {
     // The provider creates composite IDs: "{call_id}|{item_id}"
     assert!(tool_calls[0].id.contains("call_abc123"));
     assert_eq!(tool_calls[0].arguments["city"], "Tokyo");
+}
+
+#[tokio::test]
+async fn test_stream_sends_service_tier_and_respects_cache_retention_none() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = responses_sse(vec![
+        (
+            "response.output_item.added",
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_09",
+                    "role": "assistant",
+                    "content": []
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "ok"
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_item.done",
+            &json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_09"
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.completed",
+            &json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_09",
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "total_tokens": 12
+                    },
+                    "output": [
+                        {"type": "message", "id": "item_09"}
+                    ]
+                }
+            })
+            .to_string(),
+        ),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let mut options = make_options_with_capture("test-key", captured.clone());
+    options.session_id = Some("sess_123".to_string());
+    options.cache_retention = Some(CacheRetention::None);
+    options.service_tier = Some(OpenAIServiceTier::Flex);
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(payload["service_tier"], json!("flex"));
+    assert!(payload["prompt_cache_key"].is_null());
+    assert!(payload["prompt_cache_retention"].is_null());
 }
 
 #[tokio::test]

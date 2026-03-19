@@ -59,10 +59,11 @@ pub mod validation;
 
 // Re-export commonly used types
 pub use types::{
-    AgentLimits, Api, AssistantMessage, ContentBlock, Context, Cost, HeaderPolicy, HttpLimits,
-    ImageContent, InputType, Message, Model, Provider, Role, SecurityConfig, StopReason,
-    StreamLimits, TextContent, ThinkingContent, Tool, ToolCall, ToolResultMessage, UrlPolicy,
-    Usage, UserMessage,
+    AgentLimits, Api, AssistantMessage, CacheRetention, ContentBlock, Context, Cost,
+    HeaderPolicy, HttpLimits, ImageContent, InputType, Message, Model, OpenAIServiceTier,
+    Provider, Role, SecurityConfig, StopReason, StreamLimits, TextContent, ThinkingContent, Tool,
+    ToolCall, ToolChoice, ToolChoiceFunction, ToolChoiceMode, ToolChoiceNamed, ToolResultMessage,
+    UrlPolicy, Usage, UserMessage,
 };
 
 pub use stream::EventStream;

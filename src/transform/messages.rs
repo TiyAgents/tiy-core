@@ -11,7 +11,7 @@ use crate::types::*;
 pub fn transform_messages(
     messages: &[Message],
     target_model: &Model,
-    normalize_tool_call_id: Option<fn(&str) -> String>,
+    normalize_tool_call_id: Option<&dyn Fn(&str) -> String>,
 ) -> Vec<Message> {
     let mut result = Vec::new();
 
@@ -54,7 +54,7 @@ pub fn transform_messages(
 fn transform_assistant_message(
     msg: &AssistantMessage,
     target_model: &Model,
-    normalize_tool_call_id: Option<fn(&str) -> String>,
+    normalize_tool_call_id: Option<&dyn Fn(&str) -> String>,
 ) -> AssistantMessage {
     let same_api = target_model.api.as_ref().is_none_or(|api| *api == msg.api);
     let is_same_model =

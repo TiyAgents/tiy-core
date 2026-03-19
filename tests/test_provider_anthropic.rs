@@ -3,6 +3,7 @@
 use futures::StreamExt;
 use parking_lot::Mutex;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tiy_core::protocol::anthropic::AnthropicProtocol;
 use tiy_core::protocol::LLMProtocol;
@@ -296,6 +297,211 @@ async fn test_stream_with_tool_call() {
     assert_eq!(tool_calls[0].name, "get_weather");
     assert_eq!(tool_calls[0].id, "toolu_01");
     assert_eq!(tool_calls[0].arguments["city"], "Tokyo");
+}
+
+#[tokio::test]
+async fn test_stream_sends_cache_control_tool_choice_and_metadata() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = anthropic_sse(vec![
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_03",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 12,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        ("message_stop", &json!({"type": "message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProtocol::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("You are helpful.", "Hello");
+    context.set_tools(vec![Tool::new(
+        "Read",
+        "Read a file",
+        json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    )]);
+
+    let mut options = make_options_with_capture("test-key", captured.clone());
+    options.cache_retention = Some(CacheRetention::Short);
+    options.tool_choice = Some(ToolChoice::Named(ToolChoiceNamed::Tool {
+        name: "Read".to_string(),
+    }));
+    options.metadata = Some(HashMap::from([(
+        "user_id".to_string(),
+        json!("user-123"),
+    )]));
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(payload["tool_choice"], json!({"type": "tool", "name": "Read"}));
+    assert_eq!(payload["metadata"], json!({"user_id": "user-123"}));
+    assert_eq!(payload["system"][0]["text"], json!("You are helpful."));
+    assert_eq!(
+        payload["system"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    assert_eq!(
+        payload["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+}
+
+#[tokio::test]
+async fn test_stream_oauth_uses_claude_code_headers_and_maps_tool_names_back() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = anthropic_sse(vec![
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_04",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_01", "name": "Read"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"path\":\"README.md\"}"}
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 8}
+            })
+            .to_string(),
+        ),
+        ("message_stop", &json!({"type": "message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProtocol::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("You are helpful.", "Open the README");
+    context.set_tools(vec![Tool::new(
+        "read",
+        "Read a file",
+        json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+    )]);
+
+    let options = make_options_with_capture("sk-ant-oat-test", captured.clone());
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(
+        payload["system"][0]["text"],
+        json!("You are Claude Code, Anthropic's official CLI for Claude.")
+    );
+    assert_eq!(payload["tools"][0]["name"], json!("Read"));
+
+    let requests = server.received_requests().await.expect("received requests");
+    let request = requests.last().expect("one request");
+    assert_eq!(
+        request
+            .headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok()),
+        Some("Bearer sk-ant-oat-test")
+    );
+    assert_eq!(
+        request
+            .headers
+            .get("anthropic-beta")
+            .and_then(|v| v.to_str().ok()),
+        Some("claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14")
+    );
+    assert_eq!(
+        request
+            .headers
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok()),
+        Some("claude-cli/2.1.75")
+    );
+    assert_eq!(
+        request.headers.get("x-app").and_then(|v| v.to_str().ok()),
+        Some("cli")
+    );
+
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    let tool_calls = result.tool_calls();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].name, "read");
+    assert_eq!(tool_calls[0].arguments["path"], "README.md");
 }
 
 #[tokio::test]

@@ -16,6 +16,29 @@ use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+const CLAUDE_CODE_VERSION: &str = "2.1.75";
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+const CLAUDE_CODE_TOOLS: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Grep",
+    "Glob",
+    "AskUserQuestion",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "KillShell",
+    "NotebookEdit",
+    "Skill",
+    "Task",
+    "TaskOutput",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+];
+
 /// Anthropic Messages API provider.
 pub struct AnthropicProtocol {
     client: Client,
@@ -151,7 +174,7 @@ struct AnthropicRequest {
     model: String,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<Vec<AnthropicSystemBlock>>,
     max_tokens: u32,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,9 +182,44 @@ struct AnthropicRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<AnthropicMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<AnthropicToolChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<AnthropicThinkingParam>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_config: Option<AnthropicOutputConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnthropicCacheControl {
+    #[serde(rename = "type")]
+    control_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicSystemBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<AnthropicCacheControl>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicMetadata {
+    user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicToolChoice {
+    Auto,
+    Any,
+    None,
+    Tool { name: String },
 }
 
 /// Anthropic thinking parameter for the request.
@@ -288,9 +346,17 @@ enum AnthropicContent {
 #[serde(tag = "type")]
 enum AnthropicContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<AnthropicCacheControl>,
+    },
     #[serde(rename = "image")]
-    Image { source: AnthropicImageSource },
+    Image {
+        source: AnthropicImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<AnthropicCacheControl>,
+    },
     #[serde(rename = "thinking")]
     Thinking {
         thinking: String,
@@ -312,6 +378,8 @@ enum AnthropicContentBlock {
         content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<AnthropicCacheControl>,
     },
 }
 
@@ -436,12 +504,68 @@ fn normalize_anthropic_tool_call_id(id: &str) -> String {
     normalize_tool_call_id(id, &Provider::Anthropic)
 }
 
-fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMessage> {
+fn to_claude_code_name(name: &str) -> String {
+    CLAUDE_CODE_TOOLS
+        .iter()
+        .find(|tool| tool.eq_ignore_ascii_case(name))
+        .copied()
+        .unwrap_or(name)
+        .to_string()
+}
+
+fn from_claude_code_name(name: &str, tools: Option<&[Tool]>) -> String {
+    tools.and_then(|tools| {
+        tools.iter()
+            .find(|tool| tool.name.eq_ignore_ascii_case(name))
+            .map(|tool| tool.name.clone())
+    })
+    .unwrap_or_else(|| name.to_string())
+}
+
+fn is_oauth_token(api_key: &str) -> bool {
+    api_key.contains("sk-ant-oat")
+}
+
+fn resolve_cache_retention(retention: Option<CacheRetention>) -> CacheRetention {
+    if let Some(retention) = retention {
+        return retention;
+    }
+    match std::env::var("PI_CACHE_RETENTION").ok().as_deref() {
+        Some("long") => CacheRetention::Long,
+        Some("none") => CacheRetention::None,
+        _ => CacheRetention::Short,
+    }
+}
+
+fn get_cache_control(base_url: &str, retention: Option<CacheRetention>) -> Option<AnthropicCacheControl> {
+    match resolve_cache_retention(retention) {
+        CacheRetention::None => None,
+        CacheRetention::Short => Some(AnthropicCacheControl {
+            control_type: "ephemeral".to_string(),
+            ttl: None,
+        }),
+        CacheRetention::Long => Some(AnthropicCacheControl {
+            control_type: "ephemeral".to_string(),
+            ttl: if base_url.contains("api.anthropic.com") {
+                Some("1h".to_string())
+            } else {
+                None
+            },
+        }),
+    }
+}
+
+fn convert_messages(
+    context: &Context,
+    target_model: &Model,
+    cache_control: Option<&AnthropicCacheControl>,
+    use_claude_code_names: bool,
+) -> Vec<AnthropicMessage> {
     let mut messages = Vec::new();
     let transformed = transform_messages(
         &context.messages,
         target_model,
-        Some(normalize_anthropic_tool_call_id),
+        Some(&normalize_anthropic_tool_call_id),
     );
 
     for msg in &transformed {
@@ -455,6 +579,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                             .filter_map(|b| match b {
                                 ContentBlock::Text(t) => Some(AnthropicContentBlock::Text {
                                     text: t.text.clone(),
+                                    cache_control: None,
                                 }),
                                 ContentBlock::Image(img) => Some(AnthropicContentBlock::Image {
                                     source: AnthropicImageSource {
@@ -462,6 +587,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                                         media_type: img.mime_type.clone(),
                                         data: img.data.clone(),
                                     },
+                                    cache_control: None,
                                 }),
                                 _ => None,
                             })
@@ -483,6 +609,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                             if !t.text.trim().is_empty() {
                                 blocks.push(AnthropicContentBlock::Text {
                                     text: t.text.clone(),
+                                    cache_control: None,
                                 });
                             }
                         }
@@ -497,6 +624,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                                 } else if !t.thinking.trim().is_empty() {
                                     blocks.push(AnthropicContentBlock::Text {
                                         text: t.thinking.clone(),
+                                        cache_control: None,
                                     });
                                 }
                             } else if !t.thinking.trim().is_empty() {
@@ -511,6 +639,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                                 } else {
                                     blocks.push(AnthropicContentBlock::Text {
                                         text: t.thinking.clone(),
+                                        cache_control: None,
                                     });
                                 }
                             }
@@ -518,7 +647,11 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                         ContentBlock::ToolCall(tc) => {
                             blocks.push(AnthropicContentBlock::ToolUse {
                                 id: tc.id.clone(),
-                                name: tc.name.clone(),
+                                name: if use_claude_code_names {
+                                    to_claude_code_name(&tc.name)
+                                } else {
+                                    tc.name.clone()
+                                },
                                 input: tc.arguments.clone(),
                             });
                         }
@@ -551,6 +684,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                     } else {
                         None
                     },
+                    cache_control: None,
                 };
 
                 // Check if the last message is a user message; merge if so
@@ -562,7 +696,10 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
                                 continue;
                             }
                             AnthropicContent::Text(text) => {
-                                let text_block = AnthropicContentBlock::Text { text: text.clone() };
+                                let text_block = AnthropicContentBlock::Text {
+                                    text: text.clone(),
+                                    cache_control: None,
+                                };
                                 last.content = AnthropicContent::Blocks(vec![text_block, block]);
                                 continue;
                             }
@@ -578,19 +715,122 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<AnthropicMes
         }
     }
 
+    if let Some(cache_control) = cache_control {
+        apply_cache_control(&mut messages, cache_control.clone());
+    }
+
     messages
 }
 
 /// Convert tools to Anthropic format.
-fn convert_tools(tools: &[Tool]) -> Vec<AnthropicTool> {
+fn convert_tools(tools: &[Tool], use_claude_code_names: bool) -> Vec<AnthropicTool> {
     tools
         .iter()
         .map(|t| AnthropicTool {
-            name: t.name.clone(),
+            name: if use_claude_code_names {
+                to_claude_code_name(&t.name)
+            } else {
+                t.name.clone()
+            },
             description: t.description.clone(),
             input_schema: t.parameters.clone(),
         })
         .collect()
+}
+
+fn apply_cache_control(messages: &mut [AnthropicMessage], cache_control: AnthropicCacheControl) {
+    let Some(last_message) = messages.last_mut() else {
+        return;
+    };
+    if last_message.role != "user" {
+        return;
+    }
+
+    match &mut last_message.content {
+        AnthropicContent::Text(text) => {
+            let text = text.clone();
+            last_message.content = AnthropicContent::Blocks(vec![AnthropicContentBlock::Text {
+                text,
+                cache_control: Some(cache_control),
+            }]);
+        }
+        AnthropicContent::Blocks(blocks) => {
+            for block in blocks.iter_mut().rev() {
+                match block {
+                    AnthropicContentBlock::Text {
+                        cache_control: slot, ..
+                    }
+                    | AnthropicContentBlock::Image {
+                        cache_control: slot, ..
+                    }
+                    | AnthropicContentBlock::ToolResult {
+                        cache_control: slot, ..
+                    } => {
+                        *slot = Some(cache_control);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn build_system_blocks(
+    context: &Context,
+    cache_control: Option<&AnthropicCacheControl>,
+    use_claude_code_identity: bool,
+) -> Option<Vec<AnthropicSystemBlock>> {
+    let mut blocks = Vec::new();
+    if use_claude_code_identity {
+        blocks.push(AnthropicSystemBlock {
+            block_type: "text".to_string(),
+            text: CLAUDE_CODE_IDENTITY.to_string(),
+            cache_control: cache_control.cloned(),
+        });
+    }
+    if let Some(system_prompt) = context.system_prompt.as_ref() {
+        blocks.push(AnthropicSystemBlock {
+            block_type: "text".to_string(),
+            text: system_prompt.clone(),
+            cache_control: cache_control.cloned(),
+        });
+    }
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks)
+    }
+}
+
+fn build_anthropic_metadata(
+    metadata: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Option<AnthropicMetadata> {
+    metadata
+        .and_then(|metadata| metadata.get("user_id"))
+        .and_then(|value| value.as_str())
+        .map(|user_id| AnthropicMetadata {
+            user_id: user_id.to_string(),
+        })
+}
+
+fn build_tool_choice(tool_choice: Option<&ToolChoice>) -> Option<AnthropicToolChoice> {
+    match tool_choice {
+        Some(ToolChoice::Mode(ToolChoiceMode::Auto)) => Some(AnthropicToolChoice::Auto),
+        Some(ToolChoice::Mode(ToolChoiceMode::Any | ToolChoiceMode::Required)) => {
+            Some(AnthropicToolChoice::Any)
+        }
+        Some(ToolChoice::Mode(ToolChoiceMode::None)) => Some(AnthropicToolChoice::None),
+        Some(ToolChoice::Named(ToolChoiceNamed::Tool { name })) => {
+            Some(AnthropicToolChoice::Tool { name: name.clone() })
+        }
+        Some(ToolChoice::Named(ToolChoiceNamed::Function { function })) => {
+            Some(AnthropicToolChoice::Tool {
+                name: function.name.clone(),
+            })
+        }
+        None => None,
+    }
 }
 
 // ============================================================================
@@ -608,6 +848,13 @@ async fn run_stream(
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
+    let base = super::common::resolve_base_url(
+        options.base_url.as_deref(),
+        model.base_url.as_deref(),
+        DEFAULT_BASE_URL,
+    );
+    let oauth_token = is_oauth_token(&api_key);
+    let cache_control = get_cache_control(base, options.cache_retention);
 
     let mut output = AssistantMessage::builder()
         .api(Api::AnthropicMessages)
@@ -617,13 +864,16 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let messages = convert_messages(context, model);
-    let tools = context.tools.as_ref().map(|t| convert_tools(t));
+    let messages = convert_messages(context, model, cache_control.as_ref(), oauth_token);
+    let tools = context
+        .tools
+        .as_ref()
+        .map(|t| convert_tools(t, oauth_token));
 
     let request = AnthropicRequest {
         model: model.id.clone(),
         messages,
-        system: context.system_prompt.clone(),
+        system: build_system_blocks(context, cache_control.as_ref(), oauth_token),
         max_tokens: options.max_tokens.unwrap_or(model.max_tokens),
         stream: true,
         temperature: if thinking.is_some() {
@@ -632,6 +882,8 @@ async fn run_stream(
             options.temperature
         },
         tools,
+        metadata: build_anthropic_metadata(options.metadata.as_ref()),
+        tool_choice: build_tool_choice(options.tool_choice.as_ref()),
         thinking,
         output_config,
     };
@@ -639,11 +891,6 @@ async fn run_stream(
     // Apply on_payload hook if set
     let body_string = super::common::apply_on_payload(&request, &options.on_payload, model).await?;
 
-    let base = super::common::resolve_base_url(
-        options.base_url.as_deref(),
-        model.base_url.as_deref(),
-        DEFAULT_BASE_URL,
-    );
     let url = format!("{}/messages", base);
 
     // H1: Validate base URL against security policy
@@ -662,7 +909,28 @@ async fn run_stream(
     tracing::debug!(request_body = %super::common::debug_preview(&body_string, 500), "Request payload");
 
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("x-api-key", api_key.parse()?);
+    if oauth_token {
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", api_key).parse()?,
+        );
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            format!("claude-cli/{}", CLAUDE_CODE_VERSION).parse()?,
+        );
+        headers.insert("x-app", "cli".parse()?);
+        headers.insert(
+            "anthropic-beta",
+            "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+                .parse()?,
+        );
+    } else {
+        headers.insert("x-api-key", api_key.parse()?);
+        headers.insert(
+            "anthropic-beta",
+            "fine-grained-tool-streaming-2025-05-14".parse()?,
+        );
+    }
     headers.insert("anthropic-version", "2023-06-01".parse()?);
     headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse()?);
 
@@ -802,7 +1070,11 @@ async fn run_stream(
                                 partial_tool_args.insert(idx, String::new());
                                 output.content.push(ContentBlock::ToolCall(ToolCall::new(
                                     id,
-                                    name,
+                                    if oauth_token {
+                                        from_claude_code_name(&name, context.tools.as_deref())
+                                    } else {
+                                        name
+                                    },
                                     serde_json::Value::Object(serde_json::Map::new()),
                                 )));
                                 stream.push(AssistantMessageEvent::ToolCallStart {
@@ -1026,7 +1298,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let messages = convert_messages(&context, &model);
+        let messages = convert_messages(&context, &model, None, false);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
@@ -1051,7 +1323,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let messages = convert_messages(&context, &model);
+        let messages = convert_messages(&context, &model, None, false);
         // Tool results should be merged into a single user message
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");

@@ -97,12 +97,7 @@ fn main() {
                 max_tokens: Some(8192),
                 api_key: Some(key),
                 base_url,
-                headers: None,
-                session_id: None,
-                security: None,
-                on_payload: None,
-                transport: None,
-                max_retry_delay_ms: None,
+                ..Default::default()
             };
 
             // Process streaming response

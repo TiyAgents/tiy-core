@@ -161,11 +161,15 @@ struct ResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_retention: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ResponsesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ResponsesReasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -224,6 +228,34 @@ fn build_reasoning(model: &Model, level: Option<ThinkingLevel>) -> Option<Respon
         effort: Some(clamp_reasoning(level, model).to_string()),
         summary: Some("auto".to_string()),
     })
+}
+
+fn resolve_cache_retention(retention: Option<CacheRetention>) -> CacheRetention {
+    if let Some(retention) = retention {
+        return retention;
+    }
+    match std::env::var("PI_CACHE_RETENTION").ok().as_deref() {
+        Some("long") => CacheRetention::Long,
+        Some("none") => CacheRetention::None,
+        _ => CacheRetention::Short,
+    }
+}
+
+fn get_prompt_cache_retention(base_url: &str, retention: CacheRetention) -> Option<String> {
+    if retention == CacheRetention::Long && base_url.contains("api.openai.com") {
+        Some("24h".to_string())
+    } else {
+        None
+    }
+}
+
+fn map_service_tier(service_tier: OpenAIServiceTier) -> &'static str {
+    match service_tier {
+        OpenAIServiceTier::Auto => "auto",
+        OpenAIServiceTier::Default => "default",
+        OpenAIServiceTier::Flex => "flex",
+        OpenAIServiceTier::Priority => "priority",
+    }
 }
 
 // ============================================================================
@@ -452,6 +484,12 @@ async fn run_stream(
     stream: AssistantMessageEventStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let limits = options.security_config();
+    let base = super::common::resolve_base_url(
+        options.base_url.as_deref(),
+        model.base_url.as_deref(),
+        DEFAULT_BASE_URL,
+    );
+    let cache_retention = resolve_cache_retention(options.cache_retention);
 
     let mut output = AssistantMessage::builder()
         .api(Api::OpenAIResponses)
@@ -483,22 +521,25 @@ async fn run_stream(
         instructions: context.system_prompt.clone(),
         temperature: options.temperature,
         max_output_tokens,
-        prompt_cache_key: options.session_id.clone(),
+        prompt_cache_key: if cache_retention == CacheRetention::None {
+            None
+        } else {
+            options.session_id.clone()
+        },
+        prompt_cache_retention: get_prompt_cache_retention(base, cache_retention),
         tools,
         reasoning: reasoning.clone(),
         include: reasoning
             .as_ref()
             .map(|_| vec!["reasoning.encrypted_content".to_string()]),
+        service_tier: options
+            .service_tier
+            .map(|service_tier| map_service_tier(service_tier).to_string()),
     };
 
     // Apply on_payload hook if set
     let body_string = super::common::apply_on_payload(&request, &options.on_payload, model).await?;
 
-    let base = super::common::resolve_base_url(
-        options.base_url.as_deref(),
-        model.base_url.as_deref(),
-        DEFAULT_BASE_URL,
-    );
     let url = format!("{}/responses", base);
 
     // H1: Validate base URL against security policy
@@ -1135,5 +1176,21 @@ mod tests {
 
         let items = convert_messages(&context, &model);
         assert_eq!(items.len(), 3); // user + function_call + function_call_output
+    }
+
+    #[test]
+    fn test_get_prompt_cache_retention_only_for_direct_openai() {
+        assert_eq!(
+            get_prompt_cache_retention("https://api.openai.com/v1", CacheRetention::Long),
+            Some("24h".to_string())
+        );
+        assert_eq!(
+            get_prompt_cache_retention("https://proxy.example.com/v1", CacheRetention::Long),
+            None
+        );
+        assert_eq!(
+            get_prompt_cache_retention("https://api.openai.com/v1", CacheRetention::Short),
+            None
+        );
     }
 }

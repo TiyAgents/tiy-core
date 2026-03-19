@@ -374,7 +374,7 @@ fn test_transform_with_tool_call_id_normalization() {
         )),
     ];
 
-    let result = transform_messages(&messages, &target, Some(normalize));
+    let result = transform_messages(&messages, &target, Some(&normalize));
 
     // Tool call ID should be normalized
     if let Message::Assistant(ref a) = result[1] {
