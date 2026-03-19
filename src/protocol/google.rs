@@ -394,6 +394,7 @@ struct GoogleFunctionCallingConfig {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GoogleStreamChunk {
+    response_id: Option<String>,
     candidates: Option<Vec<GoogleCandidate>>,
     usage_metadata: Option<GoogleUsageMetadata>,
 }
@@ -433,7 +434,10 @@ fn generate_tool_call_id(name: &str, model_id: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    normalize_google_tool_call_id(&format!("{}_{}", name, timestamp + counter as u128), model_id)
+    normalize_google_tool_call_id(
+        &format!("{}_{}", name, timestamp + counter as u128),
+        model_id,
+    )
 }
 
 fn normalize_google_tool_call_id(id: &str, model_id: &str) -> String {
@@ -506,7 +510,8 @@ fn resolve_google_tool_call_id(
         let normalized = normalize_google_tool_call_id(provided_id, model_id);
         if !normalized.is_empty()
             && !content.iter().any(|block| {
-                block.as_tool_call()
+                block
+                    .as_tool_call()
                     .is_some_and(|tool_call| tool_call.id == normalized)
             })
         {
@@ -795,7 +800,10 @@ async fn run_stream(
             thinking_config,
         }),
         tools,
-        tool_config: build_google_tool_config(context.tools.as_deref(), options.tool_choice.as_ref()),
+        tool_config: build_google_tool_config(
+            context.tools.as_deref(),
+            options.tool_choice.as_ref(),
+        ),
     };
 
     // Apply on_payload hook if set
@@ -932,6 +940,10 @@ async fn run_stream(
             let parsed: Result<GoogleStreamChunk, _> = serde_json::from_str(data);
             match parsed {
                 Ok(chunk_data) => {
+                    if let Some(response_id) = &chunk_data.response_id {
+                        output.response_id = Some(response_id.clone());
+                    }
+
                     // Handle usage metadata
                     if let Some(ref usage) = chunk_data.usage_metadata {
                         output.usage.input = usage.prompt_token_count;

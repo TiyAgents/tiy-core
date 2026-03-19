@@ -351,10 +351,7 @@ async fn test_stream_sends_cache_control_tool_choice_and_metadata() {
     options.tool_choice = Some(ToolChoice::Named(ToolChoiceNamed::Tool {
         name: "Read".to_string(),
     }));
-    options.metadata = Some(HashMap::from([(
-        "user_id".to_string(),
-        json!("user-123"),
-    )]));
+    options.metadata = Some(HashMap::from([("user_id".to_string(), json!("user-123"))]));
 
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
@@ -362,7 +359,10 @@ async fn test_stream_sends_cache_control_tool_choice_and_metadata() {
     assert_eq!(result.stop_reason, StopReason::Stop);
 
     let payload = captured.lock().clone().expect("payload captured");
-    assert_eq!(payload["tool_choice"], json!({"type": "tool", "name": "Read"}));
+    assert_eq!(
+        payload["tool_choice"],
+        json!({"type": "tool", "name": "Read"})
+    );
     assert_eq!(payload["metadata"], json!({"user_id": "user-123"}));
     assert_eq!(payload["system"][0]["text"], json!("You are helpful."));
     assert_eq!(

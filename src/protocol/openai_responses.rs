@@ -288,6 +288,7 @@ struct ResponseCompleted {
 
 #[derive(Debug, Deserialize)]
 struct ResponseData {
+    id: Option<String>,
     status: Option<String>,
     usage: Option<ResponseUsage>,
     #[allow(dead_code)]
@@ -324,20 +325,22 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
         match msg {
             Message::User(user_msg) => {
                 let content = match &user_msg.content {
-                    UserContent::Text(text) => ResponsesContent::Text(text.clone()),
+                    UserContent::Text(text) => ResponsesContent::Text(sanitize_surrogates(text)),
                     UserContent::Blocks(blocks) => {
                         let parts: Vec<ResponsesContentPart> = blocks
                             .iter()
                             .filter_map(|b| match b {
                                 ContentBlock::Text(t) => Some(ResponsesContentPart::InputText {
-                                    text: t.text.clone(),
+                                    text: sanitize_surrogates(&t.text),
                                 }),
                                 ContentBlock::Image(img) => {
-                                    Some(ResponsesContentPart::InputImage {
-                                        image_url: format!(
-                                            "data:{};base64,{}",
-                                            img.mime_type, img.data
-                                        ),
+                                    target_model.supports_image().then(|| {
+                                        ResponsesContentPart::InputImage {
+                                            image_url: format!(
+                                                "data:{};base64,{}",
+                                                img.mime_type, img.data
+                                            ),
+                                        }
                                     })
                                 }
                                 _ => None,
@@ -358,66 +361,69 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                         == target_model.api.clone().unwrap_or(Api::OpenAIResponses)
                     && assistant_msg.model == target_model.id;
 
-                // Collect text content
-                let text_content: String = assistant_msg
-                    .content
-                    .iter()
-                    .filter_map(|b| b.as_text())
-                    .filter(|t| !t.text.trim().is_empty())
-                    .map(|t| t.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("");
-
-                if !text_content.is_empty() {
-                    items.push(serde_json::json!({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": ResponsesContent::Parts(vec![ResponsesContentPart::OutputText {
-                            text: text_content,
-                        }]),
-                    }));
-                }
-
                 for block in &assistant_msg.content {
-                    if let ContentBlock::Thinking(thinking) = block {
-                        if is_same_model {
-                            if let Some(signature) = &thinking.thinking_signature {
-                                if let Ok(reasoning_item) =
-                                    serde_json::from_str::<serde_json::Value>(signature)
-                                {
-                                    items.push(reasoning_item);
+                    match block {
+                        ContentBlock::Thinking(thinking) => {
+                            if is_same_model {
+                                if let Some(signature) = &thinking.thinking_signature {
+                                    if let Ok(reasoning_item) =
+                                        serde_json::from_str::<serde_json::Value>(signature)
+                                    {
+                                        items.push(reasoning_item);
+                                    }
                                 }
                             }
                         }
-                    }
-                }
+                        ContentBlock::Text(text_block) => {
+                            if text_block.text.trim().is_empty() {
+                                continue;
+                            }
 
-                // Add function calls as separate items
-                for block in &assistant_msg.content {
-                    if let ContentBlock::ToolCall(tc) = block {
-                        // Parse composite ID if present: "{call_id}|{item_id}"
-                        let (call_id, item_id) = if tc.id.contains('|') {
-                            let parts: Vec<&str> = tc.id.splitn(2, '|').collect();
-                            (
-                                parts[0].to_string(),
-                                parts.get(1).unwrap_or(&"").to_string(),
-                            )
-                        } else {
-                            (tc.id.clone(), format!("fc_{}", tc.id))
-                        };
+                            let mut message = serde_json::json!({
+                                "type": "message",
+                                "role": "assistant",
+                                "content": ResponsesContent::Parts(vec![ResponsesContentPart::OutputText {
+                                    text: sanitize_surrogates(&text_block.text),
+                                }]),
+                                "status": "completed",
+                            });
 
-                        let mut function_call = serde_json::json!({
-                            "type": "function_call",
-                            "call_id": call_id,
-                            "name": tc.name,
-                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                        });
+                            if let Some(text_signature) =
+                                parse_text_signature(text_block.text_signature.as_deref())
+                            {
+                                message["id"] = serde_json::Value::String(text_signature.id);
+                                if let Some(phase) = text_signature.phase {
+                                    message["phase"] = serde_json::Value::String(phase);
+                                }
+                            }
 
-                        if is_same_model || !item_id.starts_with("fc_") {
-                            function_call["id"] = serde_json::Value::String(item_id);
+                            items.push(message);
                         }
+                        ContentBlock::ToolCall(tc) => {
+                            let (call_id, item_id) = if tc.id.contains('|') {
+                                let parts: Vec<&str> = tc.id.splitn(2, '|').collect();
+                                (
+                                    parts[0].to_string(),
+                                    parts.get(1).unwrap_or(&"").to_string(),
+                                )
+                            } else {
+                                (tc.id.clone(), format!("fc_{}", tc.id))
+                            };
 
-                        items.push(function_call);
+                            let mut function_call = serde_json::json!({
+                                "type": "function_call",
+                                "call_id": call_id,
+                                "name": tc.name,
+                                "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                            });
+
+                            if is_same_model || !item_id.starts_with("fc_") {
+                                function_call["id"] = serde_json::Value::String(item_id);
+                            }
+
+                            items.push(function_call);
+                        }
+                        ContentBlock::Image(_) => {}
                     }
                 }
             }
@@ -458,6 +464,59 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
     items
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct TextSignatureV1 {
+    v: u8,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase: Option<String>,
+}
+
+struct ParsedTextSignature {
+    id: String,
+    phase: Option<String>,
+}
+
+fn encode_text_signature_v1(id: &str, phase: Option<&str>) -> String {
+    serde_json::to_string(&TextSignatureV1 {
+        v: 1,
+        id: id.to_string(),
+        phase: phase.map(str::to_string),
+    })
+    .unwrap_or_else(|_| id.to_string())
+}
+
+fn parse_text_signature(signature: Option<&str>) -> Option<ParsedTextSignature> {
+    let signature = signature?.trim();
+    if signature.is_empty() {
+        return None;
+    }
+
+    if signature.starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<TextSignatureV1>(signature) {
+            return Some(ParsedTextSignature {
+                id: parsed.id,
+                phase: parsed.phase,
+            });
+        }
+    }
+
+    Some(ParsedTextSignature {
+        id: signature.to_string(),
+        phase: None,
+    })
+}
+
+fn sanitize_surrogates(text: &str) -> String {
+    text.replace(
+        |c: char| {
+            let cp = c as u32;
+            (0xD800..=0xDFFF).contains(&cp)
+        },
+        "",
+    )
+}
+
 fn convert_tools(tools: &[Tool]) -> Vec<ResponsesTool> {
     tools
         .iter()
@@ -468,6 +527,37 @@ fn convert_tools(tools: &[Tool]) -> Vec<ResponsesTool> {
             parameters: t.parameters.clone(),
         })
         .collect()
+}
+
+fn ensure_response_text_item(
+    output: &mut AssistantMessage,
+    item_content_map: &mut HashMap<usize, ItemInfo>,
+    output_index: usize,
+    stream: &AssistantMessageEventStream,
+) -> usize {
+    if let Some(info) = item_content_map.get(&output_index) {
+        return info.content_idx;
+    }
+
+    let content_idx = output.content.len();
+    output
+        .content
+        .push(ContentBlock::Text(TextContent::new("")));
+    item_content_map.insert(
+        output_index,
+        ItemInfo {
+            content_idx,
+            item_type: ItemType::Message,
+            item_id: String::new(),
+            call_id: None,
+            name: None,
+        },
+    );
+    stream.push(AssistantMessageEvent::TextStart {
+        content_index: content_idx,
+        partial: output.clone(),
+    });
+    content_idx
 }
 
 // ============================================================================
@@ -638,6 +728,18 @@ async fn run_stream(
                 .unwrap_or_else(|| current_event_type.clone());
 
             match event_type.as_str() {
+                "response.created" => {
+                    if let Ok(ref val) = parsed {
+                        if let Some(response_id) = val
+                            .get("response")
+                            .and_then(|response| response.get("id"))
+                            .and_then(|id| id.as_str())
+                        {
+                            output.response_id = Some(response_id.to_string());
+                        }
+                    }
+                }
+
                 "response.output_item.added" => {
                     if let Ok(ref val) = parsed {
                         let item = val.get("item");
@@ -748,40 +850,45 @@ async fn run_stream(
                             .unwrap_or(0) as usize;
                         let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
-                        // Auto-register if output_item.added was never received for this index
-                        if !item_content_map.contains_key(&output_index) {
-                            let content_idx = output.content.len();
-                            output
-                                .content
-                                .push(ContentBlock::Text(TextContent::new("")));
-                            item_content_map.insert(
-                                output_index,
-                                ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::Message,
-                                    item_id: String::new(),
-                                    call_id: None,
-                                    name: None,
-                                },
-                            );
-                            stream.push(AssistantMessageEvent::TextStart {
-                                content_index: content_idx,
-                                partial: output.clone(),
-                            });
+                        let idx = ensure_response_text_item(
+                            &mut output,
+                            &mut item_content_map,
+                            output_index,
+                            &stream,
+                        );
+                        if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx) {
+                            t.text.push_str(delta);
                         }
+                        stream.push(AssistantMessageEvent::TextDelta {
+                            content_index: idx,
+                            delta: delta.to_string(),
+                            partial: output.clone(),
+                        });
+                    }
+                }
 
-                        if let Some(info) = item_content_map.get(&output_index) {
-                            let idx = info.content_idx;
-                            if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx)
-                            {
-                                t.text.push_str(delta);
-                            }
-                            stream.push(AssistantMessageEvent::TextDelta {
-                                content_index: idx,
-                                delta: delta.to_string(),
-                                partial: output.clone(),
-                            });
+                "response.refusal.delta" => {
+                    if let Ok(ref val) = parsed {
+                        let output_index = val
+                            .get("output_index")
+                            .and_then(|i| i.as_u64())
+                            .unwrap_or(0) as usize;
+                        let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
+
+                        let idx = ensure_response_text_item(
+                            &mut output,
+                            &mut item_content_map,
+                            output_index,
+                            &stream,
+                        );
+                        if let Some(ContentBlock::Text(ref mut t)) = output.content.get_mut(idx) {
+                            t.text.push_str(delta);
                         }
+                        stream.push(AssistantMessageEvent::TextDelta {
+                            content_index: idx,
+                            delta: delta.to_string(),
+                            partial: output.clone(),
+                        });
                     }
                 }
 
@@ -942,6 +1049,28 @@ async fn run_stream(
                             let idx = info.content_idx;
                             match info.item_type {
                                 ItemType::Message => {
+                                    if let Some(item) = val.get("item") {
+                                        if let Some(response_text) =
+                                            extract_response_message_text(item)
+                                        {
+                                            if let Some(ContentBlock::Text(ref mut t)) =
+                                                output.content.get_mut(idx)
+                                            {
+                                                t.text = response_text;
+                                                if let Some(item_id) =
+                                                    item.get("id").and_then(|id| id.as_str())
+                                                {
+                                                    let phase = item
+                                                        .get("phase")
+                                                        .and_then(|phase| phase.as_str());
+                                                    t.text_signature = Some(
+                                                        encode_text_signature_v1(item_id, phase),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     let content = output
                                         .content
                                         .get(idx)
@@ -1015,6 +1144,8 @@ async fn run_stream(
                         .or_else(|| serde_json::from_str::<ResponseCompleted>(data).ok());
                     if let Some(completed) = completed {
                         if let Some(ref resp) = completed.response {
+                            output.response_id = resp.id.clone().or(output.response_id);
+
                             // Update usage
                             if let Some(ref usage) = resp.usage {
                                 let cached_tokens = usage
@@ -1107,6 +1238,26 @@ enum ItemType {
     Reasoning,
 }
 
+fn extract_response_message_text(item: &serde_json::Value) -> Option<String> {
+    let content = item.get("content")?.as_array()?;
+    Some(
+        content
+            .iter()
+            .filter_map(|part| {
+                match part
+                    .get("type")
+                    .and_then(|content_type| content_type.as_str())
+                {
+                    Some("output_text") => part.get("text").and_then(|text| text.as_str()),
+                    Some("refusal") => part.get("refusal").and_then(|text| text.as_str()),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1134,6 +1285,38 @@ mod tests {
 
         let items = convert_messages(&context, &model);
         assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_messages_preserves_text_signature_for_same_model() {
+        let model = Model::builder()
+            .id("gpt-5")
+            .name("GPT-5")
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAIResponses)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let assistant = AssistantMessage::builder()
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAIResponses)
+            .model("gpt-5")
+            .content(vec![ContentBlock::Text(TextContent {
+                text: "hello".to_string(),
+                text_signature: Some(encode_text_signature_v1("msg_123", Some("commentary"))),
+            })])
+            .build()
+            .unwrap();
+
+        let mut context = Context::new();
+        context.add_message(Message::Assistant(assistant));
+        let items = convert_messages(&context, &model);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], "msg_123");
+        assert_eq!(items[0]["phase"], "commentary");
     }
 
     #[test]
@@ -1191,6 +1374,21 @@ mod tests {
         assert_eq!(
             get_prompt_cache_retention("https://api.openai.com/v1", CacheRetention::Short),
             None
+        );
+    }
+
+    #[test]
+    fn test_extract_response_message_text_includes_refusal_parts() {
+        let item = serde_json::json!({
+            "content": [
+                { "type": "output_text", "text": "safe" },
+                { "type": "refusal", "refusal": " no" }
+            ]
+        });
+
+        assert_eq!(
+            extract_response_message_text(&item).as_deref(),
+            Some("safe no")
         );
     }
 }

@@ -162,7 +162,62 @@ impl LLMProtocol for OpenAICompletionsProtocol {
 
 /// Resolve compat settings for the model, using defaults when model.compat is None.
 fn resolve_compat(model: &Model) -> OpenAICompletionsCompat {
-    model.compat.clone().unwrap_or_default()
+    model.compat.clone().unwrap_or_else(|| detect_compat(model))
+}
+
+fn detect_compat(model: &Model) -> OpenAICompletionsCompat {
+    let base_url = model.base_url.as_deref().unwrap_or("").to_ascii_lowercase();
+    let is_zai = matches!(model.provider, Provider::ZAI) || base_url.contains("api.z.ai");
+    let is_non_standard = matches!(
+        model.provider,
+        Provider::Cerebras
+            | Provider::XAI
+            | Provider::DeepSeek
+            | Provider::ZAI
+            | Provider::OpenCode
+    ) || base_url.contains("cerebras.ai")
+        || base_url.contains("api.x.ai")
+        || base_url.contains("chutes.ai")
+        || base_url.contains("deepseek.com")
+        || base_url.contains("api.z.ai")
+        || base_url.contains("opencode.ai");
+    let use_max_tokens = base_url.contains("chutes.ai");
+    let is_grok = matches!(model.provider, Provider::XAI) || base_url.contains("api.x.ai");
+    let is_groq = matches!(model.provider, Provider::Groq) || base_url.contains("groq.com");
+
+    let reasoning_effort_map = if is_groq && model.id.eq_ignore_ascii_case("qwen/qwen3-32b") {
+        HashMap::from([
+            ("minimal".to_string(), "default".to_string()),
+            ("low".to_string(), "default".to_string()),
+            ("high".to_string(), "default".to_string()),
+            ("xhigh".to_string(), "default".to_string()),
+        ])
+    } else {
+        HashMap::new()
+    };
+
+    OpenAICompletionsCompat {
+        supports_store: !is_non_standard,
+        supports_developer_role: !is_non_standard,
+        supports_reasoning_effort: !is_grok && !is_zai,
+        reasoning_effort_map,
+        supports_usage_in_streaming: true,
+        max_tokens_field: if use_max_tokens {
+            Some("max_tokens".to_string())
+        } else {
+            Some("max_completion_tokens".to_string())
+        },
+        requires_tool_result_name: false,
+        requires_assistant_after_tool_result: false,
+        requires_thinking_as_text: false,
+        thinking_format: if is_zai {
+            "zai".to_string()
+        } else {
+            "openai".to_string()
+        },
+        supports_strict_mode: true,
+        open_router_routing: None,
+    }
 }
 
 // ============================================================================
@@ -281,6 +336,7 @@ struct OpenAIFunctionDef {
 /// Streaming response chunk.
 #[derive(Debug, Deserialize)]
 struct ChatCompletionChunk {
+    id: Option<String>,
     #[serde(default)]
     choices: Vec<ChunkChoice>,
     usage: Option<ChunkUsage>,
@@ -392,6 +448,14 @@ fn normalize_openai_tool_call_id(id: &str) -> String {
     }
 
     normalize_tool_call_id(id, &Provider::OpenAI)
+}
+
+fn has_tool_history(messages: &[Message]) -> bool {
+    messages.iter().any(|msg| match msg {
+        Message::ToolResult(_) => true,
+        Message::Assistant(assistant) => assistant.content.iter().any(|block| block.is_tool_call()),
+        Message::User(_) => false,
+    })
 }
 
 fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
@@ -806,7 +870,11 @@ async fn run_stream(
         .build()?;
 
     let messages = convert_messages(context, model);
-    let tools = context.tools.as_ref().map(|t| convert_tools(t, &compat));
+    let tools = context
+        .tools
+        .as_ref()
+        .map(|t| convert_tools(t, &compat))
+        .or_else(|| has_tool_history(&context.messages).then(Vec::new));
     let clamped_max_tokens = super::common::clamp_openai_max_tokens(options.max_tokens);
 
     // Determine which max tokens field to use
@@ -991,6 +1059,10 @@ async fn run_stream(
 
             let parsed: Result<ChatCompletionChunk, _> = serde_json::from_str(data);
             if let Ok(chunk_data) = parsed {
+                if let Some(chunk_id) = &chunk_data.id {
+                    output.response_id = Some(chunk_id.clone());
+                }
+
                 // Handle usage
                 if let Some(usage) = &chunk_data.usage {
                     apply_openai_usage(&mut output, usage);
@@ -999,13 +1071,11 @@ async fn run_stream(
                 for choice in &chunk_data.choices {
                     // Handle finish reason
                     if let Some(ref reason) = choice.finish_reason {
-                        output.stop_reason = match reason.as_str() {
-                            "stop" | "end" => StopReason::Stop,
-                            "length" => StopReason::Length,
-                            "tool_calls" | "function_call" => StopReason::ToolUse,
-                            "content_filter" => StopReason::Error,
-                            _ => StopReason::Stop,
-                        };
+                        let (stop_reason, error_message) = map_finish_reason(reason);
+                        output.stop_reason = stop_reason;
+                        if let Some(error_message) = error_message {
+                            output.error_message = Some(error_message);
+                        }
                     }
 
                     // Handle usage in choice (fallback for some providers)
@@ -1183,13 +1253,39 @@ async fn run_stream(
         output.content.push(block);
     }
 
-    stream.push(AssistantMessageEvent::Done {
-        reason: output.stop_reason,
-        message: output,
-    });
+    if output.stop_reason == StopReason::Error {
+        if output.error_message.is_none() {
+            output.error_message = Some("Provider returned an error stop reason".to_string());
+        }
+        stream.push(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: output,
+        });
+    } else {
+        stream.push(AssistantMessageEvent::Done {
+            reason: output.stop_reason,
+            message: output,
+        });
+    }
     stream.end(None);
 
     Ok(())
+}
+
+fn map_finish_reason(reason: &str) -> (StopReason, Option<String>) {
+    match reason {
+        "stop" | "end" => (StopReason::Stop, None),
+        "length" => (StopReason::Length, None),
+        "tool_calls" | "function_call" => (StopReason::ToolUse, None),
+        "content_filter" | "network_error" => (
+            StopReason::Error,
+            Some(format!("Provider finish_reason: {}", reason)),
+        ),
+        other => (
+            StopReason::Error,
+            Some(format!("Provider finish_reason: {}", other)),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1259,6 +1355,53 @@ mod tests {
         let compat_with_strict = OpenAICompletionsCompat::default();
         let converted = convert_tools(&tools, &compat_with_strict);
         assert_eq!(converted[0].function.strict, Some(false));
+    }
+
+    #[test]
+    fn test_detect_compat_for_openai_compatible_chutes() {
+        let model = Model::builder()
+            .id("foo")
+            .name("foo")
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAICompatible)
+            .base_url("https://api.chutes.ai/v1")
+            .context_window(128000)
+            .max_tokens(8192)
+            .build()
+            .unwrap();
+
+        let compat = resolve_compat(&model);
+        assert!(!compat.supports_store);
+        assert!(!compat.supports_developer_role);
+        assert_eq!(compat.max_tokens_field.as_deref(), Some("max_tokens"));
+    }
+
+    #[test]
+    fn test_has_tool_history_detects_assistant_tool_calls() {
+        let assistant = AssistantMessage::builder()
+            .api(Api::OpenAICompletions)
+            .provider(Provider::OpenAI)
+            .model("mock-model")
+            .content(vec![ContentBlock::ToolCall(ToolCall::new(
+                "call_1",
+                "lookup",
+                serde_json::json!({}),
+            ))])
+            .stop_reason(StopReason::ToolUse)
+            .build()
+            .unwrap();
+
+        assert!(has_tool_history(&[Message::Assistant(assistant)]));
+    }
+
+    #[test]
+    fn test_map_finish_reason_network_error_is_error() {
+        let (reason, error_message) = map_finish_reason("network_error");
+        assert_eq!(reason, StopReason::Error);
+        assert_eq!(
+            error_message.as_deref(),
+            Some("Provider finish_reason: network_error")
+        );
     }
 
     #[test]

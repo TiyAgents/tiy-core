@@ -127,6 +127,9 @@ pub struct AssistantMessage {
     /// Error message if stop_reason is Error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    /// Provider-specific upstream response or message identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
     /// Unix timestamp in milliseconds.
     pub timestamp: i64,
 }
@@ -181,6 +184,7 @@ pub struct AssistantMessageBuilder {
     usage: crate::types::Usage,
     stop_reason: StopReason,
     error_message: Option<String>,
+    response_id: Option<String>,
 }
 
 impl AssistantMessageBuilder {
@@ -224,6 +228,11 @@ impl AssistantMessageBuilder {
         self
     }
 
+    pub fn response_id(mut self, response_id: impl Into<String>) -> Self {
+        self.response_id = Some(response_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<AssistantMessage, String> {
         let api = self.api.ok_or("api is required")?;
         let provider = self.provider.ok_or("provider is required")?;
@@ -238,6 +247,7 @@ impl AssistantMessageBuilder {
             usage: self.usage,
             stop_reason: self.stop_reason,
             error_message: self.error_message,
+            response_id: self.response_id,
             timestamp: chrono::Utc::now().timestamp_millis(),
         })
     }

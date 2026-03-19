@@ -514,12 +514,14 @@ fn to_claude_code_name(name: &str) -> String {
 }
 
 fn from_claude_code_name(name: &str, tools: Option<&[Tool]>) -> String {
-    tools.and_then(|tools| {
-        tools.iter()
-            .find(|tool| tool.name.eq_ignore_ascii_case(name))
-            .map(|tool| tool.name.clone())
-    })
-    .unwrap_or_else(|| name.to_string())
+    tools
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool.name.eq_ignore_ascii_case(name))
+                .map(|tool| tool.name.clone())
+        })
+        .unwrap_or_else(|| name.to_string())
 }
 
 fn is_oauth_token(api_key: &str) -> bool {
@@ -537,7 +539,10 @@ fn resolve_cache_retention(retention: Option<CacheRetention>) -> CacheRetention 
     }
 }
 
-fn get_cache_control(base_url: &str, retention: Option<CacheRetention>) -> Option<AnthropicCacheControl> {
+fn get_cache_control(
+    base_url: &str,
+    retention: Option<CacheRetention>,
+) -> Option<AnthropicCacheControl> {
     match resolve_cache_retention(retention) {
         CacheRetention::None => None,
         CacheRetention::Short => Some(AnthropicCacheControl {
@@ -581,14 +586,18 @@ fn convert_messages(
                                     text: t.text.clone(),
                                     cache_control: None,
                                 }),
-                                ContentBlock::Image(img) => Some(AnthropicContentBlock::Image {
-                                    source: AnthropicImageSource {
-                                        source_type: "base64".to_string(),
-                                        media_type: img.mime_type.clone(),
-                                        data: img.data.clone(),
-                                    },
-                                    cache_control: None,
-                                }),
+                                ContentBlock::Image(img) => {
+                                    target_model.supports_image().then(|| {
+                                        AnthropicContentBlock::Image {
+                                            source: AnthropicImageSource {
+                                                source_type: "base64".to_string(),
+                                                media_type: img.mime_type.clone(),
+                                                data: img.data.clone(),
+                                            },
+                                            cache_control: None,
+                                        }
+                                    })
+                                }
                                 _ => None,
                             })
                             .collect();
@@ -758,13 +767,16 @@ fn apply_cache_control(messages: &mut [AnthropicMessage], cache_control: Anthrop
             for block in blocks.iter_mut().rev() {
                 match block {
                     AnthropicContentBlock::Text {
-                        cache_control: slot, ..
+                        cache_control: slot,
+                        ..
                     }
                     | AnthropicContentBlock::Image {
-                        cache_control: slot, ..
+                        cache_control: slot,
+                        ..
                     }
                     | AnthropicContentBlock::ToolResult {
-                        cache_control: slot, ..
+                        cache_control: slot,
+                        ..
                     } => {
                         *slot = Some(cache_control);
                         return;
@@ -855,6 +867,7 @@ async fn run_stream(
     );
     let oauth_token = is_oauth_token(&api_key);
     let cache_control = get_cache_control(base, options.cache_retention);
+    let needs_interleaved_beta = thinking.is_some() && output_config.is_none();
 
     let mut output = AssistantMessage::builder()
         .api(Api::AnthropicMessages)
@@ -921,14 +934,23 @@ async fn run_stream(
         headers.insert("x-app", "cli".parse()?);
         headers.insert(
             "anthropic-beta",
-            "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+            if needs_interleaved_beta {
+                "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+            } else {
+                "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+            }
                 .parse()?,
         );
     } else {
         headers.insert("x-api-key", api_key.parse()?);
         headers.insert(
             "anthropic-beta",
-            "fine-grained-tool-streaming-2025-05-14".parse()?,
+            if needs_interleaved_beta {
+                "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+            } else {
+                "fine-grained-tool-streaming-2025-05-14"
+            }
+            .parse()?,
         );
     }
     headers.insert("anthropic-version", "2023-06-01".parse()?);
@@ -1011,6 +1033,7 @@ async fn run_stream(
                 "message_start" => {
                     if let Ok(msg_start) = serde_json::from_str::<MessageStartData>(data) {
                         output.model = msg_start.message.model;
+                        output.response_id = Some(msg_start.message.id);
                         if let Some(usage) = msg_start.message.usage {
                             output.usage.input = usage.input_tokens;
                             output.usage.output = usage.output_tokens;

@@ -268,7 +268,8 @@ async fn test_stream_sends_tool_config_and_multimodal_function_response() {
         json!("Rendered successfully")
     );
     assert_eq!(
-        payload["contents"][0]["parts"][1]["functionResponse"]["parts"][0]["inlineData"]["mimeType"],
+        payload["contents"][0]["parts"][1]["functionResponse"]["parts"][0]["inlineData"]
+            ["mimeType"],
         json!("image/png")
     );
 }

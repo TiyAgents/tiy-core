@@ -37,6 +37,7 @@ fn make_assistant_msg(
         usage: Usage::default(),
         stop_reason,
         error_message: None,
+        response_id: None,
         timestamp: chrono::Utc::now().timestamp_millis(),
     }
 }
