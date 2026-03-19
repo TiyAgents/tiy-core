@@ -1,13 +1,13 @@
 //! Agent implementation with full conversation loop.
 
 use crate::agent::{
-    AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentEvent, AgentHooks, AgentMessage,
-    AgentState, AgentStateSnapshot, AgentTool, AgentToolResult, BeforeToolCallContext,
-    BeforeToolCallFn, BeforeToolCallResult, QueueMode, ThinkingBudgets, ToolExecutionMode,
-    ToolExecutor, ToolUpdateCallback, Transport,
+    AfterToolCallContext, AfterToolCallFn, AgentConfig, AgentContext, AgentEvent, AgentHooks,
+    AgentLoopOptions, AgentMessage, AgentState, AgentStateSnapshot, AgentTool, AgentToolResult,
+    BeforeToolCallContext, BeforeToolCallFn, BeforeToolCallResult, QueueMode, ThinkingBudgets,
+    ToolExecutionMode, ToolExecutor, ToolUpdateCallback, Transport,
 };
 use crate::provider::{get_provider, ArcProtocol};
-use crate::stream::AssistantMessageEventStream;
+use crate::stream::{AssistantMessageEventStream, EventStream};
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use futures::StreamExt;
@@ -21,6 +21,9 @@ const DEFAULT_MAX_TURNS: usize = 25;
 
 /// Subscriber ID for unsubscription.
 pub type SubscriberId = u64;
+
+/// Stream of agent lifecycle events with a final loop result.
+pub type AgentEventStream = EventStream<AgentEvent, Result<Vec<AgentMessage>, AgentError>>;
 
 /// Callback type for event subscribers.
 type SubscriberCallback = Arc<dyn Fn(&AgentEvent) + Send + Sync>;
@@ -81,6 +84,8 @@ pub struct Agent {
     subscribers: Arc<Subscribers>,
     /// Abort flag.
     abort_flag: Arc<AtomicBool>,
+    /// When true, queued steering messages are injected only after the current turn ends.
+    defer_steering_until_turn_end: Arc<AtomicBool>,
     /// API key for the provider.
     api_key: RwLock<Option<String>>,
     /// Session ID for caching.
@@ -110,6 +115,7 @@ impl Agent {
             follow_up_queue: Mutex::new(VecDeque::new()),
             subscribers: Arc::new(Subscribers::new()),
             abort_flag: Arc::new(AtomicBool::new(false)),
+            defer_steering_until_turn_end: Arc::new(AtomicBool::new(false)),
             api_key: RwLock::new(None),
             session_id: RwLock::new(None),
         }
@@ -120,6 +126,36 @@ impl Agent {
         let agent = Self::new();
         agent.set_model(model.clone());
         *agent.config.write() = AgentConfig::new(model);
+        agent
+    }
+
+    /// Create an agent from explicit loop state, config, and runtime options.
+    pub fn from_parts(
+        context: AgentContext,
+        config: AgentConfig,
+        options: AgentLoopOptions,
+    ) -> Self {
+        let agent = Self {
+            state: Arc::new(AgentState::new()),
+            config: RwLock::new(config),
+            provider: RwLock::new(options.provider),
+            hooks: RwLock::new(options.hooks),
+            max_turns: RwLock::new(options.max_turns.unwrap_or(DEFAULT_MAX_TURNS)),
+            steering_queue: Mutex::new(VecDeque::new()),
+            follow_up_queue: Mutex::new(VecDeque::new()),
+            subscribers: Arc::new(Subscribers::new()),
+            abort_flag: Arc::new(AtomicBool::new(false)),
+            defer_steering_until_turn_end: Arc::new(AtomicBool::new(false)),
+            api_key: RwLock::new(options.api_key),
+            session_id: RwLock::new(options.session_id),
+        };
+
+        agent.set_system_prompt(context.system_prompt);
+        agent.replace_messages(context.messages);
+        if let Some(tools) = context.tools {
+            agent.set_tools(tools);
+        }
+
         agent
     }
 
@@ -486,6 +522,8 @@ impl Agent {
         self.state.reset();
         self.steering_queue.lock().clear();
         self.follow_up_queue.lock().clear();
+        self.defer_steering_until_turn_end
+            .store(false, Ordering::SeqCst);
         *self.session_id.write() = None;
     }
 
@@ -554,6 +592,18 @@ impl Agent {
                 }
             }
         }
+    }
+
+    fn dequeue_deferred_steering_messages(&self) -> Vec<AgentMessage> {
+        if !self.defer_steering_until_turn_end.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+
+        let messages = self.dequeue_steering_messages();
+        let still_has_queued = !self.steering_queue.lock().is_empty();
+        self.defer_steering_until_turn_end
+            .store(still_has_queued, Ordering::SeqCst);
+        messages
     }
 
     // ============================================================================
@@ -714,14 +764,20 @@ impl Agent {
             }
 
             // Check for steering messages
-            let steering = self.dequeue_steering_messages();
-            if !steering.is_empty() {
-                // Apply steering: add steering messages to state
-                for steer_msg in steering {
-                    self.state.add_message(steer_msg);
+            if !self.defer_steering_until_turn_end.load(Ordering::SeqCst) {
+                let steering = self.dequeue_steering_messages();
+                if !steering.is_empty() {
+                    // Apply steering: add steering messages to state
+                    for steer_msg in steering {
+                        self.state.add_message(steer_msg.clone());
+                        self.emit(AgentEvent::MessageStart {
+                            message: steer_msg.clone(),
+                        });
+                        self.emit(AgentEvent::MessageEnd { message: steer_msg });
+                    }
+                    // Abort current turn and restart
+                    return Err(AgentError::Other("Steered".to_string()));
                 }
-                // Abort current turn and restart
-                return Err(AgentError::Other("Steered".to_string()));
             }
 
             // Forward stream event to subscribers
@@ -815,9 +871,11 @@ impl Agent {
                 let max_parallel = security.agent.max_parallel_tool_calls;
                 let abort_flag = Arc::clone(&self.abort_flag);
 
+                let mut ordered_results: Vec<Option<ToolResultMessage>> =
+                    vec![None; tool_calls.len()];
                 let mut tool_futures = Vec::new();
 
-                for tc in &tool_calls {
+                for (index, tc) in tool_calls.iter().enumerate() {
                     let tc_id = tc.id.clone();
                     let tc_name = tc.name.clone();
                     let tc_args = tc.arguments.clone();
@@ -832,40 +890,35 @@ impl Agent {
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
                     // Validate tool call before execution
-                    if let Some(result) = validate_tool_call_or_error(
-                        &tc_id, &tc_name, &tc_args, &tool_defs, &security,
-                    ) {
-                        self.emit(AgentEvent::ToolExecutionEnd {
-                            tool_call_id: tc_id.clone(),
-                            tool_name: tc_name.clone(),
-                            result: serde_json::json!({"error": result.text_content()}),
-                            is_error: true,
-                        });
-                        self.state.pending_tool_calls.write().remove(&tc_id);
-                        results.push(result);
-                        continue;
-                    }
-
-                    // beforeToolCall hook
-                    if let Some(result) = run_before_hook(
-                        &before_hook,
-                        assistant_msg,
-                        &tc_clone,
-                        &tc_args,
-                        context,
-                        &tc_id,
-                        &tc_name,
-                    )
-                    .await
+                    if let Some(result) =
+                        validate_tool_call_or_error(&tc_name, &tc_args, &tool_defs, &security)
                     {
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
-                            result: serde_json::json!({"error": result.text_content()}),
+                            result: tool_result_payload(&result),
                             is_error: true,
                         });
                         self.state.pending_tool_calls.write().remove(&tc_id);
-                        results.push(result);
+                        ordered_results[index] =
+                            Some(build_tool_result_message(tc_id, tc_name, result, true));
+                        continue;
+                    }
+
+                    // beforeToolCall hook
+                    if let Some(result) =
+                        run_before_hook(&before_hook, assistant_msg, &tc_clone, &tc_args, context)
+                            .await
+                    {
+                        self.emit(AgentEvent::ToolExecutionEnd {
+                            tool_call_id: tc_id.clone(),
+                            tool_name: tc_name.clone(),
+                            result: tool_result_payload(&result),
+                            is_error: true,
+                        });
+                        self.state.pending_tool_calls.write().remove(&tc_id);
+                        ordered_results[index] =
+                            Some(build_tool_result_message(tc_id, tc_name, result, true));
                         continue;
                     }
 
@@ -877,7 +930,7 @@ impl Agent {
                     let subscribers = Arc::clone(&self.subscribers);
 
                     tool_futures.push(async move {
-                        let (final_content, final_is_error) =
+                        let (final_result, final_is_error) =
                             execute_and_apply_after_hook(ToolExecCtx {
                                 executor: &executor,
                                 after_hook: &after_hook,
@@ -893,7 +946,7 @@ impl Agent {
                             })
                             .await;
 
-                        (tc_id, tc_name, final_content, final_is_error)
+                        (index, tc_id, tc_name, final_result, final_is_error)
                     });
                 }
 
@@ -901,19 +954,29 @@ impl Agent {
                 let mut buffered =
                     futures::stream::iter(tool_futures).buffer_unordered(max_parallel);
 
-                while let Some((tc_id, tc_name, content, is_error)) = buffered.next().await {
-                    let result_json =
-                        serde_json::to_value(&content).unwrap_or(serde_json::Value::Null);
-                    self.emit(AgentEvent::ToolExecutionEnd {
-                        tool_call_id: tc_id.clone(),
-                        tool_name: tc_name.clone(),
-                        result: result_json,
+                while let Some((index, tc_id, tc_name, result, is_error)) = buffered.next().await {
+                    ordered_results[index] = Some(build_tool_result_message(
+                        tc_id.clone(),
+                        tc_name.clone(),
+                        result,
                         is_error,
+                    ));
+                }
+
+                for result in ordered_results.into_iter().flatten() {
+                    self.emit(AgentEvent::ToolExecutionEnd {
+                        tool_call_id: result.tool_call_id.clone(),
+                        tool_name: result.tool_name.clone(),
+                        result: tool_result_message_payload(&result),
+                        is_error: result.is_error,
                     });
 
-                    self.state.pending_tool_calls.write().remove(&tc_id);
+                    self.state
+                        .pending_tool_calls
+                        .write()
+                        .remove(&result.tool_call_id);
 
-                    results.push(ToolResultMessage::new(tc_id, tc_name, content, is_error));
+                    results.push(result);
                 }
             }
             ToolExecutionMode::Sequential => {
@@ -936,45 +999,42 @@ impl Agent {
                     self.state.pending_tool_calls.write().insert(tc_id.clone());
 
                     // Validate tool call before execution
-                    if let Some(result) = validate_tool_call_or_error(
-                        &tc_id, &tc_name, &tc_args, &tool_defs, &security,
-                    ) {
+                    if let Some(result) =
+                        validate_tool_call_or_error(&tc_name, &tc_args, &tool_defs, &security)
+                    {
+                        let result_msg =
+                            build_tool_result_message(tc_id.clone(), tc_name.clone(), result, true);
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
-                            result: serde_json::json!({"error": result.text_content()}),
+                            result: tool_result_message_payload(&result_msg),
                             is_error: true,
                         });
                         self.state.pending_tool_calls.write().remove(&tc_id);
-                        results.push(result);
+                        results.push(result_msg);
                         continue;
                     }
 
                     // beforeToolCall hook
-                    if let Some(result) = run_before_hook(
-                        &before_hook,
-                        assistant_msg,
-                        &tc_clone,
-                        &tc_args,
-                        context,
-                        &tc_id,
-                        &tc_name,
-                    )
-                    .await
+                    if let Some(result) =
+                        run_before_hook(&before_hook, assistant_msg, &tc_clone, &tc_args, context)
+                            .await
                     {
+                        let result_msg =
+                            build_tool_result_message(tc_id.clone(), tc_name.clone(), result, true);
                         self.emit(AgentEvent::ToolExecutionEnd {
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
-                            result: serde_json::json!({"error": result.text_content()}),
+                            result: tool_result_message_payload(&result_msg),
                             is_error: true,
                         });
                         self.state.pending_tool_calls.write().remove(&tc_id);
-                        results.push(result);
+                        results.push(result_msg);
                         continue;
                     }
 
                     let abort_flag = Arc::clone(&self.abort_flag);
-                    let (final_content, final_is_error) =
+                    let (final_result, final_is_error) =
                         execute_and_apply_after_hook(ToolExecCtx {
                             executor: &executor,
                             after_hook: &after_hook,
@@ -990,23 +1050,22 @@ impl Agent {
                         })
                         .await;
 
-                    let result_json =
-                        serde_json::to_value(&final_content).unwrap_or(serde_json::Value::Null);
+                    let result_msg = build_tool_result_message(
+                        tc_id.clone(),
+                        tc_name.clone(),
+                        final_result,
+                        final_is_error,
+                    );
                     self.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
-                        result: result_json,
-                        is_error: final_is_error,
+                        result: tool_result_message_payload(&result_msg),
+                        is_error: result_msg.is_error,
                     });
 
                     self.state.pending_tool_calls.write().remove(&tc_id);
 
-                    results.push(ToolResultMessage::new(
-                        tc_id,
-                        tc_name,
-                        final_content,
-                        final_is_error,
-                    ));
+                    results.push(result_msg);
 
                     // Check for steering messages after each sequential tool
                     let steering = self.dequeue_steering_messages();
@@ -1089,7 +1148,13 @@ impl Agent {
                         for result in &tool_results {
                             let result_msg = AgentMessage::ToolResult(result.clone());
                             self.state.add_message(result_msg.clone());
-                            new_messages.push(result_msg);
+                            new_messages.push(result_msg.clone());
+                            self.emit(AgentEvent::MessageStart {
+                                message: result_msg.clone(),
+                            });
+                            self.emit(AgentEvent::MessageEnd {
+                                message: result_msg,
+                            });
                         }
 
                         self.emit(AgentEvent::TurnEnd {
@@ -1097,11 +1162,29 @@ impl Agent {
                             tool_results,
                         });
 
+                        let deferred_steering = self.dequeue_deferred_steering_messages();
+                        if !deferred_steering.is_empty() {
+                            for msg in deferred_steering {
+                                self.state.add_message(msg.clone());
+                                new_messages.push(msg.clone());
+                                self.emit(AgentEvent::MessageStart {
+                                    message: msg.clone(),
+                                });
+                                self.emit(AgentEvent::MessageEnd { message: msg });
+                            }
+                            turn_count += 1;
+                            continue;
+                        }
+
                         // Check for follow-up messages
                         let follow_ups = self.dequeue_follow_up_messages();
                         for msg in follow_ups {
                             self.state.add_message(msg.clone());
-                            new_messages.push(msg);
+                            new_messages.push(msg.clone());
+                            self.emit(AgentEvent::MessageStart {
+                                message: msg.clone(),
+                            });
+                            self.emit(AgentEvent::MessageEnd { message: msg });
                         }
 
                         turn_count += 1;
@@ -1113,12 +1196,30 @@ impl Agent {
                             tool_results: Vec::new(),
                         });
 
+                        let deferred_steering = self.dequeue_deferred_steering_messages();
+                        if !deferred_steering.is_empty() {
+                            for msg in deferred_steering {
+                                self.state.add_message(msg.clone());
+                                new_messages.push(msg.clone());
+                                self.emit(AgentEvent::MessageStart {
+                                    message: msg.clone(),
+                                });
+                                self.emit(AgentEvent::MessageEnd { message: msg });
+                            }
+                            turn_count += 1;
+                            continue;
+                        }
+
                         // Check for follow-up messages
                         let follow_ups = self.dequeue_follow_up_messages();
                         if !follow_ups.is_empty() {
                             for msg in follow_ups {
                                 self.state.add_message(msg.clone());
-                                new_messages.push(msg);
+                                new_messages.push(msg.clone());
+                                self.emit(AgentEvent::MessageStart {
+                                    message: msg.clone(),
+                                });
+                                self.emit(AgentEvent::MessageEnd { message: msg });
                             }
                             turn_count += 1;
                             continue;
@@ -1145,35 +1246,10 @@ impl Agent {
     // Prompt methods
     // ============================================================================
 
-    /// Send a prompt to the agent.
-    ///
-    /// Uses atomic compare_exchange to prevent TOCTOU race condition.
-    pub async fn prompt(
+    async fn finish_run(
         &self,
-        message: impl Into<AgentMessage>,
+        result: Result<Vec<AgentMessage>, AgentError>,
     ) -> Result<Vec<AgentMessage>, AgentError> {
-        // Atomic CAS: only one caller wins the race
-        if self
-            .state
-            .is_streaming
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err(AgentError::AlreadyStreaming);
-        }
-
-        let message = message.into();
-        self.abort_flag.store(false, Ordering::SeqCst);
-
-        // Add user message to state
-        self.state.add_message(message.clone());
-
-        // Emit start event
-        self.emit(AgentEvent::AgentStart);
-
-        // Run the agent loop
-        let result = self.run_loop().await;
-
         self.state.set_streaming(false);
 
         match result {
@@ -1190,6 +1266,67 @@ impl Agent {
                 Err(e)
             }
         }
+    }
+
+    async fn prompt_messages_locked(
+        &self,
+        messages: Vec<AgentMessage>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        self.abort_flag.store(false, Ordering::SeqCst);
+
+        for message in &messages {
+            self.state.add_message(message.clone());
+        }
+
+        self.emit(AgentEvent::AgentStart);
+        for message in &messages {
+            self.emit(AgentEvent::MessageStart {
+                message: message.clone(),
+            });
+            self.emit(AgentEvent::MessageEnd {
+                message: message.clone(),
+            });
+        }
+
+        let result = self.run_loop().await;
+        self.finish_run(result).await
+    }
+
+    async fn continue_locked(&self) -> Result<Vec<AgentMessage>, AgentError> {
+        self.abort_flag.store(false, Ordering::SeqCst);
+        self.emit(AgentEvent::AgentStart);
+        let result = self.run_loop().await;
+        self.finish_run(result).await
+    }
+
+    /// Send a prompt to the agent.
+    ///
+    /// Uses atomic compare_exchange to prevent TOCTOU race condition.
+    pub async fn prompt(
+        &self,
+        message: impl Into<AgentMessage>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        self.prompt_messages(vec![message.into()]).await
+    }
+
+    /// Send multiple prompt messages as a single loop start.
+    ///
+    /// Uses atomic compare_exchange to prevent TOCTOU race condition.
+    pub async fn prompt_messages(
+        &self,
+        messages: Vec<AgentMessage>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        // Atomic CAS: only one caller wins the race
+        if self
+            .state
+            .is_streaming
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(AgentError::AlreadyStreaming);
+        }
+
+        self.prompt_messages_locked(messages).await
     }
 
     /// Continue from current state (e.g., after adding tool results externally).
@@ -1205,45 +1342,40 @@ impl Agent {
             return Err(AgentError::AlreadyStreaming);
         }
 
-        {
+        let last_is_assistant = {
             let messages = self.state.messages.read();
             if messages.is_empty() {
                 self.state.set_streaming(false);
                 return Err(AgentError::NoMessages);
             }
-            if let Some(AgentMessage::Assistant(_)) = messages.last() {
-                self.state.set_streaming(false);
-                return Err(AgentError::CannotContinueFromAssistant);
+            matches!(messages.last(), Some(AgentMessage::Assistant(_)))
+        };
+
+        if last_is_assistant {
+            let steering = self.dequeue_steering_messages();
+            if !steering.is_empty() {
+                self.defer_steering_until_turn_end
+                    .store(!self.steering_queue.lock().is_empty(), Ordering::SeqCst);
+                return self.prompt_messages_locked(steering).await;
             }
+
+            let follow_ups = self.dequeue_follow_up_messages();
+            if !follow_ups.is_empty() {
+                return self.prompt_messages_locked(follow_ups).await;
+            }
+
+            self.state.set_streaming(false);
+            return Err(AgentError::CannotContinueFromAssistant);
         }
 
-        self.abort_flag.store(false, Ordering::SeqCst);
-
-        self.emit(AgentEvent::AgentStart);
-
-        let result = self.run_loop().await;
-
-        self.state.set_streaming(false);
-
-        match result {
-            Ok(messages) => {
-                self.emit(AgentEvent::AgentEnd {
-                    messages: messages.clone(),
-                });
-                Ok(messages)
-            }
-            Err(e) => {
-                self.emit(AgentEvent::AgentEnd {
-                    messages: Vec::new(),
-                });
-                Err(e)
-            }
-        }
+        self.continue_locked().await
     }
 
     /// Abort current operation.
     pub fn abort(&self) {
         self.abort_flag.store(true, Ordering::SeqCst);
+        self.defer_steering_until_turn_end
+            .store(false, Ordering::SeqCst);
         self.state.set_streaming(false);
         self.clear_all_queues();
     }
@@ -1306,30 +1438,29 @@ async fn wait_for_abort(flag: Arc<AtomicBool>) {
 
 /// Validate a tool call against the tool definitions and security config.
 ///
-/// Returns `Some(ToolResultMessage)` (an error result) if validation fails,
+/// Returns `Some(AgentToolResult)` (an error result) if validation fails,
 /// or `None` if the tool call is valid and execution should proceed.
 /// Skips validation when disabled in config or when no tools are registered.
 fn validate_tool_call_or_error(
-    tc_id: &str,
     tc_name: &str,
     tc_args: &serde_json::Value,
     tool_defs: &[Tool],
     security: &SecurityConfig,
-) -> Option<ToolResultMessage> {
+) -> Option<AgentToolResult> {
     if !security.agent.validate_tool_calls || tool_defs.is_empty() {
         return None;
     }
 
-    let tc = ToolCall::new(tc_id, tc_name, tc_args.clone());
+    let tc = ToolCall::new("validation", tc_name, tc_args.clone());
     match crate::validation::validate_tool_call(tool_defs, &tc) {
         Ok(_) => None,
-        Err(e) => Some(ToolResultMessage::error(tc_id, tc_name, e.to_string())),
+        Err(e) => Some(AgentToolResult::error(e.to_string())),
     }
 }
 
 /// Run the `before_tool_call` hook if set.
 ///
-/// Returns `Some(ToolResultMessage)` (a blocked/error result) if the hook
+/// Returns `Some(AgentToolResult)` (a blocked/error result) if the hook
 /// blocked execution, or `None` if execution should proceed.
 async fn run_before_hook(
     before_hook: &Option<BeforeToolCallFn>,
@@ -1337,9 +1468,7 @@ async fn run_before_hook(
     tc: &ToolCall,
     tc_args: &serde_json::Value,
     context: &Context,
-    tc_id: &str,
-    tc_name: &str,
-) -> Option<ToolResultMessage> {
+) -> Option<AgentToolResult> {
     let hook = before_hook.as_ref()?;
     let ctx = BeforeToolCallContext {
         assistant_message: assistant_msg.clone(),
@@ -1352,10 +1481,41 @@ async fn run_before_hook(
             let reason = result
                 .reason
                 .unwrap_or_else(|| "Tool call blocked by before_tool_call hook".to_string());
-            Some(ToolResultMessage::error(tc_id, tc_name, reason))
+            Some(AgentToolResult::error(reason))
         }
         _ => None,
     }
+}
+
+fn tool_result_payload(result: &AgentToolResult) -> serde_json::Value {
+    serde_json::json!({
+        "content": result.content,
+        "details": result.details,
+    })
+}
+
+fn build_tool_result_message(
+    tool_call_id: impl Into<String>,
+    tool_name: impl Into<String>,
+    result: AgentToolResult,
+    is_error: bool,
+) -> ToolResultMessage {
+    let tool_call_id = tool_call_id.into();
+    let tool_name = tool_name.into();
+    let message = ToolResultMessage::new(tool_call_id, tool_name, result.content, is_error);
+
+    if let Some(details) = result.details {
+        message.with_details(details)
+    } else {
+        message
+    }
+}
+
+fn tool_result_message_payload(result: &ToolResultMessage) -> serde_json::Value {
+    serde_json::json!({
+        "content": result.content,
+        "details": result.details,
+    })
 }
 
 /// Context for a single tool call execution.
@@ -1382,8 +1542,8 @@ struct ToolExecCtx<'a> {
 /// streaming `ToolExecutionUpdate` events, error detection,
 /// and after-hook overrides.
 ///
-/// Returns `(final_content, final_is_error)`.
-async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (Vec<ContentBlock>, bool) {
+/// Returns `(final_result, final_is_error)`.
+async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult, bool) {
     let ToolExecCtx {
         executor,
         after_hook,
@@ -1442,7 +1602,7 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (Vec<ContentBlock
         }
     });
 
-    let mut final_content = tool_result.content.clone();
+    let mut final_result = tool_result.clone();
 
     // Apply after_tool_call hook
     if let Some(ref hook) = after_hook {
@@ -1456,7 +1616,10 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (Vec<ContentBlock
         };
         if let Some(overrides) = hook(after_ctx).await {
             if let Some(content_override) = overrides.content {
-                final_content = content_override;
+                final_result.content = content_override;
+            }
+            if let Some(details_override) = overrides.details {
+                final_result.details = Some(details_override);
             }
             if let Some(error_override) = overrides.is_error {
                 is_error = error_override;
@@ -1464,13 +1627,93 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (Vec<ContentBlock
         }
     }
 
-    (final_content, is_error)
+    (final_result, is_error)
 }
 
 impl Default for Agent {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn agent_event_never_completes(_: &AgentEvent) -> bool {
+    false
+}
+
+fn unreachable_agent_event_result(_: AgentEvent) -> Result<Vec<AgentMessage>, AgentError> {
+    unreachable!("agent event streams complete via EventStream::end")
+}
+
+fn new_agent_event_stream() -> AgentEventStream {
+    EventStream::new(agent_event_never_completes, unreachable_agent_event_result)
+}
+
+/// Run the standalone agent loop starting with prompt messages.
+pub async fn run_agent_loop(
+    prompts: Vec<AgentMessage>,
+    context: AgentContext,
+    config: AgentConfig,
+    options: AgentLoopOptions,
+) -> Result<Vec<AgentMessage>, AgentError> {
+    let agent = Agent::from_parts(context, config, options);
+    agent.prompt_messages(prompts).await
+}
+
+/// Continue the standalone agent loop from an existing context.
+pub async fn run_agent_loop_continue(
+    context: AgentContext,
+    config: AgentConfig,
+    options: AgentLoopOptions,
+) -> Result<Vec<AgentMessage>, AgentError> {
+    let agent = Agent::from_parts(context, config, options);
+    agent.continue_().await
+}
+
+/// Stream standalone agent-loop events while processing prompt messages.
+pub fn agent_loop(
+    prompts: Vec<AgentMessage>,
+    context: AgentContext,
+    config: AgentConfig,
+    options: AgentLoopOptions,
+) -> AgentEventStream {
+    let stream = new_agent_event_stream();
+    let stream_for_task = stream.clone();
+
+    tokio::spawn(async move {
+        let agent = Agent::from_parts(context, config, options);
+        let stream_for_events = stream_for_task.clone();
+        let _unsubscribe = agent.subscribe(move |event| {
+            stream_for_events.push(event.clone());
+        });
+
+        let result = agent.prompt_messages(prompts).await;
+        stream_for_task.end(Some(result));
+    });
+
+    stream
+}
+
+/// Stream standalone agent-loop events while continuing an existing context.
+pub fn agent_loop_continue(
+    context: AgentContext,
+    config: AgentConfig,
+    options: AgentLoopOptions,
+) -> AgentEventStream {
+    let stream = new_agent_event_stream();
+    let stream_for_task = stream.clone();
+
+    tokio::spawn(async move {
+        let agent = Agent::from_parts(context, config, options);
+        let stream_for_events = stream_for_task.clone();
+        let _unsubscribe = agent.subscribe(move |event| {
+            stream_for_events.push(event.clone());
+        });
+
+        let result = agent.continue_().await;
+        stream_for_task.end(Some(result));
+    });
+
+    stream
 }
 
 /// Minimal dummy provider used when a custom `stream_fn` is set.

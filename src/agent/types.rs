@@ -1,5 +1,6 @@
 //! Agent types and configurations.
 
+use crate::provider::ArcProtocol;
 use crate::thinking::ThinkingLevel;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
@@ -484,6 +485,21 @@ pub struct AgentHooks {
     pub on_payload: Option<OnPayloadFn>,
     /// Custom stream function (for proxy backends, etc.).
     pub stream_fn: Option<StreamFn>,
+}
+
+/// Additional options for the standalone agent loop APIs.
+#[derive(Clone, Default)]
+pub struct AgentLoopOptions {
+    /// Aggregated hooks applied to the loop.
+    pub hooks: AgentHooks,
+    /// Explicit provider override. Falls back to the registry when omitted.
+    pub provider: Option<ArcProtocol>,
+    /// Static API key forwarded to provider requests.
+    pub api_key: Option<String>,
+    /// Optional provider session identifier.
+    pub session_id: Option<String>,
+    /// Override for the default max-turn limit.
+    pub max_turns: Option<usize>,
 }
 
 // ============================================================================

@@ -21,7 +21,7 @@ tiy-core is a Rust library that provides a single, provider-agnostic interface f
 - **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 9 delegation providers (OpenAI-Compatible, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProtocol` trait.
 - **Streaming-first** — `EventStream<T, R>` backed by `parking_lot::Mutex<VecDeque>` implements `futures::Stream`. Every provider returns an `AssistantMessageEventStream` with fine-grained deltas: text, thinking, tool call arguments, and completion events.
 - **Tool / Function calling** — Define tools via JSON Schema, validate arguments with the `jsonschema` crate, and execute tools in parallel or sequentially within the agent loop.
-- **Stateful Agent runtime** — `Agent` manages a full conversation loop: stream LLM → detect tool calls → execute tools → re-prompt → repeat. Supports steering (interrupt mid-turn), follow-up queues, event subscription (observer pattern), abort, and configurable max turns (default 25).
+- **Stateful Agent runtime** — `Agent` manages a full conversation loop: stream LLM → detect tool calls → execute tools → re-prompt → repeat. Supports steering (interrupt mid-turn), follow-up queues, event subscription (observer pattern), abort, configurable max turns (default 25), and standalone loop helpers when you want the same runtime without a long-lived `Agent` instance.
 - **Extended Thinking** — Provider-specific thinking/reasoning support with a unified `ThinkingLevel` enum (Off → XHigh). Cross-provider thinking block conversion is handled automatically during message transformation.
 - **Thread-safe by default** — All mutable state uses `parking_lot` locks and `AtomicBool` for non-poisoning concurrency.
 
@@ -184,7 +184,7 @@ async fn main() {
 }
 ```
 
-The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), context pipeline (transformContext / convertToLlm), event subscription, steering & follow-up queues, thinking budgets, custom messages, and more. See the full **[Agent Module Documentation](./src/agent/README.md)** for details.
+The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), context pipeline (transformContext / convertToLlm), preserved tool-result `details` overrides, event subscription with prompt/tool-result lifecycle events, steering & follow-up queues, thinking budgets, standalone loop helpers, custom messages, and more. See the full **[Agent Module Documentation](./src/agent/README.md)** for details.
 
 ## Supported Providers
 

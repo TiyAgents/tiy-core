@@ -121,7 +121,17 @@ let messages = agent.prompt("What is 2 + 2?").await?;
 let msg = AgentMessage::User(UserMessage::text("Hello"));
 let messages = agent.prompt(msg).await?;
 
+// Start a turn with multiple prompt messages
+let messages = agent
+    .prompt_messages(vec![
+        AgentMessage::from("First instruction"),
+        AgentMessage::from("Second instruction"),
+    ])
+    .await?;
+
 // Continue from current state (e.g., after injecting tool results externally)
+// If the last message is Assistant, queued steering/follow-up messages
+// are consumed before returning CannotContinueFromAssistant.
 let messages = agent.continue_().await?;
 
 // Abort current operation
@@ -241,7 +251,7 @@ agent.set_before_tool_call(|ctx: BeforeToolCallContext| async move {
 
 #### afterToolCall
 
-Called after tool execution, before the result is committed. Can override content, details, or is_error.
+Called after tool execution, before the result is committed. Can override content, details, or is_error, and the final `ToolResultMessage.details` preserves the override.
 
 ```rust
 agent.set_after_tool_call(|ctx: AfterToolCallContext| async move {
@@ -364,6 +374,8 @@ unsub();
 
 ```
 AgentStart
+  MessageStart (initial prompt / injected steering / follow-up)
+  MessageEnd
   TurnStart
     MessageUpdate (Start)
     MessageUpdate (TextDelta) ...
@@ -373,6 +385,8 @@ AgentStart
     ToolExecutionStart
       ToolExecutionUpdate ...
     ToolExecutionEnd
+    MessageStart  (tool result)
+    MessageEnd
   TurnEnd { message, tool_results }
   TurnStart          <-- next turn if tool calls or follow-ups
     ...
@@ -383,7 +397,7 @@ AgentEnd { messages }
 
 #### Steering (interruption)
 
-Inject messages mid-run. Checked during stream consumption and between sequential tool calls.
+Inject messages mid-run. Checked during stream consumption and between sequential tool calls. When `continue_()` starts from an assistant tail and consumes queued steering, remaining steering is delivered at turn boundaries according to `QueueMode`.
 
 ```rust
 // From another thread/task while agent is running:
@@ -415,6 +429,39 @@ agent.has_queued_messages();  // true if either queue has items
 ```
 
 ### Configuration
+
+#### Standalone Loop APIs
+
+Use the standalone loop helpers when you want the agent loop without holding a long-lived `Agent` instance.
+
+```rust
+use futures::StreamExt;
+use tiy_core::agent::{
+    agent_loop, run_agent_loop, AgentConfig, AgentContext, AgentLoopOptions,
+};
+
+let context = AgentContext::default();
+let config = AgentConfig::new(model);
+let options = AgentLoopOptions::default();
+
+let messages = run_agent_loop(
+    vec![AgentMessage::from("hello")],
+    context.clone(),
+    config.clone(),
+    options.clone(),
+).await?;
+
+let mut events = agent_loop(
+    vec![AgentMessage::from("hello again")],
+    context,
+    config,
+    options,
+);
+while let Some(event) = events.next().await {
+    println!("{:?}", event);
+}
+let result = events.result().await?;
+```
 
 #### Thinking Budgets
 
@@ -693,9 +740,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `AgentEnd` | `messages: Vec<AgentMessage>` | Loop completes (success or error) |
 | `TurnStart` | -- | Each LLM call begins |
 | `TurnEnd` | `message, tool_results` | LLM call + tools complete |
-| `MessageStart` | `message` | Finalized assistant message committed |
+| `MessageStart` | `message` | Prompt, injected queue message, finalized assistant message, or tool result committed |
 | `MessageUpdate` | `message, assistant_event` | Streaming deltas (text, thinking, tool call) |
-| `MessageEnd` | `message` | After MessageStart |
+| `MessageEnd` | `message` | After `MessageStart` for the same committed message |
 | `ToolExecutionStart` | `tool_call_id, tool_name, args` | Before tool runs |
 | `ToolExecutionUpdate` | `tool_call_id, tool_name, partial_result` | Streaming tool progress |
-| `ToolExecutionEnd` | `tool_call_id, tool_name, result, is_error` | Tool finished |
+| `ToolExecutionEnd` | `tool_call_id, tool_name, result, is_error` | Tool finished (`result` includes `content` and optional `details`) |

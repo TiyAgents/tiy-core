@@ -2,11 +2,13 @@
 //! custom messages, thinking budgets, transport, dynamic API key, etc.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::json;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
+use std::time::Duration;
 use tiy_core::agent::*;
 use tiy_core::provider::{ArcProtocol, LLMProtocol};
 use tiy_core::stream::AssistantMessageEventStream;
@@ -117,6 +119,17 @@ fn make_tool_call_message(
         .content(vec![ContentBlock::ToolCall(ToolCall::new(
             tool_id, tool_name, args,
         ))])
+        .stop_reason(StopReason::ToolUse)
+        .build()
+        .unwrap()
+}
+
+fn make_multi_tool_call_message(tool_calls: Vec<ToolCall>) -> AssistantMessage {
+    AssistantMessage::builder()
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .model("mock-model")
+        .content(tool_calls.into_iter().map(ContentBlock::ToolCall).collect())
         .stop_reason(StopReason::ToolUse)
         .build()
         .unwrap()
@@ -555,6 +568,305 @@ async fn test_after_tool_call_override_is_error() {
         tool_results[0].is_error,
         "afterToolCall should have overridden is_error to true"
     );
+}
+
+#[tokio::test]
+async fn test_after_tool_call_overrides_details() {
+    let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
+    let final_response = make_assistant_message("Done");
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.set_tools(vec![AgentTool::new(
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({"type": "object"}),
+    )]);
+
+    agent.set_after_tool_call(move |_ctx| async move {
+        Some(AfterToolCallResult {
+            content: None,
+            details: Some(json!({"audited": true, "source": "after"})),
+            is_error: None,
+        })
+    });
+
+    agent.set_tool_executor_simple(
+        |_name: &str, _id: &str, _args: &serde_json::Value| async move {
+            AgentToolResult {
+                content: vec![ContentBlock::Text(TextContent::new("content"))],
+                details: Some(json!({"source": "executor"})),
+            }
+        },
+    );
+
+    let result = agent.prompt("go").await;
+    assert!(result.is_ok());
+
+    let messages = result.unwrap();
+    let tool_result = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::ToolResult(tr) => Some(tr),
+            _ => None,
+        })
+        .expect("tool result should exist");
+
+    assert_eq!(
+        tool_result.details.as_ref(),
+        Some(&json!({"audited": true, "source": "after"}))
+    );
+}
+
+#[tokio::test]
+async fn test_parallel_tool_results_preserve_assistant_order() {
+    let tool_response = make_multi_tool_call_message(vec![
+        ToolCall::new("call_1", "my_tool", json!({"value": 1})),
+        ToolCall::new("call_2", "my_tool", json!({"value": 2})),
+    ]);
+    let final_response = make_assistant_message("Done");
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.set_tools(vec![AgentTool::new(
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({
+            "type": "object",
+            "properties": {
+                "value": {"type": "integer"}
+            },
+            "required": ["value"]
+        }),
+    )]);
+
+    let event_order = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let event_order_capture = Arc::clone(&event_order);
+    let _unsub = agent.subscribe(move |event| {
+        if let AgentEvent::ToolExecutionEnd { tool_call_id, .. } = event {
+            event_order_capture.lock().push(tool_call_id.clone());
+        }
+    });
+
+    agent.set_tool_executor(
+        |_name: &str,
+         id: &str,
+         _args: &serde_json::Value,
+         _update_cb: Option<ToolUpdateCallback>| {
+            let id = id.to_string();
+            async move {
+                if id == "call_1" {
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                AgentToolResult::text(format!("done:{id}"))
+            }
+        },
+    );
+
+    let result = agent.prompt("go").await;
+    assert!(result.is_ok());
+
+    let messages = result.unwrap();
+    let tool_result_ids: Vec<_> = messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentMessage::ToolResult(tr) => Some(tr.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(tool_result_ids, vec!["call_1", "call_2"]);
+    assert_eq!(*event_order.lock(), vec!["call_1", "call_2"]);
+}
+
+#[tokio::test]
+async fn test_continue_from_assistant_tail_processes_follow_up_queue() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message(
+        "Processed follow-up",
+    )]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.replace_messages(vec![
+        AgentMessage::User(UserMessage::text("Initial")),
+        AgentMessage::Assistant(make_assistant_message("Initial response")),
+    ]);
+    agent.follow_up(AgentMessage::User(UserMessage::text("Queued follow-up")));
+
+    let result = agent.continue_().await;
+    assert!(result.is_ok());
+
+    let snapshot = agent.snapshot();
+    let roles: Vec<_> = snapshot
+        .messages
+        .iter()
+        .map(|message| match message {
+            AgentMessage::User(_) => "user",
+            AgentMessage::Assistant(_) => "assistant",
+            AgentMessage::ToolResult(_) => "tool_result",
+            AgentMessage::Custom { .. } => "custom",
+        })
+        .collect();
+
+    assert!(roles.ends_with(&["user", "assistant"]));
+    assert!(snapshot.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::User(user) if matches!(&user.content, UserContent::Text(text) if text == "Queued follow-up")
+    )));
+}
+
+#[tokio::test]
+async fn test_continue_from_assistant_tail_preserves_one_at_a_time_steering() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![
+        make_assistant_message("Processed 1"),
+        make_assistant_message("Processed 2"),
+    ]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.set_steering_mode(QueueMode::OneAtATime);
+    agent.replace_messages(vec![
+        AgentMessage::User(UserMessage::text("Initial")),
+        AgentMessage::Assistant(make_assistant_message("Initial response")),
+    ]);
+    agent.steer(AgentMessage::User(UserMessage::text("Steering 1")));
+    agent.steer(AgentMessage::User(UserMessage::text("Steering 2")));
+
+    let result = agent.continue_().await;
+    assert!(result.is_ok());
+
+    let snapshot = agent.snapshot();
+    let trailing_roles: Vec<_> = snapshot
+        .messages
+        .iter()
+        .rev()
+        .take(4)
+        .map(|message| match message {
+            AgentMessage::User(_) => "user",
+            AgentMessage::Assistant(_) => "assistant",
+            AgentMessage::ToolResult(_) => "tool_result",
+            AgentMessage::Custom { .. } => "custom",
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    assert_eq!(
+        trailing_roles,
+        vec!["user", "assistant", "user", "assistant"]
+    );
+}
+
+#[tokio::test]
+async fn test_prompt_and_tool_results_emit_message_lifecycle_events() {
+    let tool_response = make_tool_call_message("my_tool", "call_1", json!({}));
+    let final_response = make_assistant_message("Done");
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![tool_response, final_response]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.set_tools(vec![AgentTool::new(
+        "my_tool",
+        "My Tool",
+        "desc",
+        json!({"type": "object"}),
+    )]);
+
+    let started_roles = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ended_tool_results = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let started_roles_capture = Arc::clone(&started_roles);
+    let ended_tool_results_capture = Arc::clone(&ended_tool_results);
+    let _unsub = agent.subscribe(move |event| match event {
+        AgentEvent::MessageStart { message } => {
+            started_roles_capture.lock().push(match message {
+                AgentMessage::User(_) => "user".to_string(),
+                AgentMessage::Assistant(_) => "assistant".to_string(),
+                AgentMessage::ToolResult(_) => "tool_result".to_string(),
+                AgentMessage::Custom { .. } => "custom".to_string(),
+            });
+        }
+        AgentEvent::MessageEnd {
+            message: AgentMessage::ToolResult(tool_result),
+        } => {
+            ended_tool_results_capture
+                .lock()
+                .push(tool_result.tool_call_id.clone());
+        }
+        _ => {}
+    });
+
+    agent.set_tool_executor_simple(
+        |_name: &str, _id: &str, _args: &serde_json::Value| async move {
+            AgentToolResult::text("tool result")
+        },
+    );
+
+    let result = agent.prompt("go").await;
+    assert!(result.is_ok());
+
+    assert!(started_roles.lock().contains(&"user".to_string()));
+    assert_eq!(*ended_tool_results.lock(), vec!["call_1"]);
+}
+
+#[tokio::test]
+async fn test_standalone_agent_loop_apis_work() {
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![make_assistant_message("Hi!")]));
+    let context = AgentContext {
+        system_prompt: "You are helpful.".to_string(),
+        messages: Vec::new(),
+        tools: None,
+    };
+    let config = AgentConfig::new(make_model());
+    let options = AgentLoopOptions {
+        provider: Some(provider.clone()),
+        ..Default::default()
+    };
+
+    let result = run_agent_loop(
+        vec![AgentMessage::User(UserMessage::text("Hello"))],
+        context.clone(),
+        config.clone(),
+        options.clone(),
+    )
+    .await;
+    assert!(result.is_ok());
+    assert!(result
+        .unwrap()
+        .iter()
+        .any(|message| matches!(message, AgentMessage::Assistant(_))));
+
+    let mut stream = agent_loop(
+        vec![AgentMessage::User(UserMessage::text("Hello again"))],
+        context,
+        config,
+        options,
+    );
+    let mut event_types = Vec::new();
+    while let Some(event) = stream.next().await {
+        event_types.push(match event {
+            AgentEvent::AgentStart => "agent_start".to_string(),
+            AgentEvent::AgentEnd { .. } => "agent_end".to_string(),
+            AgentEvent::TurnStart => "turn_start".to_string(),
+            AgentEvent::TurnEnd { .. } => "turn_end".to_string(),
+            AgentEvent::MessageStart { .. } => "message_start".to_string(),
+            AgentEvent::MessageUpdate { .. } => "message_update".to_string(),
+            AgentEvent::MessageEnd { .. } => "message_end".to_string(),
+            AgentEvent::ToolExecutionStart { .. } => "tool_execution_start".to_string(),
+            AgentEvent::ToolExecutionUpdate { .. } => "tool_execution_update".to_string(),
+            AgentEvent::ToolExecutionEnd { .. } => "tool_execution_end".to_string(),
+        });
+    }
+    let stream_result = stream.result().await;
+    assert!(stream_result.is_ok());
+    assert!(event_types.contains(&"agent_start".to_string()));
+    assert!(event_types.contains(&"agent_end".to_string()));
 }
 
 // ============================================================================
