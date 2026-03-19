@@ -270,7 +270,10 @@ mod tests {
         assert_eq!(first.canonical_model_key, "openai:gpt-5.4-nano");
         assert_eq!(first.aliases, vec!["openai/gpt-5.4-nano".to_string()]);
         assert_eq!(first.display_name.as_deref(), Some("OpenAI: GPT-5.4 Nano"));
-        assert_eq!(first.description.as_deref(), Some("Fast small GPT-5.4 variant"));
+        assert_eq!(
+            first.description.as_deref(),
+            Some("Fast small GPT-5.4 variant")
+        );
         assert_eq!(first.context_window, Some(400000));
         assert_eq!(first.max_output_tokens, Some(128000));
         assert_eq!(
