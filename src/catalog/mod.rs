@@ -473,6 +473,40 @@ pub async fn list_models_with_enrichment(
     })
 }
 
+/// Enrich a manually provided model ID using the same metadata snapshot used for
+/// fetched provider models.
+///
+/// This is useful when an application allows users to type a model ID directly,
+/// or when the upstream provider does not expose a list-models endpoint.
+///
+/// The returned [`UnifiedModelInfo`] preserves the caller-supplied `raw_id`.
+/// Metadata fields are filled from the provided [`CatalogMetadataStore`] when a
+/// matching snapshot entry is found.
+pub fn enrich_manual_model(
+    provider: Provider,
+    raw_id: impl Into<String>,
+    display_name: Option<String>,
+    metadata_store: &dyn CatalogMetadataStore,
+) -> UnifiedModelInfo {
+    let raw_id = raw_id.into();
+    enrich_model(
+        ProviderExtractedModel {
+            provider,
+            raw_id,
+            display_name,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        metadata_store,
+    )
+}
+
 /// Load a local snapshot path into a file-backed metadata store, if it exists.
 pub fn load_catalog_metadata_store(
     snapshot_path: impl AsRef<Path>,

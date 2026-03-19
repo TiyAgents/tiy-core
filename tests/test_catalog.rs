@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use tiy_core::catalog::{
-    list_models, list_models_with_enrichment, CatalogModelMetadata, FetchModelsRequest,
-    InMemoryCatalogMetadataStore, ModelCatalogError,
+    enrich_manual_model, list_models, list_models_with_enrichment, CatalogModelMetadata,
+    FetchModelsRequest, InMemoryCatalogMetadataStore, ModelCatalogError,
 };
 use tiy_core::types::Provider;
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
@@ -147,4 +147,50 @@ async fn test_list_models_rejects_unsupported_provider() {
         }
         other => panic!("unexpected error: {other}"),
     }
+}
+
+#[test]
+fn test_enrich_manual_model_uses_snapshot_metadata() {
+    let store = InMemoryCatalogMetadataStore::new(vec![CatalogModelMetadata {
+        canonical_model_key: "openai:gpt-4.1".to_string(),
+        aliases: vec!["openai/gpt-4.1".to_string()],
+        display_name: Some("GPT-4.1".to_string()),
+        description: Some("General-purpose flagship".to_string()),
+        context_window: Some(1_000_000),
+        max_output_tokens: Some(32_768),
+        max_input_tokens: Some(1_000_000),
+        modalities: Some(vec!["text".to_string(), "image".to_string()]),
+        capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+        pricing: Some(json!({"input": "2.0", "output": "8.0"})),
+        source: "openrouter".to_string(),
+        raw: json!({}),
+    }]);
+
+    let model = enrich_manual_model(Provider::OpenAI, "openai/gpt-4.1", None, &store);
+
+    assert_eq!(model.raw_id, "openai/gpt-4.1");
+    assert_eq!(model.canonical_model_key.as_deref(), Some("openai:gpt-4.1"));
+    assert_eq!(model.display_name.as_deref(), Some("GPT-4.1"));
+    assert_eq!(model.context_window, Some(1_000_000));
+    assert_eq!(model.max_output_tokens, Some(32_768));
+    assert_eq!(model.match_confidence, Some(1.0));
+    assert_eq!(model.metadata_sources, vec!["openrouter".to_string()]);
+}
+
+#[test]
+fn test_enrich_manual_model_preserves_manual_display_name_without_snapshot_match() {
+    let store = InMemoryCatalogMetadataStore::new(vec![]);
+
+    let model = enrich_manual_model(
+        Provider::OpenAI,
+        "custom-model-id",
+        Some("My Custom Model".to_string()),
+        &store,
+    );
+
+    assert_eq!(model.raw_id, "custom-model-id");
+    assert_eq!(model.display_name.as_deref(), Some("My Custom Model"));
+    assert!(model.canonical_model_key.is_none());
+    assert!(model.context_window.is_none());
+    assert!(model.metadata_sources.is_empty());
 }

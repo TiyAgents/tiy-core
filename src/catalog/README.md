@@ -22,6 +22,10 @@ Applications should display the enriched data, but actual inference requests mus
 - `list_models_with_enrichment(request, store)`
   Fetch native provider models and merge them with metadata from a `CatalogMetadataStore`.
 
+- `enrich_manual_model(provider, raw_id, display_name, store)`
+  Enrich a manually entered model ID from a `CatalogMetadataStore` without
+  calling the provider's list-models endpoint first.
+
 - `FileCatalogMetadataStore::load(path)`
   Load a local `catalog.json` snapshot into a file-backed metadata store.
 
@@ -92,8 +96,8 @@ The repository workflow for this is:
 ```rust,no_run
 use std::path::PathBuf;
 use tiy_core::catalog::{
-    list_models_with_enrichment, load_catalog_metadata_store, refresh_catalog_snapshot,
-    CatalogRemoteConfig, FetchModelsRequest,
+    list_models_with_enrichment, load_catalog_metadata_store,
+    refresh_catalog_snapshot, CatalogRemoteConfig, FetchModelsRequest,
 };
 use tiy_core::Provider;
 
@@ -116,6 +120,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Manual Model ID Enrichment
+
+Applications sometimes need metadata enrichment even when no upstream
+list-models API is available, or when a user types a model ID directly into the
+UI.
+
+In that case, skip `list_models_with_enrichment(...)` and call
+`enrich_manual_model(...)` against the same local snapshot store:
+
+```rust,no_run
+use std::path::PathBuf;
+use tiy_core::catalog::{enrich_manual_model, load_catalog_metadata_store};
+use tiy_core::Provider;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let snapshot_path = PathBuf::from("/path/to/cache/catalog.json");
+    let store = load_catalog_metadata_store(&snapshot_path)?;
+
+    if let Some(store) = store.as_ref() {
+        let model = enrich_manual_model(
+            Provider::OpenAI,
+            "openai/gpt-4.1",
+            None,
+            store,
+        );
+
+        println!("raw_id = {}", model.raw_id);
+        println!("display_name = {:?}", model.display_name);
+        println!("context_window = {:?}", model.context_window);
+    }
+
+    Ok(())
+}
+```
+
+Recommended application behavior:
+
+1. Use enriched fields for display if a snapshot match is found.
+2. Continue to persist and send the user-entered `raw_id` for inference calls.
+3. If no snapshot match is found, treat the model as usable but partially
+   enriched.
 
 ## Smoke Check
 
