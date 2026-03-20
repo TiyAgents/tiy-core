@@ -106,7 +106,7 @@ fn success_sse() -> String {
 }
 
 #[tokio::test]
-async fn test_same_model_replays_reasoning_item_from_signature() {
+async fn test_same_model_strips_server_ids_when_store_is_false() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -172,15 +172,25 @@ async fn test_same_model_replays_reasoning_item_from_signature() {
         .as_array()
         .expect("input should be an array");
 
-    assert!(input.iter().any(|item| {
-        item.get("type") == Some(&json!("reasoning")) && item.get("id") == Some(&json!("rs_123"))
-    }));
+    // With store=false, reasoning items should NOT be replayed (server won't
+    // recognize the IDs since they were never persisted).
+    assert!(
+        !input.iter().any(|item| {
+            item.get("type") == Some(&json!("reasoning"))
+                && item.get("id") == Some(&json!("rs_123"))
+        }),
+        "reasoning item should be stripped when store=false"
+    );
 
     let function_call = input
         .iter()
         .find(|item| item.get("type") == Some(&json!("function_call")))
         .expect("function_call item should exist");
-    assert_eq!(function_call.get("id"), Some(&json!("fc_123")));
+    // function_call should not have server-side "id" when store=false
+    assert!(
+        function_call.get("id").is_none(),
+        "function_call should not have server-side id when store=false"
+    );
     assert_eq!(function_call.get("call_id"), Some(&json!("call_123")));
 }
 

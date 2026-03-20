@@ -317,6 +317,14 @@ struct InputTokensDetails {
 // ============================================================================
 
 fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::Value> {
+    // When `store` is false (the current default), server-side item IDs are not
+    // persisted.  Referencing them in subsequent requests causes 400 errors like
+    // "Item with id 'rs_...' not found".  We strip all server-side IDs from the
+    // replayed conversation to avoid this.
+    //
+    // TODO: if `store` is ever made configurable, pass the flag in and
+    //       conditionally preserve IDs when `store == true`.
+    let strip_server_ids = true;
     let mut items = Vec::new();
     let transformed = transform_messages(&context.messages, target_model, None);
 
@@ -363,7 +371,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                 for block in &assistant_msg.content {
                     match block {
                         ContentBlock::Thinking(thinking) => {
-                            if is_same_model {
+                            if is_same_model && !strip_server_ids {
                                 if let Some(signature) = &thinking.thinking_signature {
                                     if let Ok(reasoning_item) =
                                         serde_json::from_str::<serde_json::Value>(signature)
@@ -387,12 +395,14 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                                 "status": "completed",
                             });
 
-                            if let Some(text_signature) =
-                                parse_text_signature(text_block.text_signature.as_deref())
-                            {
-                                message["id"] = serde_json::Value::String(text_signature.id);
-                                if let Some(phase) = text_signature.phase {
-                                    message["phase"] = serde_json::Value::String(phase);
+                            if !strip_server_ids {
+                                if let Some(text_signature) =
+                                    parse_text_signature(text_block.text_signature.as_deref())
+                                {
+                                    message["id"] = serde_json::Value::String(text_signature.id);
+                                    if let Some(phase) = text_signature.phase {
+                                        message["phase"] = serde_json::Value::String(phase);
+                                    }
                                 }
                             }
 
@@ -416,7 +426,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                                 "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
                             });
 
-                            if is_same_model || !item_id.starts_with("fc_") {
+                            if !strip_server_ids && (is_same_model || !item_id.starts_with("fc_")) {
                                 function_call["id"] = serde_json::Value::String(item_id);
                             }
 
@@ -1303,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_messages_preserves_text_signature_for_same_model() {
+    fn test_convert_messages_strips_server_ids_when_store_is_false() {
         let model = Model::builder()
             .id("gpt-5")
             .name("GPT-5")
@@ -1330,8 +1340,10 @@ mod tests {
         let items = convert_messages(&context, &model);
 
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["id"], "msg_123");
-        assert_eq!(items[0]["phase"], "commentary");
+        // With store=false (default), server-side IDs should be stripped
+        // to avoid "Item not found" errors.
+        assert!(items[0].get("id").is_none() || items[0]["id"].is_null());
+        assert!(items[0].get("phase").is_none() || items[0]["phase"].is_null());
     }
 
     #[test]
