@@ -75,9 +75,23 @@ Common utilities shared across all protocol implementations:
 | `apply_on_payload` | Serialize request body, optionally passing through `on_payload` hook for mutation |
 | `validate_url_or_error` | Validate base URL against `SecurityConfig.url` policy (SSRF protection) |
 | `apply_custom_headers` | Inject custom headers, skipping protected ones per `HeaderPolicy` |
+| `send_request_with_retry` | Retry transient HTTP failures with exponential backoff and `Retry-After` support |
 | `handle_error_response` | Read error body (bounded), log, emit `Error` event |
+| `emit_terminal_error` | Convert transport/protocol failures into a terminal `Error` event and close the stream |
 | `check_sse_buffer_overflow` | Abort stream if SSE line buffer exceeds configured limit |
 | `debug_preview` | Truncate body string for debug logging |
+
+### Retry Semantics
+
+Protocol implementations perform transparent retries only before any semantic assistant output has been emitted. This covers transient request/setup failures such as:
+
+- HTTP `408`, `429`, `500`, `502`, `503`, `504`
+- `reqwest::Error` where `is_timeout()` or `is_connect()` is `true`
+- pre-semantic streamed-body interruptions reported as transport/body errors
+
+When the provider sends `Retry-After`, the retry delay honours that header. `max_retry_delay_ms` caps the delay, while `Some(0)` disables the cap.
+
+Once a stream has emitted semantic events such as text deltas, thinking deltas, or tool-call deltas, the protocol layer no longer retries transparently. Any later transport failure is emitted as a terminal `Error` event so upper layers can decide how to recover without risking duplicate output or repeated tool side effects.
 
 ## File Structure
 
@@ -187,9 +201,23 @@ pub trait LLMProtocol: Send + Sync {
 | `apply_on_payload` | 序列化请求体，可选通过 `on_payload` 钩子进行修改 |
 | `validate_url_or_error` | 根据 `SecurityConfig.url` 策略验证 URL（SSRF 防护） |
 | `apply_custom_headers` | 注入自定义请求头，跳过受保护的头（按 `HeaderPolicy`） |
+| `send_request_with_retry` | 对瞬时 HTTP 失败执行指数退避重试，并支持 `Retry-After` |
 | `handle_error_response` | 读取错误响应体（有上限），记录日志，发出 `Error` 事件 |
+| `emit_terminal_error` | 将传输/协议失败转换为终止 `Error` 事件并关闭流 |
 | `check_sse_buffer_overflow` | 当 SSE 行缓冲区超出限制时中止流 |
 | `debug_preview` | 截断请求体字符串用于调试日志 |
+
+### 重试语义
+
+协议层只会在“尚未发出任何有语义的 assistant 输出”之前进行透明重试。覆盖的典型场景包括：
+
+- HTTP `408`、`429`、`500`、`502`、`503`、`504`
+- `reqwest::Error` 中 `is_timeout()` 或 `is_connect()` 为 `true`
+- 在首个语义事件之前发生的 streamed-body/transport 抖动
+
+如果 provider 返回了 `Retry-After`，协议层会优先遵守它。`max_retry_delay_ms` 用于限制退避上限，`Some(0)` 表示关闭这个上限。
+
+一旦流已经发出了文本增量、thinking 增量或 tool call 增量等语义事件，协议层就不再做透明重试。此后若发生传输错误，会直接发出终止 `Error` 事件，让上层显式决定如何恢复，从而避免重复输出或重复执行工具副作用。
 
 ## 文件结构
 

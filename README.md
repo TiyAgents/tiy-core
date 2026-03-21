@@ -235,6 +235,16 @@ Keys are resolved in priority order:
 
 Base URLs follow the same pattern: `StreamOptions.base_url` > `model.base_url` > provider's `DEFAULT_BASE_URL`.
 
+## Request Retry Behavior
+
+Protocol-layer retries are enabled for transient failures before the stream has emitted any semantic output. By default, the library retries `408`, `429`, `500`, `502`, `503`, and `504`, as well as transport errors reported by `reqwest` as `is_timeout()` or `is_connect()`.
+
+When a provider returns `Retry-After`, the retry delay respects that value. `max_retry_delay_ms` acts as a cap for server-requested or computed backoff delays, and `Some(0)` disables the cap entirely.
+
+Once a stream has already emitted semantic events such as text deltas, thinking deltas, or tool-call deltas, the protocol layer stops retrying transparently and terminates the stream with an error instead. This avoids duplicating partial output or replaying tool side effects.
+
+You can control retries per request using `StreamOptions.max_retries` and `StreamOptions.max_retry_delay_ms`, or at the Agent level using `Agent::set_max_retries` and `Agent::set_max_retry_delay_ms`.
+
 ## Security Configuration
 
 tiy-core ships with a centralized `SecurityConfig` struct that controls all security limits and policies. Every field has a safe default value — you only need to override what you want to change.

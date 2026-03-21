@@ -62,6 +62,9 @@ async-trait = "0.1"
 # URL parsing & validation
 url = "2"
 
+# HTTP date parsing (Retry-After header)
+httpdate = "1"
+
 # Hashing
 sha2 = "0.10"
 

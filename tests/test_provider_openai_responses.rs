@@ -185,6 +185,117 @@ async fn test_stream_simple_text_response() {
 }
 
 #[tokio::test]
+async fn test_stream_retries_retryable_http_status_before_streaming() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        (
+            "response.output_item.added",
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_retry",
+                    "role": "assistant",
+                    "content": []
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Retried successfully"
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_item.done",
+            &json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_retry"
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.completed",
+            &json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_retry",
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 15
+                    },
+                    "output": [
+                        {"type": "message", "id": "item_retry"}
+                    ]
+                }
+            })
+            .to_string(),
+        ),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("retry-after", "0")
+                .set_body_string("try again"),
+        )
+        .with_priority(1)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let mut options = make_options("test-key");
+    options.max_retries = Some(1);
+    options.max_retry_delay_ms = Some(10);
+
+    let mut stream = provider.stream(&model, &context, options);
+    while stream.next().await.is_some() {}
+
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "Retried successfully");
+
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected one retry after the initial 503"
+    );
+}
+
+#[tokio::test]
 async fn test_stream_clamps_small_max_output_tokens_to_minimum() {
     let server = MockServer::start().await;
 

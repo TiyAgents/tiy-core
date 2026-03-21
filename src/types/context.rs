@@ -292,6 +292,10 @@ pub struct StreamOptions {
     /// Optional OpenAI Responses service tier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<OpenAIServiceTier>,
+    /// Maximum number of retries for transient HTTP errors (429, 5xx, timeout,
+    /// connection failures). `None` = default (2). Set to `Some(0)` to disable retries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
     /// Maximum retry delay in milliseconds. `None` = use provider default.
     /// Set to `Some(0)` to disable the cap entirely.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,6 +331,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("metadata", &self.metadata)
             .field("tool_choice", &self.tool_choice)
             .field("service_tier", &self.service_tier)
+            .field("max_retries", &self.max_retries)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
             .field(
                 "cancel_token",
@@ -351,6 +356,7 @@ impl PartialEq for StreamOptions {
             && self.metadata == other.metadata
             && self.tool_choice == other.tool_choice
             && self.service_tier == other.service_tier
+            && self.max_retries == other.max_retries
             && self.max_retry_delay_ms == other.max_retry_delay_ms
     }
 }
@@ -371,6 +377,7 @@ impl Default for StreamOptions {
             metadata: None,
             tool_choice: None,
             service_tier: None,
+            max_retries: None,
             max_retry_delay_ms: None,
             cancel_token: None,
         }

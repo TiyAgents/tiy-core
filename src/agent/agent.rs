@@ -512,6 +512,16 @@ impl Agent {
         self.config.read().transport
     }
 
+    /// Set the maximum number of retries for transient HTTP or pre-stream transport failures.
+    pub fn set_max_retries(&self, retries: Option<u32>) {
+        self.config.write().max_retries = retries;
+    }
+
+    /// Get the current max retry count.
+    pub fn max_retries(&self) -> Option<u32> {
+        self.config.read().max_retries
+    }
+
     /// Set the maximum retry delay in milliseconds.
     ///
     /// If the server requests a retry delay exceeding this value, the request
@@ -827,6 +837,7 @@ impl Agent {
         let model = self.config.read().model.clone();
         let on_payload = self.hooks.read().on_payload.clone();
         let transport = self.config.read().transport;
+        let max_retries = self.config.read().max_retries;
         let max_retry_delay_ms = self.config.read().max_retry_delay_ms;
         let session_id = self.session_id.read().clone();
         let abort_signal = self.current_abort_signal();
@@ -846,6 +857,7 @@ impl Agent {
             session_id,
             on_payload,
             transport: Some(transport),
+            max_retries,
             max_retry_delay_ms,
             cancel_token: Some(abort_signal),
             ..Default::default()

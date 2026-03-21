@@ -354,6 +354,20 @@ fn test_transport_setter_getter() {
 }
 
 // ============================================================================
+// MaxRetries
+// ============================================================================
+
+#[test]
+fn test_max_retries_setter_getter() {
+    let agent = Agent::new();
+    assert_eq!(agent.max_retries(), None);
+    agent.set_max_retries(Some(3));
+    assert_eq!(agent.max_retries(), Some(3));
+    agent.set_max_retries(Some(0));
+    assert_eq!(agent.max_retries(), Some(0));
+}
+
+// ============================================================================
 // MaxRetryDelayMs
 // ============================================================================
 
@@ -1349,6 +1363,7 @@ fn test_agent_config_new_has_defaults() {
     assert_eq!(config.follow_up_mode, QueueMode::All);
     assert!(config.thinking_budgets.is_none());
     assert_eq!(config.transport, Transport::Sse);
+    assert!(config.max_retries.is_none());
     assert!(config.max_retry_delay_ms.is_none());
 }
 
@@ -1443,6 +1458,7 @@ struct CapturingMockProvider {
     captured_budget: parking_lot::Mutex<Vec<Option<u32>>>,
     captured_session_id: parking_lot::Mutex<Vec<Option<String>>>,
     captured_transport: parking_lot::Mutex<Vec<Option<Transport>>>,
+    captured_max_retries: parking_lot::Mutex<Vec<Option<u32>>>,
     captured_max_retry_delay: parking_lot::Mutex<Vec<Option<u64>>>,
     captured_has_on_payload: parking_lot::Mutex<Vec<bool>>,
 }
@@ -1455,6 +1471,7 @@ impl CapturingMockProvider {
             captured_budget: parking_lot::Mutex::new(Vec::new()),
             captured_session_id: parking_lot::Mutex::new(Vec::new()),
             captured_transport: parking_lot::Mutex::new(Vec::new()),
+            captured_max_retries: parking_lot::Mutex::new(Vec::new()),
             captured_max_retry_delay: parking_lot::Mutex::new(Vec::new()),
             captured_has_on_payload: parking_lot::Mutex::new(Vec::new()),
         }
@@ -1512,6 +1529,9 @@ impl LLMProtocol for CapturingMockProvider {
             .lock()
             .push(options.base.session_id.clone());
         self.captured_transport.lock().push(options.base.transport);
+        self.captured_max_retries
+            .lock()
+            .push(options.base.max_retries);
         self.captured_max_retry_delay
             .lock()
             .push(options.base.max_retry_delay_ms);
@@ -1793,6 +1813,44 @@ async fn test_transport_default_sse_flows_to_provider() {
 }
 
 // ============================================================================
+// Provider Integration: maxRetries
+// ============================================================================
+
+#[tokio::test]
+async fn test_max_retries_flows_to_provider() {
+    let response = make_assistant_message("Done");
+    let mock = Arc::new(CapturingMockProvider::new(vec![response]));
+    let provider: ArcProtocol = mock.clone();
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+    agent.set_max_retries(Some(3));
+
+    let result = agent.prompt("hello").await;
+    assert!(result.is_ok());
+
+    let captured = mock.captured_max_retries.lock();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0], Some(3));
+}
+
+#[tokio::test]
+async fn test_max_retries_none_when_not_set() {
+    let response = make_assistant_message("Done");
+    let mock = Arc::new(CapturingMockProvider::new(vec![response]));
+    let provider: ArcProtocol = mock.clone();
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+
+    let result = agent.prompt("hello").await;
+    assert!(result.is_ok());
+
+    let captured = mock.captured_max_retries.lock();
+    assert_eq!(captured[0], None);
+}
+
+// ============================================================================
 // Provider Integration: maxRetryDelayMs
 // ============================================================================
 
@@ -1839,11 +1897,11 @@ async fn test_max_retry_delay_none_when_not_set() {
 }
 
 // ============================================================================
-// Provider Integration: All 5 features combined
+// Provider Integration: All 6 features combined
 // ============================================================================
 
 #[tokio::test]
-async fn test_all_five_features_flow_together() {
+async fn test_all_six_features_flow_together() {
     let response = make_assistant_message("Done");
     let mock = Arc::new(CapturingMockProvider::new(vec![response]));
     let provider: ArcProtocol = mock.clone();
@@ -1851,7 +1909,7 @@ async fn test_all_five_features_flow_together() {
     let agent = Agent::with_model(make_model());
     agent.set_provider(provider);
 
-    // Set all 5 features
+    // Set all 6 features
     agent.set_thinking_level(ThinkingLevel::High);
     agent.set_thinking_budgets(ThinkingBudgets {
         minimal: Some(64),
@@ -1862,12 +1920,13 @@ async fn test_all_five_features_flow_together() {
     agent.set_session_id("combined-session");
     agent.set_on_payload(move |payload, _model| async move { Some(payload) });
     agent.set_transport(Transport::Auto);
+    agent.set_max_retries(Some(4));
     agent.set_max_retry_delay_ms(Some(15000));
 
     let result = agent.prompt("hello").await;
     assert!(result.is_ok());
 
-    // Verify all 5 captured correctly
+    // Verify all 6 captured correctly
     assert_eq!(mock.captured_reasoning.lock()[0], Some(ThinkingLevel::High));
     assert_eq!(mock.captured_budget.lock()[0], Some(8192));
     assert_eq!(
@@ -1876,6 +1935,7 @@ async fn test_all_five_features_flow_together() {
     );
     assert!(mock.captured_has_on_payload.lock()[0]);
     assert_eq!(mock.captured_transport.lock()[0], Some(Transport::Auto));
+    assert_eq!(mock.captured_max_retries.lock()[0], Some(4));
     assert_eq!(mock.captured_max_retry_delay.lock()[0], Some(15000));
 }
 

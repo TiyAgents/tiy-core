@@ -83,6 +83,7 @@ impl LLMProtocol for GoogleProtocol {
         let context = context.clone();
         let client = self.client.clone();
         let api_key = self.resolve_api_key(&options);
+        let error_stream = stream_clone.clone();
 
         tokio::spawn(async move {
             if let Err(e) = run_stream(
@@ -97,6 +98,12 @@ impl LLMProtocol for GoogleProtocol {
             .await
             {
                 tracing::error!("Google stream error: {}", e);
+                super::common::emit_background_task_error(
+                    &model,
+                    model.api.clone().unwrap_or(Api::GoogleGenerativeAi),
+                    format!("Google stream error: {}", e),
+                    &error_stream,
+                );
             }
         });
 
@@ -119,6 +126,7 @@ impl LLMProtocol for GoogleProtocol {
         let context = context.clone();
         let client = self.client.clone();
         let api_key = self.resolve_api_key(&stream_options);
+        let error_stream = stream_clone.clone();
 
         tokio::spawn(async move {
             if let Err(e) = run_stream(
@@ -133,6 +141,12 @@ impl LLMProtocol for GoogleProtocol {
             .await
             {
                 tracing::error!("Google stream error: {}", e);
+                super::common::emit_background_task_error(
+                    &model,
+                    model.api.clone().unwrap_or(Api::GoogleGenerativeAi),
+                    format!("Google stream error: {}", e),
+                    &error_stream,
+                );
             }
         });
 
@@ -875,13 +889,22 @@ async fn run_stream(
     // Add custom headers
     super::common::apply_custom_headers(&mut headers, &options.headers, &limits.headers);
 
-    let request = client
-        .post(&url)
-        .headers(headers)
-        .body(body_string)
-        .timeout(limits.http.request_timeout());
-    let Some(response) = super::common::send_request_with_cancel(
-        request,
+    let max_retries = options
+        .max_retries
+        .unwrap_or(super::common::DEFAULT_MAX_RETRIES);
+    let max_retry_delay_ms = options
+        .max_retry_delay_ms
+        .unwrap_or(super::common::DEFAULT_MAX_RETRY_DELAY_MS);
+    let request_headers = headers.clone();
+    let request_body = body_string.clone();
+    let Some(response) = super::common::send_request_with_retry(
+        &client,
+        &url,
+        headers,
+        body_string,
+        limits.http.request_timeout(),
+        max_retries,
+        max_retry_delay_ms,
         cancel_token.as_ref(),
         &mut output,
         &stream,
@@ -909,6 +932,9 @@ async fn run_stream(
     stream.push(AssistantMessageEvent::Start {
         partial: output.clone(),
     });
+    let initial_output = output.clone();
+    let mut emitted_semantic_event = false;
+    let mut prelude_retry_attempt = 0;
 
     let mut current_text_index: Option<usize> = None;
     let mut current_thinking_index: Option<usize> = None;
@@ -923,7 +949,77 @@ async fn run_stream(
     )
     .await
     {
-        let chunk = chunk_result?;
+        let chunk = match chunk_result {
+            Ok(chunk) => chunk,
+            Err(err)
+                if !emitted_semantic_event
+                    && prelude_retry_attempt < max_retries
+                    && super::common::is_retryable_stream_error(&err) =>
+            {
+                let delay =
+                    super::common::compute_retry_delay(prelude_retry_attempt, max_retry_delay_ms);
+                tracing::warn!(
+                    url = %url,
+                    error = %err,
+                    attempt = prelude_retry_attempt + 1,
+                    max_retries = max_retries,
+                    delay_ms = delay.as_millis() as u64,
+                    "Retryable Google stream error before first semantic event, retrying request"
+                );
+                if super::common::sleep_with_cancel(delay, cancel_token.as_ref()).await {
+                    super::common::emit_aborted(&mut output, &stream);
+                    return Ok(());
+                }
+                prelude_retry_attempt += 1;
+                output = initial_output.clone();
+                current_text_index = None;
+                current_thinking_index = None;
+                line_buffer.clear();
+
+                let Some(response) = super::common::send_request_with_retry(
+                    &client,
+                    &url,
+                    request_headers.clone(),
+                    request_body.clone(),
+                    limits.http.request_timeout(),
+                    max_retries,
+                    max_retry_delay_ms,
+                    cancel_token.as_ref(),
+                    &mut output,
+                    &stream,
+                )
+                .await?
+                else {
+                    return Ok(());
+                };
+
+                if !response.status().is_success() {
+                    super::common::handle_error_response(
+                        response,
+                        &url,
+                        model,
+                        &limits,
+                        &mut output,
+                        &stream,
+                        "Google GenerativeAI",
+                    )
+                    .await;
+                    return Ok(());
+                }
+
+                byte_stream = response.bytes_stream();
+                continue;
+            }
+            Err(err) => {
+                super::common::emit_terminal_error(
+                    &mut output,
+                    format!("Google stream transport error: {}", err),
+                    limits.http.max_error_message_chars,
+                    &stream,
+                );
+                return Ok(());
+            }
+        };
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
 
@@ -1014,6 +1110,7 @@ async fn run_stream(
                                                         t.thinking_signature = Some(sig.clone());
                                                     }
                                                 }
+                                                emitted_semantic_event = true;
                                                 stream.push(AssistantMessageEvent::ThinkingDelta {
                                                     content_index: idx,
                                                     delta: thinking_text.clone(),
@@ -1072,6 +1169,7 @@ async fn run_stream(
                                             .push(ContentBlock::ToolCall(tool_call.clone()));
                                         output.stop_reason = StopReason::ToolUse;
 
+                                        emitted_semantic_event = true;
                                         stream.push(AssistantMessageEvent::ToolCallStart {
                                             content_index: idx,
                                             partial: output.clone(),
@@ -1123,6 +1221,7 @@ async fn run_stream(
                                                     t.text_signature = Some(sig.clone());
                                                 }
                                             }
+                                            emitted_semantic_event = true;
                                             stream.push(AssistantMessageEvent::TextDelta {
                                                 content_index: idx,
                                                 delta: text_content.clone(),

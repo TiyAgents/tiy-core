@@ -549,6 +549,9 @@ pub struct AgentConfig {
     pub thinking_budgets: Option<ThinkingBudgets>,
     /// Preferred transport.
     pub transport: Transport,
+    /// Maximum number of retries for transient HTTP or pre-stream transport failures.
+    /// `None` = use provider default. Set to `Some(0)` to disable retries.
+    pub max_retries: Option<u32>,
     /// Maximum retry delay in milliseconds. `None` = use default (60_000ms).
     /// Set to `Some(0)` to disable the cap entirely.
     pub max_retry_delay_ms: Option<u64>,
@@ -565,6 +568,7 @@ impl std::fmt::Debug for AgentConfig {
             .field("follow_up_mode", &self.follow_up_mode)
             .field("thinking_budgets", &self.thinking_budgets)
             .field("transport", &self.transport)
+            .field("max_retries", &self.max_retries)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
             .finish()
     }
@@ -582,6 +586,7 @@ impl AgentConfig {
             follow_up_mode: QueueMode::default(),
             thinking_budgets: None,
             transport: Transport::default(),
+            max_retries: None,
             max_retry_delay_ms: None,
         }
     }

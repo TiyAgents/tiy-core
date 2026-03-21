@@ -9,6 +9,7 @@
 //! - Custom header injection (H2)
 //! - HTTP error response handling
 //! - SSE line buffer limit checking
+//! - Automatic retry with exponential backoff for transient HTTP errors
 
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
@@ -16,7 +17,17 @@ use futures::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+
+/// Default maximum number of retries for transient HTTP errors.
+pub const DEFAULT_MAX_RETRIES: u32 = 2;
+
+/// Default maximum retry delay in milliseconds (30 seconds).
+pub const DEFAULT_MAX_RETRY_DELAY_MS: u64 = 30_000;
+
+/// Base delay for exponential backoff in milliseconds.
+const RETRY_BASE_DELAY_MS: u64 = 500;
 
 /// Resolve the effective base URL using 3-level fallback:
 /// `options.base_url` > `model.base_url` > `default`.
@@ -231,5 +242,270 @@ where
         }
     } else {
         source.next().await
+    }
+}
+
+// ============================================================================
+// Retry infrastructure
+// ============================================================================
+
+/// Check whether an HTTP status code is transient and worth retrying.
+pub fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// Check whether a `reqwest::Error` represents a transient failure worth retrying.
+pub fn is_retryable_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect()
+}
+
+/// Check whether a streamed response body error is transient and worth retrying.
+///
+/// Before any semantic events have been emitted, body-read failures are treated
+/// as retryable because they are typically transport interruptions rather than
+/// application-level protocol errors.
+pub fn is_retryable_stream_error(err: &reqwest::Error) -> bool {
+    is_retryable_error(err) || err.is_body()
+}
+
+/// Parse the `Retry-After` header from an HTTP response.
+///
+/// Supports both "delay-seconds" (e.g. `5`) and HTTP-date formats.
+/// Returns `None` if the header is missing or unparseable.
+pub fn parse_retry_after(response: &reqwest::Response) -> Option<Duration> {
+    let value = response.headers().get("retry-after")?.to_str().ok()?;
+
+    // Try parsing as integer seconds first (most common for API rate limits).
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    // Try HTTP-date format: e.g. "Wed, 21 Oct 2025 07:28:00 GMT"
+    if let Ok(date) = httpdate::parse_http_date(value) {
+        let now = std::time::SystemTime::now();
+        if let Ok(delta) = date.duration_since(now) {
+            return Some(delta);
+        }
+        // Date is in the past — retry immediately.
+        return Some(Duration::ZERO);
+    }
+
+    None
+}
+
+/// Compute the retry delay using exponential backoff with jitter.
+///
+/// Formula: `min(base_ms × 2^attempt, max_delay_ms)` + random jitter (0–25%).
+pub fn compute_retry_delay(attempt: u32, max_delay_ms: u64) -> Duration {
+    let exp_delay = RETRY_BASE_DELAY_MS.saturating_mul(1u64 << attempt.min(10));
+    let capped = if max_delay_ms == 0 {
+        exp_delay
+    } else {
+        exp_delay.min(max_delay_ms)
+    };
+
+    // Add 0–25% random jitter to avoid thundering herd.
+    let jitter_range = capped / 4;
+    let jitter = if jitter_range > 0 {
+        // Simple deterministic-ish jitter using the attempt number and current
+        // time nanoseconds. This is NOT cryptographically random, but perfectly
+        // fine for retry jitter.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as u64;
+        nanos % jitter_range
+    } else {
+        0
+    };
+
+    Duration::from_millis(capped + jitter)
+}
+
+/// Apply the optional retry-delay cap. A value of `0` disables the cap.
+pub fn cap_retry_delay(delay: Duration, max_delay_ms: u64) -> Duration {
+    if max_delay_ms == 0 {
+        delay
+    } else {
+        delay.min(Duration::from_millis(max_delay_ms))
+    }
+}
+
+/// Sleep for the given duration, but abort early if the cancellation token fires.
+///
+/// Returns `true` if cancelled, `false` if the sleep completed normally.
+pub async fn sleep_with_cancel(
+    duration: Duration,
+    cancel_token: Option<&CancellationToken>,
+) -> bool {
+    if let Some(cancel_token) = cancel_token {
+        tokio::select! {
+            _ = cancel_token.cancelled() => true,
+            _ = tokio::time::sleep(duration) => false,
+        }
+    } else {
+        tokio::time::sleep(duration).await;
+        false
+    }
+}
+
+/// Emit a terminal error assistant message and close the stream.
+pub fn emit_terminal_error(
+    output: &mut AssistantMessage,
+    error_message: impl Into<String>,
+    max_error_message_chars: usize,
+    stream: &AssistantMessageEventStream,
+) {
+    if output.content.is_empty() {
+        output.content = vec![ContentBlock::Text(TextContent::new(""))];
+    }
+    output.stop_reason = StopReason::Error;
+    output.error_message = Some(crate::types::truncate_error_message(
+        &error_message.into(),
+        max_error_message_chars,
+    ));
+    stream.push(AssistantMessageEvent::Error {
+        reason: StopReason::Error,
+        error: output.clone(),
+    });
+    stream.end(None);
+}
+
+/// Emit a terminal background-task error unless the stream has already ended.
+pub fn emit_background_task_error(
+    model: &Model,
+    fallback_api: Api,
+    error_message: impl Into<String>,
+    stream: &AssistantMessageEventStream,
+) {
+    if stream.is_done() {
+        return;
+    }
+
+    let mut output = AssistantMessage::builder()
+        .api(model.api.clone().unwrap_or(fallback_api))
+        .provider(model.provider.clone())
+        .model(model.id.clone())
+        .usage(Usage::default())
+        .stop_reason(StopReason::Error)
+        .build()
+        .expect("background task error message should be buildable");
+    output.content = vec![ContentBlock::Text(TextContent::new(""))];
+    emit_terminal_error(&mut output, error_message, 4096, stream);
+}
+
+/// Send an HTTP POST request with automatic retry on transient errors.
+///
+/// Rebuilds the request from components on each attempt. Retries on:
+/// - HTTP 408 (Request Timeout), 429 (Too Many Requests), 500, 502, 503, 504
+/// - `reqwest::Error` with `is_timeout()` or `is_connect()`
+///
+/// Uses exponential backoff with jitter, respects `Retry-After` headers, and
+/// honours the cancellation token during both request sending and backoff sleep.
+///
+/// Returns:
+/// - `Ok(Some(response))` — a response was received (may be success or a
+///   non-retryable error status; the caller should check `.status()`)
+/// - `Ok(None)` — request was cancelled via the token
+/// - `Err(e)` — a non-retryable transport error
+pub async fn send_request_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    headers: HeaderMap,
+    body: String,
+    timeout: Duration,
+    max_retries: u32,
+    max_retry_delay_ms: u64,
+    cancel_token: Option<&CancellationToken>,
+    output: &mut AssistantMessage,
+    stream: &AssistantMessageEventStream,
+) -> Result<Option<reqwest::Response>, reqwest::Error> {
+    let mut attempt: u32 = 0;
+
+    loop {
+        let request = client
+            .post(url)
+            .timeout(timeout)
+            .headers(headers.clone())
+            .body(body.clone());
+
+        match send_request_with_cancel(request, cancel_token, output, stream).await {
+            Ok(None) => {
+                // Cancelled.
+                return Ok(None);
+            }
+            Ok(Some(response)) => {
+                if is_retryable_status(response.status()) && attempt < max_retries {
+                    let delay = parse_retry_after(&response)
+                        .map(|d| cap_retry_delay(d, max_retry_delay_ms))
+                        .unwrap_or_else(|| compute_retry_delay(attempt, max_retry_delay_ms));
+
+                    tracing::warn!(
+                        url = %url,
+                        status = %response.status(),
+                        attempt = attempt + 1,
+                        max_retries = max_retries,
+                        delay_ms = delay.as_millis() as u64,
+                        "Retryable HTTP status, backing off before retry"
+                    );
+
+                    if sleep_with_cancel(delay, cancel_token).await {
+                        emit_aborted(output, stream);
+                        return Ok(None);
+                    }
+
+                    attempt += 1;
+                    continue;
+                }
+
+                // Either success or non-retryable status — return to caller.
+                return Ok(Some(response));
+            }
+            Err(e) => {
+                if is_retryable_error(&e) && attempt < max_retries {
+                    let delay = compute_retry_delay(attempt, max_retry_delay_ms);
+
+                    tracing::warn!(
+                        url = %url,
+                        error = %e,
+                        attempt = attempt + 1,
+                        max_retries = max_retries,
+                        delay_ms = delay.as_millis() as u64,
+                        "Retryable transport error, backing off before retry"
+                    );
+
+                    if sleep_with_cancel(delay, cancel_token).await {
+                        emit_aborted(output, stream);
+                        return Ok(None);
+                    }
+
+                    attempt += 1;
+                    continue;
+                }
+
+                // Non-retryable error or retries exhausted.
+                return Err(e);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_retry_delay_zero_cap_disables_capping() {
+        let delay = compute_retry_delay(1, 0);
+        assert!(
+            delay >= Duration::from_millis(RETRY_BASE_DELAY_MS * 2),
+            "zero cap should not collapse retry delay to zero"
+        );
+    }
+
+    #[test]
+    fn test_cap_retry_delay_zero_cap_is_unbounded() {
+        let delay = Duration::from_secs(5);
+        assert_eq!(cap_retry_delay(delay, 0), delay);
     }
 }

@@ -531,6 +531,20 @@ agent.set_max_retry_delay_ms(Some(0));      // disable cap
 agent.set_max_retry_delay_ms(None);         // use provider default
 ```
 
+This cap applies to protocol-layer backoff, including provider-supplied `Retry-After` values. `Some(0)` means "do not cap the delay", not "retry immediately".
+
+#### Max Retries
+
+Control how many transient HTTP or pre-stream transport failures are retried.
+
+```rust
+agent.set_max_retries(Some(3));   // retry up to 3 times
+agent.set_max_retries(Some(0));   // disable retries
+agent.set_max_retries(None);      // use provider default
+```
+
+These retries are transparent to the Agent only until the protocol stream emits its first semantic event. After text/thinking/tool-call deltas have started flowing, later transport failures surface as terminal errors instead of being replayed automatically.
+
 #### Max Turns
 
 Prevent runaway loops.

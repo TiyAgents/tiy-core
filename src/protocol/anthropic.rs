@@ -104,6 +104,7 @@ impl LLMProtocol for AnthropicProtocol {
         let context = context.clone();
         let client = self.client.clone();
         let api_key = self.resolve_api_key(&options);
+        let error_stream = stream_clone.clone();
 
         tokio::spawn(async move {
             if let Err(e) = run_stream(
@@ -119,6 +120,12 @@ impl LLMProtocol for AnthropicProtocol {
             .await
             {
                 tracing::error!("Anthropic stream error: {}", e);
+                super::common::emit_background_task_error(
+                    &model,
+                    Api::AnthropicMessages,
+                    format!("Anthropic stream error: {}", e),
+                    &error_stream,
+                );
             }
         });
 
@@ -141,6 +148,7 @@ impl LLMProtocol for AnthropicProtocol {
         let context = context.clone();
         let client = self.client.clone();
         let api_key = self.resolve_api_key(&stream_options);
+        let error_stream = stream_clone.clone();
 
         tokio::spawn(async move {
             if let Err(e) = run_stream(
@@ -156,6 +164,12 @@ impl LLMProtocol for AnthropicProtocol {
             .await
             {
                 tracing::error!("Anthropic stream error: {}", e);
+                super::common::emit_background_task_error(
+                    &model,
+                    Api::AnthropicMessages,
+                    format!("Anthropic stream error: {}", e),
+                    &error_stream,
+                );
             }
         });
 
@@ -959,13 +973,22 @@ async fn run_stream(
     // Add custom headers
     super::common::apply_custom_headers(&mut headers, &options.headers, &limits.headers);
 
-    let request = client
-        .post(&url)
-        .headers(headers)
-        .body(body_string)
-        .timeout(limits.http.request_timeout());
-    let Some(response) = super::common::send_request_with_cancel(
-        request,
+    let max_retries = options
+        .max_retries
+        .unwrap_or(super::common::DEFAULT_MAX_RETRIES);
+    let max_retry_delay_ms = options
+        .max_retry_delay_ms
+        .unwrap_or(super::common::DEFAULT_MAX_RETRY_DELAY_MS);
+    let request_headers = headers.clone();
+    let request_body = body_string.clone();
+    let Some(response) = super::common::send_request_with_retry(
+        &client,
+        &url,
+        headers,
+        body_string,
+        limits.http.request_timeout(),
+        max_retries,
+        max_retry_delay_ms,
         cancel_token.as_ref(),
         &mut output,
         &stream,
@@ -993,6 +1016,9 @@ async fn run_stream(
     stream.push(AssistantMessageEvent::Start {
         partial: output.clone(),
     });
+    let initial_output = output.clone();
+    let mut emitted_semantic_event = false;
+    let mut prelude_retry_attempt = 0;
 
     // Track content blocks by index
     let mut block_types: Vec<BlockType> = Vec::new();
@@ -1010,7 +1036,78 @@ async fn run_stream(
     )
     .await
     {
-        let chunk = chunk_result?;
+        let chunk = match chunk_result {
+            Ok(chunk) => chunk,
+            Err(err)
+                if !emitted_semantic_event
+                    && prelude_retry_attempt < max_retries
+                    && super::common::is_retryable_stream_error(&err) =>
+            {
+                let delay =
+                    super::common::compute_retry_delay(prelude_retry_attempt, max_retry_delay_ms);
+                tracing::warn!(
+                    url = %url,
+                    error = %err,
+                    attempt = prelude_retry_attempt + 1,
+                    max_retries = max_retries,
+                    delay_ms = delay.as_millis() as u64,
+                    "Retryable Anthropic stream error before first semantic event, retrying request"
+                );
+                if super::common::sleep_with_cancel(delay, cancel_token.as_ref()).await {
+                    super::common::emit_aborted(&mut output, &stream);
+                    return Ok(());
+                }
+                prelude_retry_attempt += 1;
+                output = initial_output.clone();
+                block_types.clear();
+                partial_tool_args.clear();
+                line_buffer.clear();
+                current_event_type.clear();
+
+                let Some(response) = super::common::send_request_with_retry(
+                    &client,
+                    &url,
+                    request_headers.clone(),
+                    request_body.clone(),
+                    limits.http.request_timeout(),
+                    max_retries,
+                    max_retry_delay_ms,
+                    cancel_token.as_ref(),
+                    &mut output,
+                    &stream,
+                )
+                .await?
+                else {
+                    return Ok(());
+                };
+
+                if !response.status().is_success() {
+                    super::common::handle_error_response(
+                        response,
+                        &url,
+                        model,
+                        &limits,
+                        &mut output,
+                        &stream,
+                        "Anthropic Messages",
+                    )
+                    .await;
+                    return Ok(());
+                }
+
+                byte_stream = response.bytes_stream();
+                continue;
+            }
+            Err(err) => {
+                super::common::emit_terminal_error(
+                    &mut output,
+                    format!("Anthropic stream transport error: {}", err),
+                    limits.http.max_error_message_chars,
+                    &stream,
+                );
+                return Ok(());
+            }
+        };
         let text = String::from_utf8_lossy(&chunk);
         line_buffer.push_str(&text);
 
@@ -1073,6 +1170,7 @@ async fn run_stream(
                                 output
                                     .content
                                     .push(ContentBlock::Text(TextContent::new("")));
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::TextStart {
                                     content_index: idx,
                                     partial: output.clone(),
@@ -1086,6 +1184,7 @@ async fn run_stream(
                                 output
                                     .content
                                     .push(ContentBlock::Thinking(ThinkingContent::new("")));
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::ThinkingStart {
                                     content_index: idx,
                                     partial: output.clone(),
@@ -1115,6 +1214,7 @@ async fn run_stream(
                                     },
                                     serde_json::Value::Object(serde_json::Map::new()),
                                 )));
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::ToolCallStart {
                                     content_index: idx,
                                     partial: output.clone(),
@@ -1133,6 +1233,7 @@ async fn run_stream(
                                 {
                                     t.text.push_str(&text);
                                 }
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::TextDelta {
                                     content_index: idx,
                                     delta: text,
@@ -1145,6 +1246,7 @@ async fn run_stream(
                                 {
                                     t.thinking.push_str(&thinking);
                                 }
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::ThinkingDelta {
                                     content_index: idx,
                                     delta: thinking,
@@ -1161,6 +1263,7 @@ async fn run_stream(
                                         tc.arguments = parsed;
                                     }
                                 }
+                                emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::ToolCallDelta {
                                     content_index: idx,
                                     delta: partial_json,
@@ -1192,6 +1295,7 @@ async fn run_stream(
                                         .and_then(|b| b.as_text())
                                         .map(|t| t.text.clone())
                                         .unwrap_or_default();
+                                    emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::TextEnd {
                                         content_index: idx,
                                         content: text,
@@ -1205,6 +1309,7 @@ async fn run_stream(
                                         .and_then(|b| b.as_thinking())
                                         .map(|t| t.thinking.clone())
                                         .unwrap_or_default();
+                                    emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::ThinkingEnd {
                                         content_index: idx,
                                         content: text,
@@ -1232,6 +1337,7 @@ async fn run_stream(
                                         .unwrap_or_else(|| {
                                             ToolCall::new("", "", serde_json::Value::Null)
                                         });
+                                    emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::ToolCallEnd {
                                         content_index: idx,
                                         tool_call,
