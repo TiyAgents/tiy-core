@@ -550,5 +550,9 @@ fn test_agent_error_display() {
         format!("{}", AgentError::ProviderError("bad".into())),
         "Provider error: bad"
     );
+    assert_eq!(
+        format!("{}", AgentError::MaxTurnsReached(25)),
+        "Agent reached the maximum turn limit (25) before producing a final response"
+    );
     assert_eq!(format!("{}", AgentError::Other("misc".into())), "misc");
 }

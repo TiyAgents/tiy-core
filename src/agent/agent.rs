@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Default maximum number of turns (LLM calls) per prompt.
-const DEFAULT_MAX_TURNS: usize = 25;
+pub const DEFAULT_MAX_TURNS: usize = 25;
 
 /// Subscriber ID for unsubscription.
 pub type SubscriberId = u64;
@@ -1388,9 +1388,13 @@ impl Agent {
                 return AgentRunOutcome::error(new_messages, error);
             }
 
-            // Check max turns
+            // Stop explicitly when the loop budget is exhausted so callers can
+            // distinguish "hit safety limit" from a normal, model-authored stop.
             if turn_count >= max_turns {
-                break;
+                return AgentRunOutcome::error(
+                    new_messages,
+                    AgentError::MaxTurnsReached(max_turns),
+                );
             }
 
             self.emit(AgentEvent::TurnStart);
@@ -2161,6 +2165,9 @@ pub enum AgentError {
 
     #[error("Provider error: {0}")]
     ProviderError(String),
+
+    #[error("Agent reached the maximum turn limit ({0}) before producing a final response")]
+    MaxTurnsReached(usize),
 
     #[error("{0}")]
     Other(String),

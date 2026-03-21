@@ -316,10 +316,10 @@ async fn test_agent_max_turns_limit() {
     });
 
     let result = agent.prompt(UserMessage::text("Start")).await;
-    assert!(result.is_ok());
+    assert!(matches!(result, Err(AgentError::MaxTurnsReached(3))));
 
-    // Should stop after max_turns
-    let messages = result.unwrap();
+    // The loop should stop after max_turns without issuing a fourth LLM call.
+    let messages = agent.state().messages.read().clone();
     let assistant_count = messages
         .iter()
         .filter(|m| matches!(m, AgentMessage::Assistant(_)))
