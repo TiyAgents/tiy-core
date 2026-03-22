@@ -15,7 +15,7 @@ use crate::types::*;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// OpenAI Responses API provider.
 pub struct OpenAIResponsesProtocol {
@@ -555,6 +555,7 @@ fn convert_tools(tools: &[Tool]) -> Vec<ResponsesTool> {
 fn ensure_response_text_item(
     output: &mut AssistantMessage,
     item_content_map: &mut HashMap<usize, ItemInfo>,
+    open_output_items: &mut HashSet<usize>,
     output_index: usize,
     stream: &AssistantMessageEventStream,
 ) -> usize {
@@ -576,6 +577,7 @@ fn ensure_response_text_item(
             name: None,
         },
     );
+    open_output_items.insert(output_index);
     stream.push(AssistantMessageEvent::TextStart {
         content_index: content_idx,
         partial: output.clone(),
@@ -730,10 +732,12 @@ async fn run_stream(
 
     // Track output items by their index
     let mut item_content_map: HashMap<usize, ItemInfo> = HashMap::new();
+    let mut open_output_items: HashSet<usize> = HashSet::new();
     let mut partial_tool_args: HashMap<usize, String> = HashMap::new();
     let mut line_buffer = String::new();
     let mut current_event_type = String::new();
     let mut item_counter: usize = 0;
+    let mut saw_response_completion = false;
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -768,10 +772,12 @@ async fn run_stream(
                 prelude_retry_attempt += 1;
                 output = initial_output.clone();
                 item_content_map.clear();
+                open_output_items.clear();
                 partial_tool_args.clear();
                 line_buffer.clear();
                 current_event_type.clear();
                 item_counter = 0;
+                saw_response_completion = false;
 
                 let Some(response) = super::common::send_request_with_retry(
                     &client,
@@ -898,6 +904,7 @@ async fn run_stream(
                                         name: None,
                                     },
                                 );
+                                open_output_items.insert(output_index);
                                 emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::TextStart {
                                     content_index: content_idx,
@@ -925,6 +932,7 @@ async fn run_stream(
                                     serde_json::Value::Object(serde_json::Map::new()),
                                 )));
                                 partial_tool_args.insert(output_index, String::new());
+                                open_output_items.insert(output_index);
                                 item_content_map.insert(
                                     output_index,
                                     ItemInfo {
@@ -946,6 +954,7 @@ async fn run_stream(
                                 output
                                     .content
                                     .push(ContentBlock::Thinking(ThinkingContent::new("")));
+                                open_output_items.insert(output_index);
                                 item_content_map.insert(
                                     output_index,
                                     ItemInfo {
@@ -979,6 +988,7 @@ async fn run_stream(
                         let idx = ensure_response_text_item(
                             &mut output,
                             &mut item_content_map,
+                            &mut open_output_items,
                             output_index,
                             &stream,
                         );
@@ -1005,6 +1015,7 @@ async fn run_stream(
                         let idx = ensure_response_text_item(
                             &mut output,
                             &mut item_content_map,
+                            &mut open_output_items,
                             output_index,
                             &stream,
                         );
@@ -1054,6 +1065,7 @@ async fn run_stream(
                                 serde_json::Value::Object(serde_json::Map::new()),
                             )));
                             partial_tool_args.insert(output_index, String::new());
+                            open_output_items.insert(output_index);
                             item_content_map.insert(
                                 output_index,
                                 ItemInfo {
@@ -1107,6 +1119,7 @@ async fn run_stream(
                             output
                                 .content
                                 .push(ContentBlock::Thinking(ThinkingContent::new("")));
+                            open_output_items.insert(output_index);
                             item_content_map.insert(
                                 output_index,
                                 ItemInfo {
@@ -1177,6 +1190,7 @@ async fn run_stream(
                             .get("output_index")
                             .and_then(|i| i.as_u64())
                             .unwrap_or(0) as usize;
+                        open_output_items.remove(&output_index);
 
                         if let Some(info) = item_content_map.get(&output_index) {
                             let idx = info.content_idx;
@@ -1244,6 +1258,7 @@ async fn run_stream(
                                         tool_call,
                                         partial: output.clone(),
                                     });
+                                    partial_tool_args.remove(&output_index);
                                 }
                                 ItemType::Reasoning => {
                                     if let Some(item) = val.get("item") {
@@ -1272,6 +1287,7 @@ async fn run_stream(
                 }
 
                 "response.completed" | "response.done" | "response.incomplete" => {
+                    saw_response_completion = true;
                     // Try extracting from pre-parsed value, fall back to re-parsing data
                     let completed = parsed
                         .as_ref()
@@ -1345,6 +1361,28 @@ async fn run_stream(
         }
     }
 
+    if let Some(detail) = incomplete_openai_responses_stream_detail(
+        saw_response_completion,
+        &open_output_items,
+        &partial_tool_args,
+        &line_buffer,
+    ) {
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            detail = %detail,
+            "OpenAI Responses stream ended before protocol completion"
+        );
+        super::common::emit_incomplete_stream_error(
+            &mut output,
+            "openai_responses",
+            detail,
+            limits.http.max_error_message_chars,
+            &stream,
+        );
+        return Ok(());
+    }
+
     stream.push(AssistantMessageEvent::Done {
         reason: output.stop_reason,
         message: output,
@@ -1372,6 +1410,64 @@ enum ItemType {
     Message,
     FunctionCall,
     Reasoning,
+}
+
+fn incomplete_openai_responses_stream_detail(
+    saw_response_completion: bool,
+    open_output_items: &HashSet<usize>,
+    partial_tool_args: &HashMap<usize, String>,
+    line_buffer: &str,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+
+    if !saw_response_completion {
+        reasons.push("missing response.completed/response.done event".to_string());
+    }
+
+    if !open_output_items.is_empty() {
+        let mut indexes: Vec<_> = open_output_items.iter().copied().collect();
+        indexes.sort_unstable();
+        reasons.push(format!(
+            "unfinished output items at indices [{}]",
+            indexes
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let mut incomplete_tool_indexes: Vec<_> = open_output_items
+        .iter()
+        .copied()
+        .filter(|index| {
+            partial_tool_args.get(index).is_some_and(|args| {
+                let trimmed = args.trim();
+                !trimmed.is_empty() && serde_json::from_str::<serde_json::Value>(trimmed).is_err()
+            })
+        })
+        .collect();
+    incomplete_tool_indexes.sort_unstable();
+    if !incomplete_tool_indexes.is_empty() {
+        reasons.push(format!(
+            "unfinished tool input JSON at indices [{}]",
+            incomplete_tool_indexes
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if !line_buffer.trim().is_empty() {
+        reasons.push("trailing partial SSE frame".to_string());
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
+    }
 }
 
 fn extract_response_message_text(item: &serde_json::Value) -> Option<String> {
@@ -1528,5 +1624,26 @@ mod tests {
             extract_response_message_text(&item).as_deref(),
             Some("safe no")
         );
+    }
+
+    #[test]
+    fn test_incomplete_openai_responses_stream_detail_reports_missing_closure() {
+        let mut open_output_items = HashSet::new();
+        open_output_items.insert(2);
+        let mut partial_tool_args = HashMap::new();
+        partial_tool_args.insert(2, "{\"path\":\"logs".to_string());
+
+        let detail = incomplete_openai_responses_stream_detail(
+            false,
+            &open_output_items,
+            &partial_tool_args,
+            "event: response.output_item.added",
+        )
+        .expect("detail");
+
+        assert!(detail.contains("missing response.completed/response.done event"));
+        assert!(detail.contains("unfinished output items at indices [2]"));
+        assert!(detail.contains("unfinished tool input JSON at indices [2]"));
+        assert!(detail.contains("trailing partial SSE frame"));
     }
 }

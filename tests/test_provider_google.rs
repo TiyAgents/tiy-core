@@ -149,6 +149,51 @@ async fn test_stream_simple_text_response() {
 }
 
 #[tokio::test]
+async fn test_stream_reports_incomplete_stream_for_truncated_response() {
+    let server = MockServer::start().await;
+
+    let sse_body = google_sse(vec![&json!({
+        "candidates": [{
+            "content": {
+                "parts": [{"text": "Hello"}],
+                "role": "model"
+            }
+        }]
+    })
+    .to_string()]);
+
+    Mock::given(method("POST"))
+        .and(path("/models/gemini-2.0-flash:streamGenerateContent"))
+        .and(header("x-goog-api-key", "test-key"))
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GoogleProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("[incomplete_stream]google:")));
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("missing candidate finish_reason")));
+}
+
+#[tokio::test]
 async fn test_stream_with_tool_call() {
     let server = MockServer::start().await;
 

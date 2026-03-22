@@ -939,6 +939,7 @@ async fn run_stream(
     let mut current_text_index: Option<usize> = None;
     let mut current_thinking_index: Option<usize> = None;
     let mut line_buffer = String::new();
+    let mut saw_candidate_finish_reason = false;
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -975,6 +976,7 @@ async fn run_stream(
                 current_text_index = None;
                 current_thinking_index = None;
                 line_buffer.clear();
+                saw_candidate_finish_reason = false;
 
                 let Some(response) = super::common::send_request_with_retry(
                     &client,
@@ -1072,6 +1074,7 @@ async fn run_stream(
                         for candidate in &candidates {
                             // Handle finish reason
                             if let Some(ref reason) = candidate.finish_reason {
+                                saw_candidate_finish_reason = true;
                                 output.stop_reason = match reason.as_str() {
                                     "STOP" => StopReason::Stop,
                                     "MAX_TOKENS" => StopReason::Length,
@@ -1242,6 +1245,24 @@ async fn run_stream(
         }
     }
 
+    if let Some(detail) = incomplete_google_stream_detail(saw_candidate_finish_reason, &line_buffer)
+    {
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            detail = %detail,
+            "Google stream ended before protocol completion"
+        );
+        super::common::emit_incomplete_stream_error(
+            &mut output,
+            "google",
+            detail,
+            limits.http.max_error_message_chars,
+            &stream,
+        );
+        return Ok(());
+    }
+
     // End any active blocks
     if let Some(idx) = current_thinking_index {
         let content = output
@@ -1277,6 +1298,27 @@ async fn run_stream(
     stream.end(None);
 
     Ok(())
+}
+
+fn incomplete_google_stream_detail(
+    saw_candidate_finish_reason: bool,
+    line_buffer: &str,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+
+    if !saw_candidate_finish_reason {
+        reasons.push("missing candidate finish_reason".to_string());
+    }
+
+    if !line_buffer.trim().is_empty() {
+        reasons.push("trailing partial SSE frame".to_string());
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
+    }
 }
 
 #[cfg(test)]
@@ -1316,5 +1358,15 @@ mod tests {
         let id2 = generate_tool_call_id("test_tool", "claude-3-7-sonnet");
         assert_ne!(id1, id2);
         assert!(id1.starts_with("test_tool_"));
+    }
+
+    #[test]
+    fn test_incomplete_google_stream_detail_reports_missing_termination() {
+        let detail = incomplete_google_stream_detail(false, "data: {");
+
+        assert_eq!(
+            detail.as_deref(),
+            Some("missing candidate finish_reason; trailing partial SSE frame")
+        );
     }
 }

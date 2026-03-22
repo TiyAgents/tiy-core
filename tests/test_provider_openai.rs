@@ -163,6 +163,63 @@ async fn test_stream_simple_text_response() {
 }
 
 #[tokio::test]
+async fn test_stream_reports_incomplete_stream_for_truncated_response() {
+    let server = MockServer::start().await;
+
+    let sse_body = [
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": null
+                }]
+            })
+        ),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": " world"},
+                    "finish_reason": null
+                }]
+            })
+        ),
+    ]
+    .join("");
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("[incomplete_stream]openai_completions:")));
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("missing finish_reason")));
+}
+
+#[tokio::test]
 async fn test_stream_clamps_small_max_completion_tokens_to_minimum() {
     let server = MockServer::start().await;
 

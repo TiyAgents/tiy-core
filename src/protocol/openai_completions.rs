@@ -1058,6 +1058,8 @@ async fn run_stream(
     let mut partial_tool_args: HashMap<u32, String> = HashMap::new();
     let mut current_tool_index: Option<u32> = None;
     let mut line_buffer = String::new(); // Buffer for incomplete SSE lines
+    let mut saw_finish_reason = false;
+    let mut saw_done_sentinel = false;
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -1095,6 +1097,8 @@ async fn run_stream(
                 partial_tool_args.clear();
                 current_tool_index = None;
                 line_buffer.clear();
+                saw_finish_reason = false;
+                saw_done_sentinel = false;
 
                 let Some(response) = super::common::send_request_with_retry(
                     &client,
@@ -1166,6 +1170,7 @@ async fn run_stream(
 
             let data = &line[6..];
             if data == "[DONE]" {
+                saw_done_sentinel = true;
                 continue;
             }
 
@@ -1183,6 +1188,7 @@ async fn run_stream(
                 for choice in &chunk_data.choices {
                     // Handle finish reason
                     if let Some(ref reason) = choice.finish_reason {
+                        saw_finish_reason = true;
                         let (stop_reason, error_message) = map_finish_reason(reason);
                         output.stop_reason = stop_reason;
                         if let Some(error_message) = error_message {
@@ -1366,9 +1372,33 @@ async fn run_stream(
         }
     }
 
+    let incomplete_detail = incomplete_openai_completions_stream_detail(
+        saw_finish_reason,
+        saw_done_sentinel,
+        &partial_tool_args,
+        &line_buffer,
+    );
+
     // Finish current block
     if let Some(block) = current_block.take() {
         output.content.push(block);
+    }
+
+    if let Some(detail) = incomplete_detail {
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            detail = %detail,
+            "OpenAI Completions stream ended before protocol completion"
+        );
+        super::common::emit_incomplete_stream_error(
+            &mut output,
+            "openai_completions",
+            detail,
+            limits.http.max_error_message_chars,
+            &stream,
+        );
+        return Ok(());
     }
 
     if output.stop_reason == StopReason::Error {
@@ -1403,6 +1433,53 @@ fn map_finish_reason(reason: &str) -> (StopReason, Option<String>) {
             StopReason::Error,
             Some(format!("Provider finish_reason: {}", other)),
         ),
+    }
+}
+
+fn incomplete_openai_completions_stream_detail(
+    saw_finish_reason: bool,
+    saw_done_sentinel: bool,
+    partial_tool_args: &HashMap<u32, String>,
+    line_buffer: &str,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+
+    if !saw_finish_reason {
+        reasons.push("missing finish_reason".to_string());
+    }
+
+    if !saw_done_sentinel {
+        reasons.push("missing [DONE] sentinel".to_string());
+    }
+
+    let mut incomplete_tool_indexes: Vec<_> = partial_tool_args
+        .iter()
+        .filter_map(|(index, args)| {
+            let trimmed = args.trim();
+            (!trimmed.is_empty() && serde_json::from_str::<serde_json::Value>(trimmed).is_err())
+                .then_some(*index)
+        })
+        .collect();
+    incomplete_tool_indexes.sort_unstable();
+    if !incomplete_tool_indexes.is_empty() {
+        reasons.push(format!(
+            "unfinished tool input JSON at indices [{}]",
+            incomplete_tool_indexes
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if !line_buffer.trim().is_empty() {
+        reasons.push("trailing partial SSE frame".to_string());
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
     }
 }
 
@@ -1594,5 +1671,24 @@ mod tests {
             converted.extra_fields["reasoning_content"],
             serde_json::Value::String("My reasoning".to_string())
         );
+    }
+
+    #[test]
+    fn test_incomplete_openai_completions_stream_detail_reports_missing_closure() {
+        let mut partial_tool_args = HashMap::new();
+        partial_tool_args.insert(1, "{\"path\":\"logs".to_string());
+
+        let detail = incomplete_openai_completions_stream_detail(
+            false,
+            false,
+            &partial_tool_args,
+            "data: {",
+        )
+        .expect("detail");
+
+        assert!(detail.contains("missing finish_reason"));
+        assert!(detail.contains("missing [DONE] sentinel"));
+        assert!(detail.contains("unfinished tool input JSON at indices [1]"));
+        assert!(detail.contains("trailing partial SSE frame"));
     }
 }

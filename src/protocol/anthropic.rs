@@ -14,6 +14,7 @@ use crate::types::*;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 const CLAUDE_CODE_VERSION: &str = "2.1.75";
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -1022,10 +1023,12 @@ async fn run_stream(
 
     // Track content blocks by index
     let mut block_types: Vec<BlockType> = Vec::new();
-    let mut partial_tool_args: std::collections::HashMap<usize, String> =
-        std::collections::HashMap::new();
+    let mut open_blocks: HashSet<usize> = HashSet::new();
+    let mut partial_tool_args: HashMap<usize, String> = HashMap::new();
     let mut line_buffer = String::new();
     let mut current_event_type = String::new();
+    let mut saw_message_delta = false;
+    let mut saw_message_stop = false;
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -1060,9 +1063,12 @@ async fn run_stream(
                 prelude_retry_attempt += 1;
                 output = initial_output.clone();
                 block_types.clear();
+                open_blocks.clear();
                 partial_tool_args.clear();
                 line_buffer.clear();
                 current_event_type.clear();
+                saw_message_delta = false;
+                saw_message_stop = false;
 
                 let Some(response) = super::common::send_request_with_retry(
                     &client,
@@ -1167,6 +1173,7 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::Text;
+                                open_blocks.insert(idx);
                                 output
                                     .content
                                     .push(ContentBlock::Text(TextContent::new("")));
@@ -1181,6 +1188,7 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::Thinking;
+                                open_blocks.insert(idx);
                                 output
                                     .content
                                     .push(ContentBlock::Thinking(ThinkingContent::new("")));
@@ -1195,6 +1203,7 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::RedactedThinking;
+                                open_blocks.insert(idx);
                                 let mut thinking = ThinkingContent::new("");
                                 thinking.redacted = true;
                                 output.content.push(ContentBlock::Thinking(thinking));
@@ -1204,6 +1213,7 @@ async fn run_stream(
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::ToolUse;
+                                open_blocks.insert(idx);
                                 partial_tool_args.insert(idx, String::new());
                                 output.content.push(ContentBlock::ToolCall(ToolCall::new(
                                     id,
@@ -1286,6 +1296,7 @@ async fn run_stream(
                 "content_block_stop" => {
                     if let Ok(stop_data) = serde_json::from_str::<ContentBlockStopData>(data) {
                         let idx = stop_data.index;
+                        open_blocks.remove(&idx);
                         if let Some(block_type) = block_types.get(idx) {
                             match block_type {
                                 BlockType::Text => {
@@ -1343,6 +1354,7 @@ async fn run_stream(
                                         tool_call,
                                         partial: output.clone(),
                                     });
+                                    partial_tool_args.remove(&idx);
                                 }
                                 _ => {}
                             }
@@ -1351,6 +1363,7 @@ async fn run_stream(
                 }
                 "message_delta" => {
                     if let Ok(delta_data) = serde_json::from_str::<MessageDeltaData>(data) {
+                        saw_message_delta = true;
                         if let Some(ref reason) = delta_data.delta.stop_reason {
                             output.stop_reason = match reason.as_str() {
                                 "end_turn" => StopReason::Stop,
@@ -1370,7 +1383,7 @@ async fn run_stream(
                     }
                 }
                 "message_stop" => {
-                    // Stream complete, handled below
+                    saw_message_stop = true;
                 }
                 "error" => {
                     // Parse error event
@@ -1398,6 +1411,30 @@ async fn run_stream(
         }
     }
 
+    if let Some(detail) = incomplete_anthropic_stream_detail(
+        saw_message_delta,
+        saw_message_stop,
+        &block_types,
+        &open_blocks,
+        &partial_tool_args,
+        &line_buffer,
+    ) {
+        tracing::error!(
+            url = %url,
+            model = %model.id,
+            detail = %detail,
+            "Anthropic stream ended before protocol completion"
+        );
+        super::common::emit_incomplete_stream_error(
+            &mut output,
+            "anthropic",
+            detail,
+            limits.http.max_error_message_chars,
+            &stream,
+        );
+        return Ok(());
+    }
+
     stream.push(AssistantMessageEvent::Done {
         reason: output.stop_reason,
         message: output,
@@ -1415,6 +1452,70 @@ enum BlockType {
     Thinking,
     RedactedThinking,
     ToolUse,
+}
+
+fn incomplete_anthropic_stream_detail(
+    saw_message_delta: bool,
+    saw_message_stop: bool,
+    block_types: &[BlockType],
+    open_blocks: &HashSet<usize>,
+    partial_tool_args: &HashMap<usize, String>,
+    line_buffer: &str,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+
+    if !saw_message_delta {
+        reasons.push("missing message_delta".to_string());
+    }
+    if !saw_message_stop {
+        reasons.push("missing message_stop".to_string());
+    }
+
+    if !open_blocks.is_empty() {
+        let mut indexes: Vec<_> = open_blocks.iter().copied().collect();
+        indexes.sort_unstable();
+        reasons.push(format!(
+            "unclosed content blocks at indices [{}]",
+            indexes
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let mut incomplete_tool_indexes: Vec<_> = open_blocks
+        .iter()
+        .copied()
+        .filter(|index| {
+            matches!(block_types.get(*index), Some(BlockType::ToolUse))
+                && partial_tool_args
+                    .get(index)
+                    .is_some_and(|args| !args.trim().is_empty())
+        })
+        .collect();
+    incomplete_tool_indexes.sort_unstable();
+    if !incomplete_tool_indexes.is_empty() {
+        reasons.push(format!(
+            "unfinished tool input JSON at indices [{}]",
+            incomplete_tool_indexes
+                .iter()
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let trailing = line_buffer.trim();
+    if !trailing.is_empty() {
+        reasons.push("trailing partial SSE frame".to_string());
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
+    }
 }
 
 #[cfg(test)]
@@ -1475,5 +1576,30 @@ mod tests {
             AnthropicContent::Blocks(blocks) => assert_eq!(blocks.len(), 2),
             _ => panic!("Expected blocks"),
         }
+    }
+
+    #[test]
+    fn test_incomplete_stream_detail_reports_missing_closure() {
+        let mut open_blocks = HashSet::new();
+        open_blocks.insert(1);
+
+        let mut partial_tool_args = HashMap::new();
+        partial_tool_args.insert(1, "{\"path\":\"logs".to_string());
+
+        let detail = incomplete_anthropic_stream_detail(
+            false,
+            false,
+            &[BlockType::Unknown, BlockType::ToolUse],
+            &open_blocks,
+            &partial_tool_args,
+            "event: content_block_delta\ndata: {\"partial_json\":\"{\\\"path\\\":\\\"logs\"}",
+        )
+        .expect("detail should be reported");
+
+        assert!(detail.contains("missing message_delta"));
+        assert!(detail.contains("missing message_stop"));
+        assert!(detail.contains("unclosed content blocks at indices [1]"));
+        assert!(detail.contains("unfinished tool input JSON at indices [1]"));
+        assert!(detail.contains("trailing partial SSE frame"));
     }
 }

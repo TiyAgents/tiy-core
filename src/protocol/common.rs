@@ -26,6 +26,9 @@ pub const DEFAULT_MAX_RETRIES: u32 = 2;
 /// Default maximum retry delay in milliseconds (30 seconds).
 pub const DEFAULT_MAX_RETRY_DELAY_MS: u64 = 30_000;
 
+/// Prefix used to mark provider-side streams that ended before protocol closure.
+pub const INCOMPLETE_STREAM_ERROR_PREFIX: &str = "[incomplete_stream]";
+
 /// Base delay for exponential backoff in milliseconds.
 const RETRY_BASE_DELAY_MS: u64 = 500;
 
@@ -369,6 +372,33 @@ pub fn emit_terminal_error(
         error: output.clone(),
     });
     stream.end(None);
+}
+
+/// Emit a terminal error for a semantically incomplete provider stream.
+pub fn emit_incomplete_stream_error(
+    output: &mut AssistantMessage,
+    provider: &str,
+    detail: impl Into<String>,
+    max_error_message_chars: usize,
+    stream: &AssistantMessageEventStream,
+) {
+    let detail = detail.into();
+    emit_terminal_error(
+        output,
+        format!(
+            "{INCOMPLETE_STREAM_ERROR_PREFIX}{provider}: {}",
+            crate::types::truncate_error_message(&detail, max_error_message_chars)
+        ),
+        max_error_message_chars,
+        stream,
+    );
+}
+
+/// Parse an incomplete-stream error marker back into `(provider, detail)`.
+pub fn parse_incomplete_stream_error(error_message: &str) -> Option<(String, String)> {
+    let payload = error_message.strip_prefix(INCOMPLETE_STREAM_ERROR_PREFIX)?;
+    let (provider, detail) = payload.split_once(':')?;
+    Some((provider.trim().to_string(), detail.trim().to_string()))
 }
 
 /// Emit a terminal background-task error unless the stream has already ended.

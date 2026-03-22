@@ -189,6 +189,8 @@ pub enum AgentEvent {
     },
     /// Message finished.
     MessageEnd { message: AgentMessage },
+    /// A previously streamed message was discarded and removed from model state.
+    MessageDiscarded { message: AgentMessage, reason: String },
     /// Tool execution started.
     ToolExecutionStart {
         tool_call_id: String,
@@ -208,6 +210,13 @@ pub enum AgentEvent {
         tool_name: String,
         result: serde_json::Value,
         is_error: bool,
+    },
+    /// The current assistant turn is being retried from the latest stable context.
+    TurnRetrying {
+        attempt: usize,
+        max_attempts: usize,
+        delay_ms: u64,
+        reason: String,
     },
 }
 

@@ -15,9 +15,14 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Default maximum number of turns (LLM calls) per prompt.
 pub const DEFAULT_MAX_TURNS: usize = 25;
+
+const INCOMPLETE_TURN_MAX_RETRIES: usize = 3;
+const INCOMPLETE_TURN_RETRY_DELAYS_MS: [u64; INCOMPLETE_TURN_MAX_RETRIES] = [1_000, 2_000, 4_000];
+const INCOMPLETE_TURN_TOTAL_RETRY_BUDGET: Duration = Duration::from_secs(10);
 
 /// Subscriber ID for unsubscription.
 pub type SubscriberId = u64;
@@ -1368,6 +1373,8 @@ impl Agent {
         let max_turns = *self.max_turns.read();
         let mut new_messages = Vec::new();
         let mut turn_count = 0;
+        let mut incomplete_turn_retries = 0usize;
+        let mut incomplete_turn_retry_started_at: Option<Instant> = None;
 
         // Sync message limit from security config
         let max_messages = self.config.read().security.agent.max_messages;
@@ -1398,6 +1405,8 @@ impl Agent {
             }
 
             self.emit(AgentEvent::TurnStart);
+            let turn_snapshot = self.snapshot();
+            let new_messages_len_before_turn = new_messages.len();
 
             // Run one LLM turn
             let dummy_provider: ArcProtocol = Arc::new(DummyProvider);
@@ -1441,6 +1450,8 @@ impl Agent {
                             for msg in deferred_steering {
                                 self.append_run_message(&mut new_messages, msg, true, true);
                             }
+                            incomplete_turn_retries = 0;
+                            incomplete_turn_retry_started_at = None;
                             turn_count += 1;
                             continue;
                         }
@@ -1451,6 +1462,8 @@ impl Agent {
                             self.append_run_message(&mut new_messages, msg, true, true);
                         }
 
+                        incomplete_turn_retries = 0;
+                        incomplete_turn_retry_started_at = None;
                         turn_count += 1;
                         continue;
                     } else {
@@ -1464,18 +1477,57 @@ impl Agent {
                             assistant_msg.stop_reason,
                             StopReason::Error | StopReason::Aborted
                         ) {
-                            *self.state.error.write() = Some(
-                                assistant_msg
-                                    .error_message
-                                    .clone()
-                                    .unwrap_or_else(|| assistant_msg.stop_reason.to_string()),
-                            );
-                            return AgentRunOutcome::error(
-                                new_messages,
-                                agent_error_from_assistant(&assistant_msg),
-                            );
+                            let agent_error = agent_error_from_assistant(&assistant_msg);
+                            if matches!(agent_error, AgentError::IncompleteStream { .. }) {
+                                let started_at =
+                                    incomplete_turn_retry_started_at.get_or_insert_with(Instant::now);
+                                let retry_delay_ms = INCOMPLETE_TURN_RETRY_DELAYS_MS
+                                    .get(incomplete_turn_retries)
+                                    .copied();
+                                let can_retry = retry_delay_ms
+                                    .map(Duration::from_millis)
+                                    .is_some_and(|delay| {
+                                        incomplete_turn_retries < INCOMPLETE_TURN_MAX_RETRIES
+                                            && started_at.elapsed() + delay
+                                                <= INCOMPLETE_TURN_TOTAL_RETRY_BUDGET
+                                    });
+
+                                self.emit(AgentEvent::MessageDiscarded {
+                                    message: agent_msg.clone(),
+                                    reason: agent_error.to_string(),
+                                });
+                                new_messages.truncate(new_messages_len_before_turn);
+                                self.restore_snapshot(&turn_snapshot);
+
+                                if can_retry {
+                                    let delay_ms = retry_delay_ms.expect("retry delay should exist");
+                                    incomplete_turn_retries += 1;
+                                    self.emit(AgentEvent::TurnRetrying {
+                                        attempt: incomplete_turn_retries,
+                                        max_attempts: INCOMPLETE_TURN_MAX_RETRIES,
+                                        delay_ms,
+                                        reason: agent_error.to_string(),
+                                    });
+                                    if let Err(retry_error) = self
+                                        .sleep_for_turn_retry(Duration::from_millis(delay_ms))
+                                        .await
+                                    {
+                                        *self.state.error.write() = Some(retry_error.to_string());
+                                        return AgentRunOutcome::error(new_messages, retry_error);
+                                    }
+                                    continue;
+                                }
+
+                                *self.state.error.write() = Some(agent_error.to_string());
+                                return AgentRunOutcome::error(new_messages, agent_error);
+                            }
+
+                            *self.state.error.write() = Some(agent_error.to_string());
+                            return AgentRunOutcome::error(new_messages, agent_error);
                         }
 
+                        incomplete_turn_retries = 0;
+                        incomplete_turn_retry_started_at = None;
                         let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
@@ -1499,6 +1551,8 @@ impl Agent {
                     }
                 }
                 Err(AgentError::Other(ref msg)) if msg == "Steered" => {
+                    incomplete_turn_retries = 0;
+                    incomplete_turn_retry_started_at = None;
                     turn_count += 1;
                     continue;
                 }
@@ -1706,6 +1760,28 @@ impl Agent {
             error,
             message_count,
             max_messages,
+        }
+    }
+
+    fn restore_snapshot(&self, snapshot: &AgentStateSnapshot) {
+        self.state.set_system_prompt(snapshot.system_prompt.clone());
+        self.state.replace_messages(snapshot.messages.clone());
+        self.state.set_streaming(snapshot.is_streaming);
+        *self.state.stream_message.write() = snapshot.stream_message.clone();
+        *self.state.pending_tool_calls.write() = snapshot.pending_tool_calls.clone();
+        *self.state.error.write() = snapshot.error.clone();
+        self.state.set_max_messages(snapshot.max_messages);
+
+        let mut config = self.config.write();
+        config.model = snapshot.model.clone();
+        config.thinking_level = snapshot.thinking_level;
+    }
+
+    async fn sleep_for_turn_retry(&self, delay: Duration) -> Result<(), AgentError> {
+        let abort_signal = self.current_abort_signal();
+        tokio::select! {
+            _ = abort_signal.cancelled() => Err(AgentError::Other("Aborted".to_string())),
+            _ = tokio::time::sleep(delay) => Ok(()),
         }
     }
 }
@@ -1969,7 +2045,15 @@ fn agent_error_from_assistant(message: &AssistantMessage) -> AgentError {
         .unwrap_or_else(|| message.stop_reason.to_string());
     match message.stop_reason {
         StopReason::Aborted => AgentError::Other("Aborted".to_string()),
-        StopReason::Error => AgentError::ProviderError(error_message),
+        StopReason::Error => {
+            if let Some((provider, detail)) =
+                crate::protocol::common::parse_incomplete_stream_error(&error_message)
+            {
+                AgentError::IncompleteStream { provider, detail }
+            } else {
+                AgentError::ProviderError(error_message)
+            }
+        }
         _ => AgentError::Other(error_message),
     }
 }
@@ -2165,6 +2249,9 @@ pub enum AgentError {
 
     #[error("Provider error: {0}")]
     ProviderError(String),
+
+    #[error("Incomplete {provider} stream: {detail}")]
+    IncompleteStream { provider: String, detail: String },
 
     #[error("Agent reached the maximum turn limit ({0}) before producing a final response")]
     MaxTurnsReached(usize),

@@ -913,9 +913,11 @@ async fn test_standalone_agent_loop_apis_work() {
             AgentEvent::MessageStart { .. } => "message_start".to_string(),
             AgentEvent::MessageUpdate { .. } => "message_update".to_string(),
             AgentEvent::MessageEnd { .. } => "message_end".to_string(),
+            AgentEvent::MessageDiscarded { .. } => "message_discarded".to_string(),
             AgentEvent::ToolExecutionStart { .. } => "tool_execution_start".to_string(),
             AgentEvent::ToolExecutionUpdate { .. } => "tool_execution_update".to_string(),
             AgentEvent::ToolExecutionEnd { .. } => "tool_execution_end".to_string(),
+            AgentEvent::TurnRetrying { .. } => "turn_retrying".to_string(),
         });
     }
     let stream_result = stream.result().await;
@@ -1126,6 +1128,98 @@ async fn test_stream_fn_with_signal_receives_abort() {
 
     let _ = prompt_task.await.unwrap();
     assert!(observed.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_incomplete_stream_retries_from_stable_context_and_discards_partial() {
+    let agent = Agent::with_model(make_model());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_stream = Arc::clone(&attempts);
+    let recorded_events = Arc::new(parking_lot::Mutex::new(Vec::<AgentEvent>::new()));
+    let recorded_events_for_subscriber = Arc::clone(&recorded_events);
+
+    let _subscription = agent.subscribe(move |event| {
+        recorded_events_for_subscriber.lock().push(event.clone());
+    });
+
+    agent.set_stream_fn_with_signal(move |_model, _context, _options, _signal| {
+        let attempt = attempts_for_stream.fetch_add(1, Ordering::SeqCst);
+        async move {
+            let stream = AssistantMessageEventStream::new_assistant_stream();
+            let stream_clone = stream.clone();
+
+            tokio::spawn(async move {
+                if attempt == 0 {
+                    let partial = make_assistant_message("partial output");
+                    let mut error = partial.clone();
+                    error.stop_reason = StopReason::Error;
+                    error.error_message = Some(
+                        "[incomplete_stream]anthropic: missing message_stop".to_string(),
+                    );
+                    stream_clone.push(AssistantMessageEvent::Start {
+                        partial: partial.clone(),
+                    });
+                    stream_clone.push(AssistantMessageEvent::Error {
+                        reason: StopReason::Error,
+                        error,
+                    });
+                    stream_clone.end(None);
+                    return;
+                }
+
+                let response = make_assistant_message("recovered output");
+                stream_clone.push(AssistantMessageEvent::Start {
+                    partial: response.clone(),
+                });
+                stream_clone.push(AssistantMessageEvent::Done {
+                    reason: StopReason::Stop,
+                    message: response,
+                });
+                stream_clone.end(None);
+            });
+
+            stream
+        }
+    });
+
+    let result = agent.prompt("hello").await.expect("prompt should recover");
+    let events = recorded_events.lock().clone();
+    let assistant_texts = result
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Assistant(assistant) => Some(assistant.text_content()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(assistant_texts, vec!["recovered output".to_string()]);
+    assert!(matches!(
+        events.iter().find(|event| matches!(event, AgentEvent::MessageDiscarded { .. })),
+        Some(AgentEvent::MessageDiscarded { reason, .. })
+            if reason.contains("Incomplete anthropic stream")
+    ));
+    assert!(matches!(
+        events.iter().find(|event| matches!(event, AgentEvent::TurnRetrying { .. })),
+        Some(AgentEvent::TurnRetrying {
+            attempt: 1,
+            max_attempts: 3,
+            delay_ms: 1_000,
+            ..
+        })
+    ));
+    assert_eq!(
+        agent
+            .snapshot()
+            .messages
+            .into_iter()
+            .filter_map(|message| match message {
+                AgentMessage::Assistant(assistant) => Some(assistant.text_content()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec!["recovered output".to_string()]
+    );
 }
 
 // ============================================================================

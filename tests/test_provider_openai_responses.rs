@@ -185,6 +185,66 @@ async fn test_stream_simple_text_response() {
 }
 
 #[tokio::test]
+async fn test_stream_reports_incomplete_stream_for_truncated_response() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses_sse(vec![
+        (
+            "response.output_item.added",
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": "item_01",
+                    "role": "assistant",
+                    "content": []
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "response.output_text.delta",
+            &json!({
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello world!"
+            })
+            .to_string(),
+        ),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Hello");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("[incomplete_stream]openai_responses:")));
+    assert!(result
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("missing response.completed/response.done event")));
+}
+
+#[tokio::test]
 async fn test_stream_retries_retryable_http_status_before_streaming() {
     let server = MockServer::start().await;
 
