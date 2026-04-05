@@ -1,4 +1,4 @@
-//! Basic usage example for tiy-core.
+//! Basic usage example for tiycore.
 //!
 //! This example demonstrates:
 //! - All supported Provider types
@@ -15,7 +15,7 @@
 //! For request body:  RUST_LOG=debug cargo run --example basic_usage
 
 use futures::StreamExt;
-use tiy_core::{
+use tiycore::{
     models::get_model,
     provider::get_provider,
     stream::AssistantMessageEventStream,
@@ -36,7 +36,7 @@ fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    println!("=== tiy-core Basic Usage Example ===\n");
+    println!("=== tiycore Basic Usage Example ===\n");
 
     // ============================================
     // Part 2: Make Actual LLM Request
@@ -66,7 +66,7 @@ fn main() {
     // Create context with messages
     let context = Context {
         system_prompt: Some("You are a helpful assistant. Answer in short sentences.".to_string()),
-        messages: vec![tiy_core::types::Message::User(UserMessage::text(
+        messages: vec![tiycore::types::Message::User(UserMessage::text(
             "What is the capital of France?",
         ))],
         tools: None,
@@ -119,11 +119,11 @@ fn main() {
 
                 for event in events {
                     match event {
-                        tiy_core::types::AssistantMessageEvent::TextDelta { delta, .. } => {
+                        tiycore::types::AssistantMessageEvent::TextDelta { delta, .. } => {
                             print!("{}", delta);
                             full_response.push_str(&delta);
                         }
-                        tiy_core::types::AssistantMessageEvent::Done { message, .. } => {
+                        tiycore::types::AssistantMessageEvent::Done { message, .. } => {
                             println!("\n  --------");
                             println!("  Stop reason: {:?}", message.stop_reason);
                             println!(
@@ -131,7 +131,7 @@ fn main() {
                                 message.usage.input, message.usage.output
                             );
                         }
-                        tiy_core::types::AssistantMessageEvent::Error { error, .. } => {
+                        tiycore::types::AssistantMessageEvent::Error { error, .. } => {
                             println!("\n  Error: {:?}", error.error_message);
                         }
                         _ => {}
@@ -174,17 +174,17 @@ fn process_stream_sync(
 
         for event in events {
             match event {
-                tiy_core::types::AssistantMessageEvent::TextDelta { delta, .. } => {
+                tiycore::types::AssistantMessageEvent::TextDelta { delta, .. } => {
                     full_response.push_str(&delta);
                 }
-                tiy_core::types::AssistantMessageEvent::Done { message, .. } => {
+                tiycore::types::AssistantMessageEvent::Done { message, .. } => {
                     println!("  Stop reason: {:?}", message.stop_reason);
                     println!(
                         "  Usage: {} input, {} output tokens",
                         message.usage.input, message.usage.output
                     );
                 }
-                tiy_core::types::AssistantMessageEvent::Error { error, .. } => {
+                tiycore::types::AssistantMessageEvent::Error { error, .. } => {
                     return Err(format!("API error: {:?}", error.error_message).into());
                 }
                 _ => {}

@@ -35,7 +35,7 @@ const MINIMAX_CN_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
 const KIMI_CODING_BASE_URL: &str = "https://api.kimi.com/coding";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_CATALOG_MANIFEST_URL: &str =
-    "https://tiyagents.github.io/tiy-core/catalog/manifest.json";
+    "https://tiyagents.github.io/tiycore/catalog/manifest.json";
 
 /// Request to fetch models from a provider.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -45,7 +45,7 @@ Use a stale-while-revalidate startup strategy:
 4. In the background, call `refresh_catalog_snapshot(...)`.
 5. If the refresh returns `Updated`, reload the file-backed store.
 
-`tiy-core` does not guess your cache directory. The application should choose the local path and pass it in.
+`tiycore` does not guess your cache directory. The application should choose the local path and pass it in.
 
 For ZenMux specifically, the library merges both the OpenAI-compatible
 `/api/v1/models` list and the Vertex-style `/api/vertex-ai/v1beta/models` list
@@ -100,11 +100,11 @@ The repository workflow for this is:
 
 ```rust,no_run
 use std::path::PathBuf;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     list_models_with_enrichment, load_catalog_metadata_store,
     refresh_catalog_snapshot, CatalogRemoteConfig, FetchModelsRequest,
 };
-use tiy_core::Provider;
+use tiycore::Provider;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -137,8 +137,8 @@ In that case, skip `list_models_with_enrichment(...)` and call
 
 ```rust,no_run
 use std::path::PathBuf;
-use tiy_core::catalog::{enrich_manual_model, load_catalog_metadata_store};
-use tiy_core::Provider;
+use tiycore::catalog::{enrich_manual_model, load_catalog_metadata_store};
+use tiycore::Provider;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot_path = PathBuf::from("/path/to/cache/catalog.json");
@@ -177,8 +177,8 @@ You can verify the published GitHub Pages snapshot manually before wiring it
 into an application:
 
 ```bash
-curl -fsSL https://tiyagents.github.io/tiy-core/catalog/manifest.json
-curl -fsSL https://tiyagents.github.io/tiy-core/catalog/catalog.json -o /tmp/catalog.json
+curl -fsSL https://tiyagents.github.io/tiycore/catalog/manifest.json
+curl -fsSL https://tiyagents.github.io/tiycore/catalog/catalog.json -o /tmp/catalog.json
 python3 -m json.tool /tmp/catalog.json >/dev/null
 ```
 
@@ -187,7 +187,7 @@ looks like this:
 
 ```rust,no_run
 use std::path::PathBuf;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     load_catalog_metadata_store, refresh_catalog_snapshot, CatalogRemoteConfig,
 };
 

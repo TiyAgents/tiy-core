@@ -1,12 +1,12 @@
 <div align="center">
 
-# tiy-core
+# tiycore
 
 **Unified LLM API and stateful Agent runtime in Rust**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Crate](https://img.shields.io/badge/crate-tiy--core-green.svg?style=flat-square)](https://github.com/TiyAgents/tiy-core)
+[![Crate](https://img.shields.io/badge/crate-tiycore-green.svg?style=flat-square)](https://github.com/TiyAgents/tiycore)
 
 [English](./README.md) | [中文](./README-ZH.md)
 
@@ -14,7 +14,7 @@
 
 ---
 
-tiy-core is a Rust library that provides a single, provider-agnostic interface for streaming LLM completions and running agentic tool-use loops. Write your application logic once, then swap between OpenAI, Anthropic, Google, Ollama, and 8+ other providers by changing a config value.
+tiycore is a Rust library that provides a single, provider-agnostic interface for streaming LLM completions and running agentic tool-use loops. Write your application logic once, then swap between OpenAI, Anthropic, Google, Ollama, and 8+ other providers by changing a config value.
 
 ## Highlights
 
@@ -71,7 +71,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tiy-core = "0.1.0"
+tiycore = "0.1.0"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 ```
@@ -80,14 +80,14 @@ For local development before publishing, you can still use:
 
 ```toml
 [dependencies]
-tiy-core = { path = "../tiy-core" }
+tiycore = { path = "../tiycore" }
 ```
 
 ### Streaming Completion
 
 ```rust
 use futures::StreamExt;
-use tiy_core::{
+use tiycore::{
     provider::get_provider,
     types::*,
 };
@@ -139,7 +139,7 @@ async fn main() {
 ### Agent with Tool Calling
 
 ```rust
-use tiy_core::{
+use tiycore::{
     agent::{Agent, AgentTool, AgentToolResult},
     types::*,
 };
@@ -210,7 +210,7 @@ For wire-format protocol internals (SSE parsing, request building, delegation ma
 
 ## Publishing
 
-To make downstream projects depend on `tiy-core` without a Git URL, publish the crate to crates.io and then depend on it by version:
+To make downstream projects depend on `tiycore` without a Git URL, publish the crate to crates.io and then depend on it by version:
 
 ```bash
 cargo login
@@ -222,7 +222,7 @@ After publishing, consumers can keep using:
 
 ```toml
 [dependencies]
-tiy-core = "0.1.0"
+tiycore = "0.1.0"
 ```
 
 ## API Key Resolution
@@ -247,14 +247,14 @@ You can control retries per request using `StreamOptions.max_retries` and `Strea
 
 ## Security Configuration
 
-tiy-core ships with a centralized `SecurityConfig` struct that controls all security limits and policies. Every field has a safe default value — you only need to override what you want to change.
+tiycore ships with a centralized `SecurityConfig` struct that controls all security limits and policies. Every field has a safe default value — you only need to override what you want to change.
 
 ### Enabling Security Config
 
 **In code (programmatic):**
 
 ```rust
-use tiy_core::types::{SecurityConfig, HttpLimits, AgentLimits, StreamOptions};
+use tiycore::types::{SecurityConfig, HttpLimits, AgentLimits, StreamOptions};
 
 // Method 1: Use defaults (zero-config)
 let options = StreamOptions::default();
@@ -283,7 +283,7 @@ let options = StreamOptions {
 **From a JSON config file:**
 
 ```rust
-use tiy_core::types::SecurityConfig;
+use tiycore::types::SecurityConfig;
 
 // Load from file — only specified fields are overridden, rest use defaults
 let json = std::fs::read_to_string("security.json").unwrap();

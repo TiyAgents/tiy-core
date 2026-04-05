@@ -1,7 +1,7 @@
 //! Tests for models/registry module and provider/registry module.
 
-use tiy_core::models::ModelRegistry;
-use tiy_core::types::*;
+use tiycore::models::ModelRegistry;
+use tiycore::types::*;
 
 // ============================================================================
 // ModelRegistry tests
@@ -162,20 +162,20 @@ fn test_predefined_google_models() {
 
 #[test]
 fn test_get_model_function() {
-    let model = tiy_core::models::get_model("openai", "gpt-4o-mini");
+    let model = tiycore::models::get_model("openai", "gpt-4o-mini");
     assert!(model.is_some());
     assert_eq!(model.unwrap().id, "gpt-4o-mini");
 }
 
 #[test]
 fn test_get_model_nonexistent() {
-    let model = tiy_core::models::get_model("openai", "nonexistent");
+    let model = tiycore::models::get_model("openai", "nonexistent");
     assert!(model.is_none());
 }
 
 #[test]
 fn test_get_providers_function() {
-    let providers = tiy_core::models::get_providers();
+    let providers = tiycore::models::get_providers();
     assert!(providers.len() >= 3);
 }
 
@@ -184,8 +184,8 @@ fn test_get_providers_function() {
 // ============================================================================
 
 use std::sync::Arc;
-use tiy_core::provider::{LLMProtocol, ProtocolRegistry};
-use tiy_core::stream::AssistantMessageEventStream;
+use tiycore::provider::{LLMProtocol, ProtocolRegistry};
+use tiycore::stream::AssistantMessageEventStream;
 
 struct MockProvider;
 

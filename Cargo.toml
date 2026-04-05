@@ -1,14 +1,14 @@
 [package]
-name = "tiy-core"
+name = "tiycore"
 version = "0.1.0"
 edition = "2021"
 description = "Unified LLM API and stateful Agent runtime in Rust"
 license = "MIT"
 authors = ["TiyAgents Team"]
 readme = "README.md"
-repository = "https://github.com/TiyAgents/tiy-core"
-homepage = "https://github.com/TiyAgents/tiy-core"
-documentation = "https://docs.rs/tiy-core"
+repository = "https://github.com/TiyAgents/tiycore"
+homepage = "https://github.com/TiyAgents/tiycore"
+documentation = "https://docs.rs/tiycore"
 keywords = ["llm", "ai", "agent", "openai", "anthropic"]
 categories = ["api-bindings", "asynchronous"]
 

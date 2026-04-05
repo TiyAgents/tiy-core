@@ -1,8 +1,8 @@
 //! Tests for Ollama provider.
 
-use tiy_core::provider::ollama::OllamaProvider;
-use tiy_core::provider::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::provider::ollama::OllamaProvider;
+use tiycore::provider::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

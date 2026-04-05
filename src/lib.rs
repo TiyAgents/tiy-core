@@ -1,4 +1,4 @@
-//! # tiy-core
+//! # tiycore
 //!
 //! A unified LLM API and stateful Agent runtime in Rust.
 //!
@@ -11,7 +11,7 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use tiy_core::{provider::openai::OpenAIProvider, types::*};
+//! use tiycore::{provider::openai::OpenAIProvider, types::*};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {

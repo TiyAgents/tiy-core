@@ -3,9 +3,9 @@
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::protocol::openai_responses::OpenAIResponsesProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -1,8 +1,8 @@
 //! Tests for transform module: messages and tool_calls.
 
 use serde_json::json;
-use tiy_core::transform::{normalize_tool_call_id, transform_messages, ToolCallIdMapper};
-use tiy_core::types::*;
+use tiycore::transform::{normalize_tool_call_id, transform_messages, ToolCallIdMapper};
+use tiycore::types::*;
 
 // ============================================================================
 // Helper functions

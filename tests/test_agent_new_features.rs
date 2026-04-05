@@ -9,11 +9,11 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
-use tiy_core::agent::*;
-use tiy_core::provider::{ArcProtocol, LLMProtocol};
-use tiy_core::stream::AssistantMessageEventStream;
-use tiy_core::thinking::ThinkingLevel;
-use tiy_core::types::*;
+use tiycore::agent::*;
+use tiycore::provider::{ArcProtocol, LLMProtocol};
+use tiycore::stream::AssistantMessageEventStream;
+use tiycore::thinking::ThinkingLevel;
+use tiycore::types::*;
 
 // ============================================================================
 // Mock Provider (shared)
@@ -294,27 +294,27 @@ fn test_thinking_budgets_budget_for() {
         high: Some(4096),
     };
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Minimal),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::Minimal),
         Some(64)
     );
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Low),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::Low),
         Some(256)
     );
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Medium),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::Medium),
         None
     );
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::High),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::High),
         Some(4096)
     );
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::Off),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::Off),
         None
     );
     assert_eq!(
-        budgets.budget_for(tiy_core::thinking::ThinkingLevel::XHigh),
+        budgets.budget_for(tiycore::thinking::ThinkingLevel::XHigh),
         None
     );
 }
@@ -938,7 +938,7 @@ async fn test_terminal_error_assistant_is_persisted_to_state() {
     assert!(matches!(result, Err(AgentError::ProviderError(_))));
     assert_eq!(
         *agent.state().error.read(),
-        Some("provider exploded".to_string())
+        Some("Provider error: provider exploded".to_string())
     );
 
     let messages = agent.state().messages.read();
@@ -1717,7 +1717,7 @@ async fn test_thinking_budgets_default_fallback() {
     assert_eq!(captured_reasoning[0], Some(ThinkingLevel::Low));
     assert_eq!(
         captured_budget[0],
-        Some(tiy_core::thinking::ThinkingConfig::default_budget(
+        Some(tiycore::thinking::ThinkingConfig::default_budget(
             ThinkingLevel::Low
         )),
         "Should fall back to default budget (512) when no custom budgets set"

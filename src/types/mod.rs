@@ -1,4 +1,4 @@
-//! Core type definitions for tiy-core.
+//! Core type definitions for tiycore.
 
 mod content;
 mod context;

@@ -1,7 +1,7 @@
 //! Tests for types module: model, message, content, context, usage, events.
 
 use serde_json::json;
-use tiy_core::types::*;
+use tiycore::types::*;
 
 // ============================================================================
 // Api enum tests
@@ -1351,7 +1351,7 @@ fn test_simple_stream_options_with_reasoning() {
             api_key: Some("key".to_string()),
             ..Default::default()
         },
-        reasoning: Some(tiy_core::thinking::ThinkingLevel::Medium),
+        reasoning: Some(tiycore::thinking::ThinkingLevel::Medium),
         thinking_budget_tokens: None,
     };
     assert!(simple.reasoning.is_some());

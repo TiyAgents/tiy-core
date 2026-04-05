@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tiy_core::protocol::anthropic::AnthropicProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::protocol::anthropic::AnthropicProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -321,6 +321,15 @@ async fn test_stream_sends_cache_control_tool_choice_and_metadata() {
                         "cache_creation_input_tokens": 0
                     }
                 }
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 12}
             })
             .to_string(),
         ),

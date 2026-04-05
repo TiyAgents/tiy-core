@@ -4,9 +4,9 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
-use tiy_core::protocol::openai_completions::OpenAICompletionsProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::protocol::openai_completions::OpenAICompletionsProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -578,8 +578,12 @@ async fn test_stream_empty_response() {
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
 
-    assert_eq!(result.stop_reason, StopReason::Stop);
-    assert!(result.content.is_empty());
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert_eq!(result.text_content(), "");
+    assert!(result.error_message.as_deref().is_some_and(|message| {
+        message.contains("[incomplete_stream]openai_completions:")
+            && message.contains("missing finish_reason")
+    }));
 }
 
 #[tokio::test]

@@ -5,13 +5,13 @@
 //! Tests verify correct API type, compat settings, key resolution, and delegation behavior.
 
 use futures::StreamExt;
-use tiy_core::provider::{
+use tiycore::provider::{
     deepseek::DeepSeekProvider, groq::GroqProvider, kimi_coding::KimiCodingProvider,
     minimax::MiniMaxProvider, openai_compatible::OpenAICompatibleProvider,
     openrouter::OpenRouterProvider, xai::XAIProvider, zai::ZAIProvider, zenmux::ZenmuxProvider,
     LLMProtocol,
 };
-use tiy_core::types::*;
+use tiycore::types::*;
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
@@ -654,7 +654,7 @@ async fn test_zenmux_adaptive_routes_to_anthropic() {
     let context = Context::with_system_prompt("test");
 
     // Directly test the Anthropic delegate (what Zenmux adaptive would call)
-    let anthropic = tiy_core::protocol::anthropic::AnthropicProtocol::new();
+    let anthropic = tiycore::protocol::anthropic::AnthropicProtocol::new();
     let stream = anthropic.stream(
         &model,
         &context,
@@ -724,7 +724,7 @@ async fn test_zenmux_adaptive_routes_to_openai_responses() {
     model.id = "gpt-4o".to_string();
     let context = Context::with_system_prompt("test");
 
-    let responses_provider = tiy_core::protocol::openai_responses::OpenAIResponsesProtocol::new();
+    let responses_provider = tiycore::protocol::openai_responses::OpenAIResponsesProtocol::new();
     let stream = responses_provider.stream(
         &model,
         &context,
@@ -775,7 +775,7 @@ async fn test_zenmux_adaptive_routes_to_google() {
     model.id = "gemini-2.0-flash".to_string();
     let context = Context::with_system_prompt("test");
 
-    let google_provider = tiy_core::protocol::google::GoogleProtocol::new();
+    let google_provider = tiycore::protocol::google::GoogleProtocol::new();
     let stream = google_provider.stream(
         &model,
         &context,

@@ -93,8 +93,8 @@ All mutable state uses `parking_lot` locks (non-poisoning). Key concurrency patt
 ### Construction
 
 ```rust
-use tiy_core::agent::Agent;
-use tiy_core::types::*;
+use tiycore::agent::Agent;
+use tiycore::types::*;
 
 // Default agent (gpt-4o-mini)
 let agent = Agent::new();
@@ -167,7 +167,7 @@ println!("Messages: {}", state.message_count());
 
 ```rust
 use std::sync::Arc;
-use tiy_core::provider::openai::OpenAIProvider;
+use tiycore::provider::openai::OpenAIProvider;
 
 // Option 1: Explicit provider (overrides auto-registration)
 agent.set_provider(Arc::new(OpenAIProvider::new()));
@@ -196,7 +196,7 @@ agent.set_get_api_key_with_signal(|provider_name: &str, abort_signal| async move
 ### Tool Execution
 
 ```rust
-use tiy_core::agent::*;
+use tiycore::agent::*;
 
 // Define tools
 let tool = AgentTool::new(
@@ -457,7 +457,7 @@ Use the standalone loop helpers when you want the agent loop without holding a l
 
 ```rust
 use futures::StreamExt;
-use tiy_core::agent::{
+use tiycore::agent::{
     agent_loop, run_agent_loop, AgentConfig, AgentContext, AgentLoopOptions,
 };
 
@@ -489,8 +489,8 @@ let result = events.result().await?;
 Custom token budgets per thinking level. Flows through `SimpleStreamOptions` to the provider.
 
 ```rust
-use tiy_core::agent::ThinkingBudgets;
-use tiy_core::thinking::ThinkingLevel;
+use tiycore::agent::ThinkingBudgets;
+use tiycore::thinking::ThinkingLevel;
 
 agent.set_thinking_level(ThinkingLevel::High);
 agent.set_thinking_budgets(ThinkingBudgets {
@@ -504,7 +504,7 @@ agent.set_thinking_budgets(ThinkingBudgets {
 #### Transport
 
 ```rust
-use tiy_core::agent::Transport;
+use tiycore::agent::Transport;
 
 agent.set_transport(Transport::Sse);        // default
 agent.set_transport(Transport::WebSocket);
@@ -558,7 +558,7 @@ agent.set_max_turns(10);  // default is 25
 Comprehensive resource limits for HTTP, agent behavior, and streaming.
 
 ```rust
-use tiy_core::types::SecurityConfig;
+use tiycore::types::SecurityConfig;
 
 let mut security = SecurityConfig::default();
 security.agent.max_parallel_tool_calls = 8;
@@ -616,7 +616,7 @@ agent.set_convert_to_llm(|messages| async move {
 ### Error Handling
 
 ```rust
-use tiy_core::agent::AgentError;
+use tiycore::agent::AgentError;
 
 match agent.prompt("hello").await {
     Ok(messages) => { /* success */ }
@@ -643,9 +643,9 @@ match agent.prompt("hello").await {
 ## Complete Example
 
 ```rust
-use tiy_core::agent::*;
-use tiy_core::thinking::ThinkingLevel;
-use tiy_core::types::*;
+use tiycore::agent::*;
+use tiycore::thinking::ThinkingLevel;
+use tiycore::types::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

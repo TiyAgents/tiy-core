@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     build_catalog_snapshot, build_catalog_snapshot_manifest, CatalogModelMetadata,
 };
 

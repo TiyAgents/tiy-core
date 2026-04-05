@@ -4,9 +4,9 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
-use tiy_core::protocol::google::GoogleProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::protocol::google::GoogleProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

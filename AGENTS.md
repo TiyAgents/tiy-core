@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-**tiy-core** is a Rust library providing a unified LLM API and stateful Agent runtime. It abstracts over multiple LLM providers (OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, MiniMax, Kimi Coding, ZAI, Zenmux) with a common streaming interface, tool/function calling, and an agentic conversation loop.
+**tiycore** is a Rust library providing a unified LLM API and stateful Agent runtime. It abstracts over multiple LLM providers (OpenAI, Anthropic, Google, Ollama, xAI, Groq, OpenRouter, MiniMax, Kimi Coding, ZAI, Zenmux) with a common streaming interface, tool/function calling, and an agentic conversation loop.
 
 ## Build & Test Commands
 

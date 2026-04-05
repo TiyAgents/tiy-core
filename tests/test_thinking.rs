@@ -1,6 +1,6 @@
 //! Tests for thinking/config module.
 
-use tiy_core::thinking::*;
+use tiycore::thinking::*;
 
 // ============================================================================
 // ThinkingLevel tests

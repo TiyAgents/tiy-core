@@ -1,11 +1,11 @@
 //! Tests for model catalog fetching and enrichment.
 
 use serde_json::json;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     enrich_manual_model, list_models, list_models_with_enrichment, CatalogModelMetadata,
     FetchModelsRequest, InMemoryCatalogMetadataStore, ModelCatalogError,
 };
-use tiy_core::types::Provider;
+use tiycore::types::Provider;
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

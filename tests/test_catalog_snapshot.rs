@@ -3,18 +3,18 @@
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
-use tiy_core::catalog::{
+use tiycore::catalog::{
     build_catalog_snapshot, build_catalog_snapshot_manifest, catalog_manifest_sidecar_path,
     refresh_catalog_snapshot, save_catalog_snapshot, CatalogMetadataStore, CatalogModelMetadata,
     CatalogRefreshResult, CatalogRemoteConfig, FileCatalogMetadataStore,
 };
-use tiy_core::types::Provider;
+use tiycore::types::Provider;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn temp_catalog_path(test_name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tiy-core-{test_name}-{}", Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tiycore-{test_name}-{}", Uuid::new_v4()));
     fs::create_dir_all(&dir).expect("temp dir should be created");
     dir.join("catalog.json")
 }

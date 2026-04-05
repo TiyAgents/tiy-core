@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use tiy_core::types::SecurityConfig;
+//! use tiycore::types::SecurityConfig;
 //!
 //! // Use defaults
 //! let config = SecurityConfig::default();

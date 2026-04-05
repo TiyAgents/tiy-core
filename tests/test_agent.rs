@@ -1,9 +1,9 @@
 //! Tests for agent module: types, state, agent.
 
 use serde_json::json;
-use tiy_core::agent::*;
-use tiy_core::thinking::ThinkingLevel;
-use tiy_core::types::*;
+use tiycore::agent::*;
+use tiycore::thinking::ThinkingLevel;
+use tiycore::types::*;
 
 // ============================================================================
 // AgentMessage tests

@@ -1,12 +1,12 @@
 //! Focused tests for provider-specific thinking/reasoning payload mappings.
 
 use serde_json::json;
-use tiy_core::protocol::anthropic::AnthropicProtocol;
-use tiy_core::protocol::google::GoogleProtocol;
-use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::thinking::ThinkingLevel;
-use tiy_core::types::*;
+use tiycore::protocol::anthropic::AnthropicProtocol;
+use tiycore::protocol::google::GoogleProtocol;
+use tiycore::protocol::openai_responses::OpenAIResponsesProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::thinking::ThinkingLevel;
+use tiycore::types::*;
 use wiremock::matchers::{body_partial_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -1,8 +1,8 @@
 //! Tests for validation module: tool_validation.
 
 use serde_json::json;
-use tiy_core::types::*;
-use tiy_core::validation::{validate_tool_call, ToolValidationError};
+use tiycore::types::*;
+use tiycore::validation::{validate_tool_call, ToolValidationError};
 
 fn weather_tool() -> Tool {
     Tool::builder()

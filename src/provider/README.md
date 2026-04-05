@@ -9,8 +9,8 @@ Service vendor facades — the primary entry point for users. Each provider is a
 The provider layer is the **recommended API surface** for application developers. Providers abstract away wire-format details and offer a consistent interface:
 
 ```rust
-use tiy_core::provider::get_provider;
-use tiy_core::types::*;
+use tiycore::provider::get_provider;
+use tiycore::types::*;
 
 // Providers are auto-registered on first access — just get and use
 let provider = get_provider(&Provider::OpenAI).unwrap();
@@ -62,8 +62,8 @@ Thin facades that delegate to a single protocol implementation:
 ### Usage Example
 
 ```rust
-use tiy_core::provider::get_provider;
-use tiy_core::types::*;
+use tiycore::provider::get_provider;
+use tiycore::types::*;
 
 let model = Model::builder()
     .id("claude-sonnet-4-20250514")
@@ -219,8 +219,8 @@ Only when the target API uses a **completely different** HTTP/SSE wire format th
 提供商层是应用开发者的**推荐 API 入口**。提供商抽象了线路格式细节，提供一致的接口：
 
 ```rust
-use tiy_core::provider::get_provider;
-use tiy_core::types::*;
+use tiycore::provider::get_provider;
+use tiycore::types::*;
 
 // 提供商在首次访问时自动注册 — 直接获取即可使用
 let provider = get_provider(&Provider::OpenAI).unwrap();
@@ -272,8 +272,8 @@ let stream = provider.stream(&model, &context, options);
 ### 使用示例
 
 ```rust
-use tiy_core::provider::get_provider;
-use tiy_core::types::*;
+use tiycore::provider::get_provider;
+use tiycore::types::*;
 
 let model = Model::builder()
     .id("claude-sonnet-4-20250514")

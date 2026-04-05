@@ -8,10 +8,10 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use tiy_core::agent::*;
-use tiy_core::provider::{ArcProtocol, LLMProtocol};
-use tiy_core::stream::AssistantMessageEventStream;
-use tiy_core::types::*;
+use tiycore::agent::*;
+use tiycore::provider::{ArcProtocol, LLMProtocol};
+use tiycore::stream::AssistantMessageEventStream;
+use tiycore::types::*;
 
 // ============================================================================
 // Mock Provider

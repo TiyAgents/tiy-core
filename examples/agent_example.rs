@@ -1,4 +1,4 @@
-//! Agent example for tiy-core.
+//! Agent example for tiycore.
 //!
 //! Demonstrates the full Agent capability set:
 //!   1. Basic prompt & streaming events
@@ -24,7 +24,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use tiy_core::{agent::*, models::get_model, thinking::ThinkingLevel, types::*};
+use tiycore::{agent::*, models::get_model, thinking::ThinkingLevel, types::*};
 
 /// Resolve an env var with fallback.
 fn env_or(primary: &str, fallback: &str) -> Option<String> {
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    println!("=== tiy-core Agent Example ===\n");
+    println!("=== tiycore Agent Example ===\n");
 
     // ========================================================================
     // 1. Create Agent with model
@@ -307,6 +307,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::MessageStart { .. } => println!("  [event] MessageStart"),
             AgentEvent::MessageEnd { .. } => println!("  [event] MessageEnd"),
+            AgentEvent::MessageDiscarded { reason, .. } => {
+                println!("  [event] MessageDiscarded: {}", reason);
+            }
             AgentEvent::ToolExecutionStart {
                 tool_name, args, ..
             } => {
@@ -334,6 +337,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             AgentEvent::TurnEnd { tool_results, .. } => {
                 println!("  [event] TurnEnd (tool_results={})", tool_results.len());
+            }
+            AgentEvent::TurnRetrying { delay_ms, .. } => {
+                println!("  [event] TurnRetrying (delay_ms={})", delay_ms);
             }
             AgentEvent::AgentEnd { messages } => {
                 println!("  [event] AgentEnd ({} new messages)", messages.len());

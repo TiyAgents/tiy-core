@@ -4,9 +4,9 @@ use futures::StreamExt;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::Arc;
-use tiy_core::protocol::openai_responses::OpenAIResponsesProtocol;
-use tiy_core::protocol::LLMProtocol;
-use tiy_core::types::*;
+use tiycore::protocol::openai_responses::OpenAIResponsesProtocol;
+use tiycore::protocol::LLMProtocol;
+use tiycore::types::*;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

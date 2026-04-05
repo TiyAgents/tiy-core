@@ -1,7 +1,7 @@
 //! Tests for stream module: event_stream and json_parser.
 
-use tiy_core::stream::{parse_streaming_json, AssistantMessageEventStream, EventStream};
-use tiy_core::types::*;
+use tiycore::stream::{parse_streaming_json, AssistantMessageEventStream, EventStream};
+use tiycore::types::*;
 
 // ============================================================================
 // parse_streaming_json tests (extending existing)
