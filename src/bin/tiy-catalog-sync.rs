@@ -5,12 +5,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tiycore::catalog::{
-    build_catalog_snapshot, build_catalog_snapshot_manifest, CatalogModelMetadata,
+    apply_model_patches, build_catalog_snapshot, build_catalog_snapshot_manifest,
+    CatalogModelMetadata, ModelPatchConfig,
 };
 
 const DEFAULT_OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 const DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL: &str =
     "https://openrouter.ai/api/v1/embeddings/models";
+const DEFAULT_PATCH_CONFIG_PATH: &str = "catalog/patches.json";
 
 struct Args {
     output: PathBuf,
@@ -18,6 +20,7 @@ struct Args {
     snapshot_url: String,
     source_url: String,
     embeddings_source_url: String,
+    patch_config: PathBuf,
     version: Option<String>,
 }
 
@@ -46,6 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let embeddings_payload = embeddings_response.json::<Value>().await?;
 
     let models = merge_openrouter_payloads(&payload, Some(&embeddings_payload))?;
+    let patch_config = load_patch_config(&args.patch_config)?;
+    let models = apply_model_patches(models, &patch_config);
 
     let generated_at = Utc::now().to_rfc3339();
     let version = args
@@ -74,6 +79,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut snapshot_url = None;
     let mut source_url = DEFAULT_OPENROUTER_MODELS_URL.to_string();
     let mut embeddings_source_url = DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL.to_string();
+    let mut patch_config = PathBuf::from(DEFAULT_PATCH_CONFIG_PATH);
     let mut version = None;
 
     let mut iter = std::env::args().skip(1);
@@ -89,6 +95,12 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 embeddings_source_url = iter
                     .next()
                     .ok_or("--embeddings-source-url requires a value")?;
+            }
+            "--patch-config" => {
+                patch_config = iter
+                    .next()
+                    .map(PathBuf::from)
+                    .ok_or("--patch-config requires a value")?;
             }
             "--version" => version = iter.next(),
             "--help" | "-h" => {
@@ -111,8 +123,15 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         snapshot_url,
         source_url,
         embeddings_source_url,
+        patch_config,
         version,
     })
+}
+
+fn load_patch_config(path: &PathBuf) -> Result<ModelPatchConfig, Box<dyn std::error::Error>> {
+    let bytes = fs::read(path)?;
+    let config = serde_json::from_slice::<ModelPatchConfig>(&bytes)?;
+    Ok(config)
 }
 
 fn print_help() {
@@ -131,6 +150,7 @@ Optional:
   --source-url <url>        Source models endpoint (default: {DEFAULT_OPENROUTER_MODELS_URL})
   --embeddings-source-url <url>
                             Source embeddings endpoint (default: {DEFAULT_OPENROUTER_EMBEDDINGS_MODELS_URL})
+  --patch-config <path>     Patch config path (default: {DEFAULT_PATCH_CONFIG_PATH})
   --version <value>         Override snapshot version
 "
     );
@@ -470,5 +490,48 @@ mod tests {
             models[1].modalities,
             Some(vec!["text".to_string(), "embeddings".to_string()])
         );
+    }
+
+    #[test]
+    fn applies_patch_config_before_snapshot_generation() {
+        let models = vec![CatalogModelMetadata {
+            canonical_model_key: "z-ai:glm-5".to_string(),
+            aliases: vec!["z-ai/glm-5".to_string()],
+            display_name: Some("Z.AI: GLM-5".to_string()),
+            description: None,
+            context_window: Some(80_000),
+            max_output_tokens: Some(16_384),
+            max_input_tokens: None,
+            modalities: None,
+            capabilities: None,
+            pricing: None,
+            source: "openrouter".to_string(),
+            raw: json!({}),
+        }];
+
+        let patched = apply_model_patches(
+            models,
+            &ModelPatchConfig {
+                patches: vec![tiycore::catalog::ModelPatch {
+                    source: "openrouter".to_string(),
+                    alias: Some("z-ai/glm-5".to_string()),
+                    canonical_model_key: None,
+                    display_name: None,
+                    description: None,
+                    context_window: Some(200_000),
+                    max_output_tokens: None,
+                    max_input_tokens: None,
+                    modalities: None,
+                    capabilities: None,
+                    pricing: None,
+                    patch_source: Some("catalog-patch:openrouter:z-ai/glm-5".to_string()),
+                }],
+            },
+        );
+
+        assert_eq!(patched.len(), 1);
+        assert_eq!(patched[0].context_window, Some(200_000));
+        assert_eq!(patched[0].max_output_tokens, Some(16_384));
+        assert_eq!(patched[0].source, "catalog-patch:openrouter:z-ai/glm-5");
     }
 }

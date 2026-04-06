@@ -1,0 +1,10 @@
+{
+  "patches": [
+    {
+      "source": "openrouter",
+      "alias": "z-ai/glm-5",
+      "context_window": 200000,
+      "patch_source": "catalog-patch:openrouter:z-ai/glm-5"
+    }
+  ]
+}

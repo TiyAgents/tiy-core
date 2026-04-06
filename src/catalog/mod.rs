@@ -223,6 +223,41 @@ pub struct ListModelsResult {
     pub raw_response: Value,
 }
 
+/// Configurable fixes applied to catalog metadata during snapshot generation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ModelPatchConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<ModelPatch>,
+}
+
+/// A targeted patch for correcting generated catalog model metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelPatch {
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_model_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modalities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch_source: Option<String>,
+}
+
 /// Error returned by model catalog operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ModelCatalogError {
@@ -641,6 +676,59 @@ pub fn save_catalog_snapshot(
     Ok(())
 }
 
+/// Apply configured patches to normalized catalog metadata before snapshot generation.
+pub fn apply_model_patches(
+    mut models: Vec<CatalogModelMetadata>,
+    patch_config: &ModelPatchConfig,
+) -> Vec<CatalogModelMetadata> {
+    for model in &mut models {
+        if let Some(patch) = patch_config
+            .patches
+            .iter()
+            .find(|patch| patch_matches_catalog_model(patch, model))
+        {
+            if let Some(canonical_model_key) = patch.canonical_model_key.as_ref() {
+                model.canonical_model_key = canonical_model_key.clone();
+            }
+            if let Some(display_name) = patch.display_name.as_ref() {
+                model.display_name = Some(display_name.clone());
+            }
+            if let Some(description) = patch.description.as_ref() {
+                model.description = Some(description.clone());
+            }
+            if let Some(context_window) = patch.context_window {
+                model.context_window = Some(context_window);
+            }
+            if let Some(max_output_tokens) = patch.max_output_tokens {
+                model.max_output_tokens = Some(max_output_tokens);
+            }
+            if let Some(max_input_tokens) = patch.max_input_tokens {
+                model.max_input_tokens = Some(max_input_tokens);
+            }
+            if let Some(modalities) = patch.modalities.as_ref() {
+                model.modalities = Some(modalities.clone());
+            }
+            if let Some(capabilities) = patch.capabilities.as_ref() {
+                model.capabilities = Some(capabilities.clone());
+            }
+            if let Some(pricing) = patch.pricing.as_ref() {
+                model.pricing = Some(pricing.clone());
+            }
+            if let Some(alias) = patch.alias.as_ref() {
+                if !model.aliases.contains(alias) {
+                    model.aliases.push(alias.clone());
+                }
+            }
+
+            if let Some(patch_source) = patch.patch_source.as_ref() {
+                model.source = patch_source.clone();
+            }
+        }
+    }
+
+    models
+}
+
 fn enrich_model(
     model: ProviderExtractedModel,
     metadata_store: &dyn CatalogMetadataStore,
@@ -652,7 +740,7 @@ fn enrich_model(
 
     let metadata = metadata_match.as_ref().map(|m| &m.metadata);
 
-    UnifiedModelInfo {
+    let unified = UnifiedModelInfo {
         provider: model.provider,
         raw_id: model.raw_id,
         canonical_model_key: metadata.map(|m| m.canonical_model_key.clone()),
@@ -689,7 +777,28 @@ fn enrich_model(
         match_confidence: metadata_match.as_ref().map(|m| m.confidence),
         metadata_sources: metadata.map(|m| vec![m.source.clone()]).unwrap_or_default(),
         raw: model.raw,
+    };
+    unified
+}
+
+fn patch_matches_catalog_model(patch: &ModelPatch, model: &CatalogModelMetadata) -> bool {
+    if patch.source != model.source {
+        return false;
     }
+
+    if let Some(canonical_model_key) = patch.canonical_model_key.as_ref() {
+        if canonical_model_key == &model.canonical_model_key {
+            return true;
+        }
+    }
+
+    if let Some(alias) = patch.alias.as_ref() {
+        if model.aliases.iter().any(|candidate| candidate == alias) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn prefer_option<T>(primary: Option<T>, fallback: Option<T>) -> Option<T> {

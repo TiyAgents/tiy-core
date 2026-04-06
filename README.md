@@ -63,7 +63,15 @@ graph TD
 | **Thinking** | `src/thinking/` | `ThinkingLevel` enum and provider-specific thinking options |
 | **Validation** | `src/validation/` | JSON Schema validation for tool parameters |
 | **Models** | `src/models/` | `ModelRegistry` with predefined models (GPT-4o, Claude Sonnet 4, Gemini 2.5 Flash, etc.) |
-| **Catalog** | `src/catalog/` | Native model listing, snapshot refresh, and optional metadata enrichment for display ([full docs](./src/catalog/README.md)) |
+| **Catalog** | `src/catalog/` | Native model listing, snapshot refresh, scheduled snapshot generation, and optional metadata enrichment for display ([full docs](./src/catalog/README.md)) |
+
+## Catalog Snapshot Generation
+
+The repository publishes a catalog snapshot through a scheduled GitHub Actions workflow defined in `.github/workflows/catalog-pages.yml`. That workflow runs `cargo run --bin tiy-catalog-sync -- ...`, fetches upstream model metadata, builds a normalized snapshot, and writes the generated files to `dist/catalog/`.
+
+Before the snapshot is written, `tiy-catalog-sync` loads `catalog/patches.json` and applies repository-managed data fixes to the fetched `CatalogModelMetadata` records. This patch layer is intended for correcting known upstream metadata errors in the generated catalog artifact itself rather than exposing a runtime override API to downstream applications.
+
+For example, if an upstream provider reports an incorrect context window for a model, the patch file can override that value during snapshot generation so the published `catalog.json` already contains the corrected metadata. The repository currently uses this mechanism to fix OpenRouter's `z-ai/glm-5` context window from `80_000` to `200_000`.
 
 ## Quick Start
 
