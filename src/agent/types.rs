@@ -564,6 +564,8 @@ pub struct AgentConfig {
     /// Maximum retry delay in milliseconds. `None` = use default (60_000ms).
     /// Set to `Some(0)` to disable the cap entirely.
     pub max_retry_delay_ms: Option<u64>,
+    /// Custom HTTP headers to include in every LLM API request.
+    pub custom_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -579,6 +581,7 @@ impl std::fmt::Debug for AgentConfig {
             .field("transport", &self.transport)
             .field("max_retries", &self.max_retries)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
+            .field("custom_headers", &self.custom_headers.as_ref().map(|h| h.len()))
             .finish()
     }
 }
@@ -597,6 +600,7 @@ impl AgentConfig {
             transport: Transport::default(),
             max_retries: None,
             max_retry_delay_ms: None,
+            custom_headers: None,
         }
     }
 }

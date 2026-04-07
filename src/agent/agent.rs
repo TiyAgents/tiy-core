@@ -541,6 +541,11 @@ impl Agent {
         self.config.read().max_retry_delay_ms
     }
 
+    /// Set custom HTTP headers to include in every LLM API request.
+    pub fn set_custom_headers(&self, headers: std::collections::HashMap<String, String>) {
+        self.config.write().custom_headers = Some(headers);
+    }
+
     /// Set the session ID for caching.
     pub fn set_session_id(&self, id: impl Into<String>) {
         *self.session_id.write() = Some(id.into());
@@ -844,6 +849,7 @@ impl Agent {
         let transport = self.config.read().transport;
         let max_retries = self.config.read().max_retries;
         let max_retry_delay_ms = self.config.read().max_retry_delay_ms;
+        let custom_headers = self.config.read().custom_headers.clone();
         let session_id = self.session_id.read().clone();
         let abort_signal = self.current_abort_signal();
 
@@ -864,6 +870,7 @@ impl Agent {
             transport: Some(transport),
             max_retries,
             max_retry_delay_ms,
+            headers: custom_headers,
             cancel_token: Some(abort_signal),
             ..Default::default()
         }
