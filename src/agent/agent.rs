@@ -1486,8 +1486,8 @@ impl Agent {
                         ) {
                             let agent_error = agent_error_from_assistant(&assistant_msg);
                             if matches!(agent_error, AgentError::IncompleteStream { .. }) {
-                                let started_at =
-                                    incomplete_turn_retry_started_at.get_or_insert_with(Instant::now);
+                                let started_at = incomplete_turn_retry_started_at
+                                    .get_or_insert_with(Instant::now);
                                 let retry_delay_ms = INCOMPLETE_TURN_RETRY_DELAYS_MS
                                     .get(incomplete_turn_retries)
                                     .copied();
@@ -1507,7 +1507,8 @@ impl Agent {
                                 self.restore_snapshot(&turn_snapshot);
 
                                 if can_retry {
-                                    let delay_ms = retry_delay_ms.expect("retry delay should exist");
+                                    let delay_ms =
+                                        retry_delay_ms.expect("retry delay should exist");
                                     incomplete_turn_retries += 1;
                                     self.emit(AgentEvent::TurnRetrying {
                                         attempt: incomplete_turn_retries,

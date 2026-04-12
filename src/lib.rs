@@ -71,11 +71,11 @@ pub use stream::EventStream;
 pub use agent::{Agent, AgentStateSnapshot};
 pub use catalog::{
     apply_model_patches, build_catalog_snapshot, build_catalog_snapshot_manifest,
-    catalog_manifest_sidecar_path, enrich_manual_model, list_models,
-    list_models_with_enrichment, load_catalog_metadata_store, refresh_catalog_snapshot,
-    save_catalog_snapshot, CatalogMetadataStore, CatalogModelMatch, CatalogModelMetadata,
-    CatalogRefreshResult, CatalogRemoteConfig, CatalogSnapshot, CatalogSnapshotError,
-    CatalogSnapshotManifest, EmptyCatalogMetadataStore, FetchModelsRequest,
-    FileCatalogMetadataStore, InMemoryCatalogMetadataStore, ListModelsResult,
-    ModelCatalogError, ModelPatch, ModelPatchConfig, ProviderExtractedModel, UnifiedModelInfo,
+    catalog_manifest_sidecar_path, enrich_manual_model, list_models, list_models_with_enrichment,
+    load_catalog_metadata_store, refresh_catalog_snapshot, save_catalog_snapshot,
+    CatalogMetadataStore, CatalogModelMatch, CatalogModelMetadata, CatalogRefreshResult,
+    CatalogRemoteConfig, CatalogSnapshot, CatalogSnapshotError, CatalogSnapshotManifest,
+    EmptyCatalogMetadataStore, FetchModelsRequest, FileCatalogMetadataStore,
+    InMemoryCatalogMetadataStore, ListModelsResult, ModelCatalogError, ModelPatch,
+    ModelPatchConfig, ProviderExtractedModel, UnifiedModelInfo,
 };

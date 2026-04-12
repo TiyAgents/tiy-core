@@ -546,7 +546,7 @@ fn resolve_cache_retention(retention: Option<CacheRetention>) -> CacheRetention 
     if let Some(retention) = retention {
         return retention;
     }
-    match std::env::var("PI_CACHE_RETENTION").ok().as_deref() {
+    match std::env::var("TIY_CACHE_RETENTION").ok().as_deref() {
         Some("long") => CacheRetention::Long,
         Some("none") => CacheRetention::None,
         _ => CacheRetention::Short,
@@ -1521,6 +1521,9 @@ fn incomplete_anthropic_stream_detail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_provider_type() {
@@ -1601,5 +1604,23 @@ mod tests {
         assert!(detail.contains("unclosed content blocks at indices [1]"));
         assert!(detail.contains("unfinished tool input JSON at indices [1]"));
         assert!(detail.contains("trailing partial SSE frame"));
+    }
+
+    #[test]
+    fn test_resolve_cache_retention_uses_tiy_env_prefix() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let old_tiy = std::env::var("TIY_CACHE_RETENTION").ok();
+
+        std::env::remove_var("TIY_CACHE_RETENTION");
+        assert_eq!(resolve_cache_retention(None), CacheRetention::Short);
+
+        std::env::set_var("TIY_CACHE_RETENTION", "long");
+        assert_eq!(resolve_cache_retention(None), CacheRetention::Long);
+
+        if let Some(value) = old_tiy {
+            std::env::set_var("TIY_CACHE_RETENTION", value);
+        } else {
+            std::env::remove_var("TIY_CACHE_RETENTION");
+        }
     }
 }

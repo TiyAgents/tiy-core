@@ -1153,9 +1153,8 @@ async fn test_incomplete_stream_retries_from_stable_context_and_discards_partial
                     let partial = make_assistant_message("partial output");
                     let mut error = partial.clone();
                     error.stop_reason = StopReason::Error;
-                    error.error_message = Some(
-                        "[incomplete_stream]anthropic: missing message_stop".to_string(),
-                    );
+                    error.error_message =
+                        Some("[incomplete_stream]anthropic: missing message_stop".to_string());
                     stream_clone.push(AssistantMessageEvent::Start {
                         partial: partial.clone(),
                     });
@@ -1200,7 +1199,9 @@ async fn test_incomplete_stream_retries_from_stable_context_and_discards_partial
             if reason.contains("Incomplete anthropic stream")
     ));
     assert!(matches!(
-        events.iter().find(|event| matches!(event, AgentEvent::TurnRetrying { .. })),
+        events
+            .iter()
+            .find(|event| matches!(event, AgentEvent::TurnRetrying { .. })),
         Some(AgentEvent::TurnRetrying {
             attempt: 1,
             max_attempts: 3,

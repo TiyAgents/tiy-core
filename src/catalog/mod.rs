@@ -1973,7 +1973,10 @@ mod tests {
         let kimi_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "kimi-k2.5", &kimi_aliases)
             .expect("should match kimi-k2.5");
-        assert_eq!(kimi_match.metadata.canonical_model_key, "moonshotai:kimi-k2.5");
+        assert_eq!(
+            kimi_match.metadata.canonical_model_key,
+            "moonshotai:kimi-k2.5"
+        );
         assert_eq!(kimi_match.metadata.context_window, Some(128000));
 
         // Test glm-5 matching
@@ -1987,15 +1990,25 @@ mod tests {
         // Test with vendor prefix in input
         let prefixed_kimi_aliases = normalized_alias_candidates("moonshotai/kimi-k2.5", None);
         let prefixed_kimi_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "moonshotai/kimi-k2.5", &prefixed_kimi_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "moonshotai/kimi-k2.5",
+                &prefixed_kimi_aliases,
+            )
             .expect("should match moonshotai/kimi-k2.5");
-        assert_eq!(prefixed_kimi_match.metadata.canonical_model_key, "moonshotai:kimi-k2.5");
+        assert_eq!(
+            prefixed_kimi_match.metadata.canonical_model_key,
+            "moonshotai:kimi-k2.5"
+        );
 
         let prefixed_glm_aliases = normalized_alias_candidates("z-ai/glm-5", None);
         let prefixed_glm_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "z-ai/glm-5", &prefixed_glm_aliases)
             .expect("should match z-ai/glm-5");
-        assert_eq!(prefixed_glm_match.metadata.canonical_model_key, "z-ai:glm-5");
+        assert_eq!(
+            prefixed_glm_match.metadata.canonical_model_key,
+            "z-ai:glm-5"
+        );
     }
 
     #[test]
@@ -2023,15 +2036,25 @@ mod tests {
         let grok_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "grok-4.20-beta", &grok_aliases)
             .expect("should match grok-4.20-beta");
-        assert_eq!(grok_match.metadata.canonical_model_key, "x-ai:grok-4.20-beta");
+        assert_eq!(
+            grok_match.metadata.canonical_model_key,
+            "x-ai:grok-4.20-beta"
+        );
         assert_eq!(grok_match.metadata.context_window, Some(2000000));
 
         // Test with x-ai/ vendor prefix in input
         let prefixed_grok_aliases = normalized_alias_candidates("x-ai/grok-4.20-beta", None);
         let prefixed_grok_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "x-ai/grok-4.20-beta", &prefixed_grok_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "x-ai/grok-4.20-beta",
+                &prefixed_grok_aliases,
+            )
             .expect("should match x-ai/grok-4.20-beta");
-        assert_eq!(prefixed_grok_match.metadata.canonical_model_key, "x-ai:grok-4.20-beta");
+        assert_eq!(
+            prefixed_grok_match.metadata.canonical_model_key,
+            "x-ai:grok-4.20-beta"
+        );
     }
 
     #[test]
@@ -2112,53 +2135,98 @@ mod tests {
         let qwen_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "qwen-3-235b-a22b", &qwen_aliases)
             .expect("should match qwen-3-235b-a22b");
-        assert_eq!(qwen_match.metadata.canonical_model_key, "qwen:qwen-3-235b-a22b");
+        assert_eq!(
+            qwen_match.metadata.canonical_model_key,
+            "qwen:qwen-3-235b-a22b"
+        );
 
         let prefixed_qwen_aliases = normalized_alias_candidates("qwen/qwen-3-235b-a22b", None);
         let prefixed_qwen_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "qwen/qwen-3-235b-a22b", &prefixed_qwen_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "qwen/qwen-3-235b-a22b",
+                &prefixed_qwen_aliases,
+            )
             .expect("should match qwen/qwen-3-235b-a22b");
-        assert_eq!(prefixed_qwen_match.metadata.canonical_model_key, "qwen:qwen-3-235b-a22b");
+        assert_eq!(
+            prefixed_qwen_match.metadata.canonical_model_key,
+            "qwen:qwen-3-235b-a22b"
+        );
 
         // Test llama matching
         let llama_aliases = normalized_alias_candidates("llama-4-maverick-17b-128e-instruct", None);
         let llama_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "llama-4-maverick-17b-128e-instruct", &llama_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "llama-4-maverick-17b-128e-instruct",
+                &llama_aliases,
+            )
             .expect("should match llama-4-maverick-17b-128e-instruct");
-        assert_eq!(llama_match.metadata.canonical_model_key, "meta-llama:llama-4-maverick-17b-128e-instruct");
+        assert_eq!(
+            llama_match.metadata.canonical_model_key,
+            "meta-llama:llama-4-maverick-17b-128e-instruct"
+        );
         assert_eq!(llama_match.metadata.context_window, Some(1048576));
 
-        let prefixed_llama_aliases = normalized_alias_candidates("meta-llama/llama-4-maverick-17b-128e-instruct", None);
+        let prefixed_llama_aliases =
+            normalized_alias_candidates("meta-llama/llama-4-maverick-17b-128e-instruct", None);
         let prefixed_llama_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "meta-llama/llama-4-maverick-17b-128e-instruct", &prefixed_llama_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "meta-llama/llama-4-maverick-17b-128e-instruct",
+                &prefixed_llama_aliases,
+            )
             .expect("should match meta-llama/llama-4-maverick-17b-128e-instruct");
-        assert_eq!(prefixed_llama_match.metadata.canonical_model_key, "meta-llama:llama-4-maverick-17b-128e-instruct");
+        assert_eq!(
+            prefixed_llama_match.metadata.canonical_model_key,
+            "meta-llama:llama-4-maverick-17b-128e-instruct"
+        );
 
         // Test cohere matching
         let cohere_aliases = normalized_alias_candidates("command-a-03-2025", None);
         let cohere_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "command-a-03-2025", &cohere_aliases)
             .expect("should match command-a-03-2025");
-        assert_eq!(cohere_match.metadata.canonical_model_key, "cohere:command-a-03-2025");
+        assert_eq!(
+            cohere_match.metadata.canonical_model_key,
+            "cohere:command-a-03-2025"
+        );
 
         let prefixed_cohere_aliases = normalized_alias_candidates("cohere/command-a-03-2025", None);
         let prefixed_cohere_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "cohere/command-a-03-2025", &prefixed_cohere_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "cohere/command-a-03-2025",
+                &prefixed_cohere_aliases,
+            )
             .expect("should match cohere/command-a-03-2025");
-        assert_eq!(prefixed_cohere_match.metadata.canonical_model_key, "cohere:command-a-03-2025");
+        assert_eq!(
+            prefixed_cohere_match.metadata.canonical_model_key,
+            "cohere:command-a-03-2025"
+        );
 
         // Test perplexity matching
         let perplexity_aliases = normalized_alias_candidates("sonar-pro", None);
         let perplexity_match = store
             .find_by_raw_or_alias(&Provider::OpenRouter, "sonar-pro", &perplexity_aliases)
             .expect("should match sonar-pro");
-        assert_eq!(perplexity_match.metadata.canonical_model_key, "perplexity:sonar-pro");
+        assert_eq!(
+            perplexity_match.metadata.canonical_model_key,
+            "perplexity:sonar-pro"
+        );
         assert_eq!(perplexity_match.metadata.context_window, Some(200000));
 
         let prefixed_perplexity_aliases = normalized_alias_candidates("perplexity/sonar-pro", None);
         let prefixed_perplexity_match = store
-            .find_by_raw_or_alias(&Provider::OpenRouter, "perplexity/sonar-pro", &prefixed_perplexity_aliases)
+            .find_by_raw_or_alias(
+                &Provider::OpenRouter,
+                "perplexity/sonar-pro",
+                &prefixed_perplexity_aliases,
+            )
             .expect("should match perplexity/sonar-pro");
-        assert_eq!(prefixed_perplexity_match.metadata.canonical_model_key, "perplexity:sonar-pro");
+        assert_eq!(
+            prefixed_perplexity_match.metadata.canonical_model_key,
+            "perplexity:sonar-pro"
+        );
     }
 }

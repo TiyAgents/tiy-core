@@ -190,7 +190,10 @@ pub enum AgentEvent {
     /// Message finished.
     MessageEnd { message: AgentMessage },
     /// A previously streamed message was discarded and removed from model state.
-    MessageDiscarded { message: AgentMessage, reason: String },
+    MessageDiscarded {
+        message: AgentMessage,
+        reason: String,
+    },
     /// Tool execution started.
     ToolExecutionStart {
         tool_call_id: String,
@@ -581,7 +584,10 @@ impl std::fmt::Debug for AgentConfig {
             .field("transport", &self.transport)
             .field("max_retries", &self.max_retries)
             .field("max_retry_delay_ms", &self.max_retry_delay_ms)
-            .field("custom_headers", &self.custom_headers.as_ref().map(|h| h.len()))
+            .field(
+                "custom_headers",
+                &self.custom_headers.as_ref().map(|h| h.len()),
+            )
             .finish()
     }
 }
