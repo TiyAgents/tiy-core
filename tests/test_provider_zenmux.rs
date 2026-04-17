@@ -130,6 +130,7 @@ async fn test_zenmux_non_adaptive_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;

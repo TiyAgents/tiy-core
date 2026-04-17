@@ -531,6 +531,7 @@ async fn test_deepseek_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -578,6 +579,7 @@ async fn test_deepseek_stream_simple_preserves_compat() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -854,6 +856,7 @@ async fn test_minimax_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -877,6 +880,7 @@ async fn test_kimi_coding_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -900,6 +904,7 @@ async fn test_xai_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -923,6 +928,7 @@ async fn test_groq_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -946,6 +952,7 @@ async fn test_openrouter_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -969,6 +976,7 @@ async fn test_zai_stream_simple() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -1062,6 +1070,7 @@ async fn test_xai_stream_simple_preserves_compat() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -1085,6 +1094,7 @@ async fn test_groq_stream_simple_preserves_compat() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;
@@ -1108,6 +1118,7 @@ async fn test_zai_stream_simple_preserves_compat() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;

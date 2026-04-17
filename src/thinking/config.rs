@@ -16,7 +16,7 @@ pub enum ThinkingLevel {
     Medium,
     /// High thinking.
     High,
-    /// Extra high thinking (OpenAI GPT-5 only).
+    /// Extra high thinking (OpenAI GPT-5, Anthropic Opus 4.7+).
     XHigh,
 }
 
@@ -49,6 +49,44 @@ impl From<&str> for ThinkingLevel {
             "high" => ThinkingLevel::High,
             "xhigh" => ThinkingLevel::XHigh,
             _ => ThinkingLevel::Off,
+        }
+    }
+}
+
+/// Thinking content display mode for Anthropic models that support it (Opus 4.7+).
+///
+/// Controls whether thinking/reasoning content is included in the API response.
+/// When a model requires explicit display opt-in (e.g., Opus 4.7 defaults to omitting
+/// thinking content), this enum specifies the desired behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingDisplay {
+    /// Thinking content is summarized and visible in the response.
+    Summarized,
+    /// Thinking content is omitted from the response.
+    Omitted,
+}
+
+impl Default for ThinkingDisplay {
+    fn default() -> Self {
+        ThinkingDisplay::Summarized
+    }
+}
+
+impl std::fmt::Display for ThinkingDisplay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ThinkingDisplay::Summarized => write!(f, "summarized"),
+            ThinkingDisplay::Omitted => write!(f, "omitted"),
+        }
+    }
+}
+
+impl From<&str> for ThinkingDisplay {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "omitted" => ThinkingDisplay::Omitted,
+            _ => ThinkingDisplay::Summarized,
         }
     }
 }
@@ -140,7 +178,7 @@ pub struct AnthropicThinkingOptions {
     /// Budget tokens for thinking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
-    /// Whether to use adaptive thinking (Opus 4.6 / Sonnet 4.6).
+    /// Whether to use adaptive thinking (Opus 4.6+ / Sonnet 4.6+).
     #[serde(default)]
     pub adaptive: bool,
 }

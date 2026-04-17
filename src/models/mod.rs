@@ -181,6 +181,21 @@ fn get_anthropic_models() -> Vec<Model> {
             .max_tokens(32000)
             .build()
             .unwrap(),
+        Model::builder()
+            .id("claude-opus-4-7")
+            .name("Claude Opus 4.7")
+            .provider(Provider::Anthropic)
+            .base_url("https://api.anthropic.com/v1")
+            .reasoning(true)
+            .input(vec![
+                crate::types::InputType::Text,
+                crate::types::InputType::Image,
+            ])
+            .cost(crate::types::Cost::new(5.0, 25.0, 0.50, 6.25))
+            .context_window(1000000)
+            .max_tokens(128000)
+            .build()
+            .unwrap(),
     ]
 }
 
