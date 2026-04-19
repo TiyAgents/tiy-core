@@ -27,6 +27,7 @@ pub mod openrouter;
 pub mod xai;
 pub mod zai;
 pub mod zenmux;
+pub mod opencode_go;
 
 // Re-export protocol trait & type aliases (these stay in protocol/)
 pub use crate::protocol::{ArcProtocol, BoxedProtocol, LLMProtocol};
@@ -58,4 +59,5 @@ pub fn register_all_providers() {
     register_provider(Arc::new(zai::ZAIProvider::new()));
     register_provider(Arc::new(deepseek::DeepSeekProvider::new()));
     register_provider(Arc::new(zenmux::ZenmuxProvider::new()));
+    register_provider(Arc::new(opencode_go::OpenCodeGoProvider::new()));
 }

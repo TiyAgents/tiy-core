@@ -133,6 +133,7 @@ fn create_default_provider(provider: &Provider) -> Option<ArcProtocol> {
         Provider::ZAI => Some(Arc::new(super::zai::ZAIProvider::new())),
         Provider::DeepSeek => Some(Arc::new(super::deepseek::DeepSeekProvider::new())),
         Provider::Zenmux => Some(Arc::new(super::zenmux::ZenmuxProvider::new())),
+        Provider::OpenCodeGo => Some(Arc::new(super::opencode_go::OpenCodeGoProvider::new())),
         _ => None,
     }
 }
