@@ -931,6 +931,8 @@ fn strip_vendor_prefix(value: &str) -> String {
         "cohere:",
         "perplexity/",
         "perplexity:",
+        "xiaomi/",
+        "xiaomi:",
     ] {
         if let Some(stripped) = value.strip_prefix(prefix) {
             return stripped.to_string();
