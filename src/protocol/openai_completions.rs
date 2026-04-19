@@ -379,7 +379,7 @@ struct ChunkDelta {
     reasoning_text: Option<String>,
     #[serde(default)]
     reasoning_details: Option<Vec<serde_json::Value>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     tool_calls: Vec<ChunkToolCall>,
 }
 
@@ -1176,6 +1176,11 @@ async fn run_stream(
 
             let parsed: Result<ChatCompletionChunk, _> = serde_json::from_str(data);
             if let Ok(chunk_data) = parsed {
+                tracing::trace!(
+                    choices = chunk_data.choices.len(),
+                    raw = %super::common::debug_preview(data, 300),
+                    "SSE chunk parsed"
+                );
                 if let Some(chunk_id) = &chunk_data.id {
                     output.response_id = Some(chunk_id.clone());
                 }
@@ -1304,11 +1309,15 @@ async fn run_stream(
 
                             if let Some(ContentBlock::ToolCall(ref mut tool_call)) = current_block {
                                 if let Some(ref id) = tc.id {
-                                    tool_call.id = id.clone();
+                                    if !id.is_empty() {
+                                        tool_call.id = id.clone();
+                                    }
                                 }
                                 if let Some(ref func) = tc.function {
                                     if let Some(ref name) = func.name {
-                                        tool_call.name = name.clone();
+                                        if !name.is_empty() {
+                                            tool_call.name = name.clone();
+                                        }
                                     }
                                     if let Some(ref args) = func.arguments {
                                         let partial = partial_tool_args.entry(index).or_default();
@@ -1368,6 +1377,11 @@ async fn run_stream(
                         }
                     }
                 }
+            } else {
+                tracing::warn!(
+                    raw = %super::common::debug_preview(data, 500),
+                    "SSE chunk JSON parse failed"
+                );
             }
         }
     }
@@ -1424,6 +1438,21 @@ async fn run_stream(
         }
     }
 
+    tracing::debug!(
+        url = %url,
+        model = %model.id,
+        stop_reason = ?output.stop_reason,
+        content_blocks = output.content.len(),
+        has_tool_calls = output.has_tool_calls(),
+        content_summary = %output.content.iter().map(|b| match b {
+            ContentBlock::Text(t) => format!("Text({}chars)", t.text.len()),
+            ContentBlock::Thinking(t) => format!("Thinking({}chars)", t.thinking.len()),
+            ContentBlock::ToolCall(tc) => format!("ToolCall(id={}, name={})", tc.id, tc.name),
+            ContentBlock::Image(_) => "Image".to_string(),
+        }).collect::<Vec<_>>().join(", "),
+        "OpenAI Completions stream final output summary"
+    );
+
     if output.stop_reason == StopReason::Error {
         if output.error_message.is_none() {
             output.error_message = Some("Provider returned an error stop reason".to_string());
@@ -1441,6 +1470,16 @@ async fn run_stream(
     stream.end(None);
 
     Ok(())
+}
+
+/// Deserialize a field that may be `null` in JSON as the type's `Default` value.
+/// Handles providers that send `"tool_calls": null` instead of omitting the field.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 fn map_finish_reason(reason: &str) -> (StopReason, Option<String>) {
