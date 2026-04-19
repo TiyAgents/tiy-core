@@ -140,8 +140,12 @@ impl LLMProtocol for AnthropicProtocol {
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
         let stream_options = options.base;
-        let (thinking, output_config) =
-            build_thinking_options(model, options.reasoning, options.thinking_budget_tokens);
+        let (thinking, output_config) = build_thinking_options(
+            model,
+            options.reasoning,
+            options.thinking_budget_tokens,
+            options.thinking_display,
+        );
         let stream = AssistantMessageEventStream::new_assistant_stream();
         let stream_clone = stream.clone();
 
@@ -244,6 +248,8 @@ enum AnthropicThinkingParam {
     Adaptive {
         #[serde(rename = "type")]
         param_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
     },
     Budget {
         #[serde(rename = "type")]
@@ -263,6 +269,8 @@ fn supports_xhigh(model: &Model) -> bool {
         || model.id.contains("gpt-5.4")
         || model.id.contains("opus-4-6")
         || model.id.contains("opus-4.6")
+        || model.id.contains("opus-4-7")
+        || model.id.contains("opus-4.7")
 }
 
 fn supports_adaptive_thinking(model_id: &str) -> bool {
@@ -270,6 +278,18 @@ fn supports_adaptive_thinking(model_id: &str) -> bool {
         || model_id.contains("opus-4.6")
         || model_id.contains("sonnet-4-6")
         || model_id.contains("sonnet-4.6")
+        || model_id.contains("opus-4-7")
+        || model_id.contains("opus-4.7")
+}
+
+/// Whether the model supports the native "xhigh" effort level in output_config.
+fn supports_xhigh_effort(model_id: &str) -> bool {
+    model_id.contains("opus-4-7") || model_id.contains("opus-4.7")
+}
+
+/// Whether the model requires explicit display opt-in for thinking content.
+fn requires_thinking_display(model_id: &str) -> bool {
+    model_id.contains("opus-4-7") || model_id.contains("opus-4.7")
 }
 
 fn clamp_reasoning(level: ThinkingLevel, model: &Model) -> ThinkingLevel {
@@ -286,7 +306,9 @@ fn map_adaptive_effort(level: ThinkingLevel, model_id: &str) -> &'static str {
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => {
-            if model_id.contains("opus-4-6") || model_id.contains("opus-4.6") {
+            if supports_xhigh_effort(model_id) {
+                "xhigh"
+            } else if model_id.contains("opus-4-6") || model_id.contains("opus-4.6") {
                 "max"
             } else {
                 "high"
@@ -300,6 +322,7 @@ fn build_thinking_options(
     model: &Model,
     level: Option<ThinkingLevel>,
     thinking_budget_tokens: Option<u32>,
+    thinking_display: Option<crate::thinking::ThinkingDisplay>,
 ) -> (
     Option<AnthropicThinkingParam>,
     Option<AnthropicOutputConfig>,
@@ -314,9 +337,19 @@ fn build_thinking_options(
 
     let level = clamp_reasoning(level, model);
     if supports_adaptive_thinking(&model.id) {
+        let display = if requires_thinking_display(&model.id) {
+            Some(
+                thinking_display
+                    .unwrap_or(crate::thinking::ThinkingDisplay::Summarized)
+                    .to_string(),
+            )
+        } else {
+            None
+        };
         (
             Some(AnthropicThinkingParam::Adaptive {
                 param_type: "adaptive".to_string(),
+                display,
             }),
             Some(AnthropicOutputConfig {
                 effort: map_adaptive_effort(level, &model.id).to_string(),

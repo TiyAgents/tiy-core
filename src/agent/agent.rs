@@ -902,6 +902,7 @@ impl Agent {
             base,
             reasoning,
             thinking_budget_tokens,
+            thinking_display: None,
         }
     }
 

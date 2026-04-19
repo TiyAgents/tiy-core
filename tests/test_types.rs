@@ -1353,6 +1353,7 @@ fn test_simple_stream_options_with_reasoning() {
         },
         reasoning: Some(tiycore::thinking::ThinkingLevel::Medium),
         thinking_budget_tokens: None,
+        thinking_display: None,
     };
     assert!(simple.reasoning.is_some());
     assert_eq!(simple.base.api_key, Some("key".to_string()));

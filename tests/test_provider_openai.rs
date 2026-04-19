@@ -704,6 +704,7 @@ async fn test_stream_simple_delegates_correctly() {
             },
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         },
     );
     let result = stream.result().await;

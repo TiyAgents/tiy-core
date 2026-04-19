@@ -348,6 +348,18 @@ pub struct UrlPolicy {
     /// (unless the host is localhost/127.0.0.1 for local development).
     #[serde(default = "default_allowed_schemes")]
     pub allowed_schemes: Vec<String>,
+
+    /// Hostnames or domain suffixes exempt from the HTTPS requirement.
+    ///
+    /// Useful for enterprise intranet domains that serve HTTP only (e.g. `llm.oa.com`).
+    ///
+    /// - **Exact match**: `"llm.oa.com"` exempts only that host.
+    /// - **Suffix match**: `".oa.com"` (leading dot) exempts any sub-domain such as
+    ///   `llm.oa.com`, `api.llm.oa.com`, etc.
+    ///
+    /// Matching is case-insensitive. Default: empty (no exemptions).
+    #[serde(default)]
+    pub https_exempt_hosts: Vec<String>,
 }
 
 fn default_require_https() -> bool {
@@ -363,11 +375,45 @@ impl Default for UrlPolicy {
             require_https: default_require_https(),
             block_private_ips: false,
             allowed_schemes: default_allowed_schemes(),
+            https_exempt_hosts: Vec::new(),
         }
     }
 }
 
 impl UrlPolicy {
+    /// Builder-style setter for `https_exempt_hosts`.
+    ///
+    /// Each entry is either an exact hostname (`"llm.oa.com"`) or a domain suffix
+    /// starting with a dot (`".oa.com"`) that matches all sub-domains.
+    pub fn with_https_exempt_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.https_exempt_hosts = hosts;
+        self
+    }
+
+    /// Check if a hostname is exempt from the HTTPS requirement.
+    ///
+    /// Supports exact match (`"llm.oa.com"`) and suffix match (`".oa.com"`).
+    /// Matching is case-insensitive.
+    fn is_https_exempt(&self, host: &str) -> bool {
+        if self.https_exempt_hosts.is_empty() {
+            return false;
+        }
+        let lower = host.to_lowercase();
+        self.https_exempt_hosts.iter().any(|entry| {
+            let entry_lower = entry.to_lowercase();
+            if entry_lower.is_empty() || entry_lower == "." {
+                return false;
+            }
+            if entry_lower.starts_with('.') {
+                // Suffix match: ".oa.com" matches "llm.oa.com" and "api.llm.oa.com"
+                lower.ends_with(&entry_lower)
+            } else {
+                // Exact match
+                lower == entry_lower
+            }
+        })
+    }
+
     /// Validate a base URL against the policy.
     /// Returns `Ok(())` if the URL passes validation, or an error description.
     ///
@@ -398,8 +444,12 @@ impl UrlPolicy {
         // Check HTTPS requirement
         if self.require_https && scheme == "http" {
             // Allow HTTP for localhost/loopback (local development)
-            let is_local = parsed.host_str().map_or(false, is_local_host);
-            if !is_local {
+            let is_local = parsed.host_str().is_some_and(|h| is_local_host(h));
+            // Allow HTTP for explicitly exempted hosts (enterprise intranet)
+            let is_exempt = parsed
+                .host_str()
+                .is_some_and(|h| self.is_https_exempt(h));
+            if !is_local && !is_exempt {
                 return Err(format!(
                     "HTTPS is required for non-local URLs, got HTTP: '{}'",
                     url_str
@@ -669,5 +719,68 @@ mod tests {
         assert_eq!(config.agent.max_messages, 500);
         // Other sections still default
         assert_eq!(config.stream.result_timeout_secs, 600);
+    }
+
+    // ---- HTTPS exempt hosts tests ----
+
+    #[test]
+    fn test_url_policy_https_exempt_exact_match() {
+        let policy = UrlPolicy::default().with_https_exempt_hosts(vec!["llm.oa.com".to_string()]);
+        // Exact match allows HTTP
+        assert!(policy.validate("http://llm.oa.com/v1").is_ok());
+        // Different host still blocked
+        assert!(policy.validate("http://other.example.com/v1").is_err());
+    }
+
+    #[test]
+    fn test_url_policy_https_exempt_suffix_match() {
+        let policy = UrlPolicy::default().with_https_exempt_hosts(vec![".oa.com".to_string()]);
+        // Sub-domains match the suffix
+        assert!(policy.validate("http://llm.oa.com/v1").is_ok());
+        assert!(policy.validate("http://api.llm.oa.com/v1").is_ok());
+        // Bare "oa.com" does NOT match ".oa.com" (no leading dot in host)
+        assert!(policy.validate("http://oa.com/v1").is_err());
+        // Unrelated domain still blocked
+        assert!(policy.validate("http://api.example.com/v1").is_err());
+    }
+
+    #[test]
+    fn test_url_policy_https_exempt_case_insensitive() {
+        let policy = UrlPolicy::default().with_https_exempt_hosts(vec!["LLM.OA.COM".to_string()]);
+        assert!(policy.validate("http://llm.oa.com/v1").is_ok());
+        assert!(policy.validate("http://LLM.OA.COM/v1").is_ok());
+
+        let policy2 =
+            UrlPolicy::default().with_https_exempt_hosts(vec![".OA.COM".to_string()]);
+        assert!(policy2.validate("http://api.oa.com/v1").is_ok());
+    }
+
+    #[test]
+    fn test_url_policy_https_exempt_does_not_affect_https() {
+        // HTTPS URLs always pass regardless of exempt list
+        let policy = UrlPolicy::default().with_https_exempt_hosts(vec!["llm.oa.com".to_string()]);
+        assert!(policy.validate("https://llm.oa.com/v1").is_ok());
+        assert!(policy.validate("https://other.example.com/v1").is_ok());
+    }
+
+    #[test]
+    fn test_url_policy_https_exempt_empty_by_default() {
+        let policy = UrlPolicy::default();
+        assert!(policy.https_exempt_hosts.is_empty());
+        // Without exemptions, remote HTTP is blocked as usual
+        assert!(policy.validate("http://llm.oa.com/v1").is_err());
+    }
+
+    #[test]
+    fn test_url_policy_https_exempt_serde_roundtrip() {
+        let json = r#"{
+            "require_https": true,
+            "https_exempt_hosts": ["llm.oa.com", ".internal.corp"]
+        }"#;
+        let policy: UrlPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.https_exempt_hosts.len(), 2);
+        assert!(policy.validate("http://llm.oa.com/v1").is_ok());
+        assert!(policy.validate("http://api.internal.corp/v1").is_ok());
+        assert!(policy.validate("http://external.com/v1").is_err());
     }
 }

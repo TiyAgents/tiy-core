@@ -406,6 +406,10 @@ pub struct SimpleStreamOptions {
     /// Custom thinking budget tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
+    /// Thinking content display mode (Anthropic Opus 4.7+).
+    /// When None, defaults to "summarized" for models that require it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_display: Option<crate::thinking::ThinkingDisplay>,
 }
 
 /// Custom Debug implementation that delegates to StreamOptions (which redacts secrets).
@@ -415,6 +419,7 @@ impl std::fmt::Debug for SimpleStreamOptions {
             .field("base", &self.base)
             .field("reasoning", &self.reasoning)
             .field("thinking_budget_tokens", &self.thinking_budget_tokens)
+            .field("thinking_display", &self.thinking_display)
             .finish()
     }
 }
@@ -425,6 +430,7 @@ impl Default for SimpleStreamOptions {
             base: StreamOptions::default(),
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         }
     }
 }
@@ -435,6 +441,7 @@ impl From<StreamOptions> for SimpleStreamOptions {
             base,
             reasoning: None,
             thinking_budget_tokens: None,
+            thinking_display: None,
         }
     }
 }

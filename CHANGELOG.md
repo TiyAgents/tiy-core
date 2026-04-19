@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-04-17
+### :sparkles: New Features
+- [`8c323dc`](https://github.com/TiyAgents/tiycore/commit/8c323dca3de707d74b44d265300f78a5c5de6c58) - **anthropic**: ✨ add Claude Opus 4.7 support with adaptive thinking and xhigh effort *(commit by [@jorben](https://github.com/jorben))*
+
+
+## [0.1.6] - 2026-04-14
+### :sparkles: New Features
+- [`d2d77c1`](https://github.com/TiyAgents/tiycore/commit/d2d77c13d8b5edee4315cb4baa2509efee286597) - **url-policy**: ✨ allow HTTP for configured HTTPS-exempt hosts *(commit by [@jorben](https://github.com/jorben))*
+
+
+## [0.1.4] - 2026-04-12
+### :bug: Bug Fixes
+- [`5c60ce0`](https://github.com/TiyAgents/tiycore/commit/5c60ce0358fdea6e9a231347f7af3f7e1bafacfd) - 🐛 Use TIY_CACHE_RETENTION for cache retention *(commit by [@jorben](https://github.com/jorben))*
+
+
+## [0.1.3] - 2026-04-07
+### :sparkles: New Features
+- [`303f1a2`](https://github.com/TiyAgents/tiycore/commit/303f1a208106734d425d896d51d4b2aec57f9e6b) - **catalog**: ✨ add scheduled snapshot patching via catalog/patches.json *(commit by [@jorben](https://github.com/jorben))*
+- [`1f975ea`](https://github.com/TiyAgents/tiycore/commit/1f975ea3e3e82071420dfcd8d14ff68f58e32652) - **agent**: ✨ add custom HTTP headers support for LLM requests *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.2] - 2026-04-05
 ### :sparkles: New Features
 - [`b862e72`](https://github.com/TiyAgents/tiycore/commit/b862e723059a39d4871786eb9ebdc135a651e644) - **provider**: ✨ implement Anthropic, Google, OpenAI Responses and add 7 new providers
@@ -109,3 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.1.1]: https://github.com/TiyAgents/tiycore/compare/0.0.1...0.1.1
 [0.1.2]: https://github.com/TiyAgents/tiycore/compare/0.0.1...0.1.2
+[0.1.3]: https://github.com/TiyAgents/tiycore/compare/0.1.2...0.1.3
+[0.1.4]: https://github.com/TiyAgents/tiycore/compare/0.1.3...0.1.4
+[0.1.6]: https://github.com/TiyAgents/tiycore/compare/0.1.5...0.1.6
+[0.1.7]: https://github.com/TiyAgents/tiycore/compare/0.1.6...0.1.7
