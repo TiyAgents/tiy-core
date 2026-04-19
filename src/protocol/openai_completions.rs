@@ -1404,14 +1404,24 @@ async fn run_stream(
     // Tolerate missing finish_reason when [DONE] sentinel was received.
     // Many OpenAI-compatible providers omit finish_reason; the [DONE] sentinel
     // alone is sufficient evidence the stream completed normally.
-    // output.stop_reason already defaults to StopReason::Stop from the builder,
-    // so no reassignment is needed — just log for debugging.
+    // When the response contains tool calls, infer ToolUse so the agent loop
+    // continues to execute them (mirrors AI SDK behaviour where loop continuation
+    // is driven by the presence of tool calls, not by finish_reason).
     if saw_done_sentinel && !saw_finish_reason {
-        tracing::warn!(
-            url = %url,
-            model = %model.id,
-            "Provider omitted finish_reason but sent [DONE] sentinel; treating as normal stop"
-        );
+        if output.has_tool_calls() {
+            output.stop_reason = StopReason::ToolUse;
+            tracing::warn!(
+                url = %url,
+                model = %model.id,
+                "Provider omitted finish_reason with tool calls present; inferring ToolUse"
+            );
+        } else {
+            tracing::warn!(
+                url = %url,
+                model = %model.id,
+                "Provider omitted finish_reason but sent [DONE] sentinel; treating as normal stop"
+            );
+        }
     }
 
     if output.stop_reason == StopReason::Error {
