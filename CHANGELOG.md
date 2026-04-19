@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-04-19
+### :sparkles: New Features
+- [`d3fc3a4`](https://github.com/TiyAgents/tiycore/commit/d3fc3a4e8281ab6755b32cc061c857134ef7f8ca) - **provider**: ✨ Add OpenCode Go provider with adaptive routing *(PR [#8](https://github.com/TiyAgents/tiycore/pull/8) by [@HayWolf](https://github.com/HayWolf))*
+
+### :bug: Bug Fixes
+- [`967f0c7`](https://github.com/TiyAgents/tiycore/commit/967f0c7b025ccb2eb9f4916988946837976679b9) - **openai**: 🐛 tolerate missing finish_reason when [DONE] received *(PR [#7](https://github.com/TiyAgents/tiycore/pull/7) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.1.7] - 2026-04-17
 ### :sparkles: New Features
 - [`8c323dc`](https://github.com/TiyAgents/tiycore/commit/8c323dca3de707d74b44d265300f78a5c5de6c58) - **anthropic**: ✨ add Claude Opus 4.7 support with adaptive thinking and xhigh effort *(commit by [@jorben](https://github.com/jorben))*
@@ -134,3 +142,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.4]: https://github.com/TiyAgents/tiycore/compare/0.1.3...0.1.4
 [0.1.6]: https://github.com/TiyAgents/tiycore/compare/0.1.5...0.1.6
 [0.1.7]: https://github.com/TiyAgents/tiycore/compare/0.1.6...0.1.7
+[0.1.8]: https://github.com/TiyAgents/tiycore/compare/0.1.7...0.1.8
