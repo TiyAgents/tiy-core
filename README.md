@@ -18,11 +18,11 @@ tiycore is a Rust library that provides a single, provider-agnostic interface fo
 
 ## Highlights
 
-- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 9 delegation providers (OpenAI-Compatible, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi Coding, ZAI, Zenmux) behind a single `LLMProtocol` trait.
+- **One interface, many providers** — 5 protocol-level implementations (OpenAI Completions, OpenAI Responses, Anthropic Messages, Google Generative AI / Vertex AI, Ollama) and 10 delegation providers (OpenAI-Compatible, xAI, Groq, OpenRouter, DeepSeek, MiniMax, Kimi Coding, ZAI, Zenmux, OpenCode Go) behind a single `LLMProtocol` trait.
 - **Streaming-first** — `EventStream<T, R>` backed by `parking_lot::Mutex<VecDeque>` implements `futures::Stream`. Every provider returns an `AssistantMessageEventStream` with fine-grained deltas: text, thinking, tool call arguments, and completion events.
 - **Tool / Function calling** — Define tools via JSON Schema, validate arguments with the `jsonschema` crate, and execute tools in parallel or sequentially within the agent loop.
 - **Stateful Agent runtime** — `Agent` manages a full conversation loop: stream LLM → detect tool calls → execute tools → re-prompt → repeat. Supports steering (interrupt mid-turn), follow-up queues, event subscription (observer pattern), abort, configurable max turns (default 25), and standalone loop helpers when you want the same runtime without a long-lived `Agent` instance.
-- **Extended Thinking** — Provider-specific thinking/reasoning support with a unified `ThinkingLevel` enum (Off → XHigh). Cross-provider thinking block conversion is handled automatically during message transformation.
+- **Extended Thinking** — Provider-specific thinking/reasoning support with a unified `ThinkingLevel` enum (Off → XHigh, supporting OpenAI GPT-5 and Anthropic Opus 4.7+) and `ThinkingDisplay` enum (`Summarized` / `Omitted`) controlling whether thinking content is included in responses. Cross-provider thinking block conversion is handled automatically during message transformation.
 - **Thread-safe by default** — All mutable state uses `parking_lot` locks and `AtomicBool` for non-poisoning concurrency.
 
 ## Architecture
@@ -48,6 +48,7 @@ graph TD
     E --> E7[MiniMax → Anthropic]
     E --> E8[Kimi Coding → Anthropic]
     E --> E9[Zenmux → adaptive routing]
+    E --> E10[OpenCode Go → adaptive routing]
 ```
 
 ### Core Layers
@@ -60,7 +61,7 @@ graph TD
 | **Stream** | `src/stream/` | Generic `EventStream<T, R>` implementing `futures::Stream` |
 | **Agent** | `src/agent/` | Stateful conversation manager with tool execution loop ([full docs](./src/agent/README.md)) |
 | **Transform** | `src/transform/` | Cross-provider message transformation (thinking blocks, tool call IDs, orphan resolution) |
-| **Thinking** | `src/thinking/` | `ThinkingLevel` enum and provider-specific thinking options |
+| **Thinking** | `src/thinking/` | `ThinkingLevel` enum, `ThinkingDisplay` enum, and provider-specific thinking options |
 | **Validation** | `src/validation/` | JSON Schema validation for tool parameters |
 | **Models** | `src/models/` | `ModelRegistry` with predefined models (GPT-4o, Claude Sonnet 4, Gemini 2.5 Flash, etc.) |
 | **Catalog** | `src/catalog/` | Native model listing, snapshot refresh, scheduled snapshot generation, and optional metadata enrichment for display ([full docs](./src/catalog/README.md)) |
@@ -192,7 +193,7 @@ async fn main() {
 }
 ```
 
-The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), context pipeline (transformContext / convertToLlm), preserved tool-result `details` overrides, event subscription with prompt/tool-result lifecycle events, steering & follow-up queues, thinking budgets, standalone loop helpers, custom messages, and more. See the full **[Agent Module Documentation](./src/agent/README.md)** for details.
+The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), context pipeline (transformContext / convertToLlm), preserved tool-result `details` overrides, event subscription with prompt/tool-result lifecycle events, steering & follow-up queues, thinking budgets, custom HTTP headers (`custom_headers` on `AgentConfig`), standalone loop helpers, custom messages, and more. See the full **[Agent Module Documentation](./src/agent/README.md)** for details.
 
 ## Supported Providers
 
@@ -211,6 +212,7 @@ The Agent also supports hooks (beforeToolCall / afterToolCall / onPayload), cont
 | MiniMax | Delegation → Anthropic | `MINIMAX_API_KEY` |
 | Kimi Coding | Delegation → Anthropic | `KIMI_API_KEY` |
 | Zenmux | Adaptive multi-protocol | `ZENMUX_API_KEY` |
+| OpenCode Go | Adaptive multi-protocol | `OPENCODE_GO_API_KEY` |
 
 For detailed provider configuration, compat flags, Zenmux adaptive routing, and how to add new providers, see the **[Provider Documentation](./src/provider/README.md)**.
 
@@ -350,7 +352,8 @@ A full `security.json` with all fields and their defaults:
   "url": {
     "require_https": true,                // Enforce HTTPS (localhost/127.0.0.1 exempted)
     "block_private_ips": false,           // Block private/loopback IPs (off for local dev)
-    "allowed_schemes": ["https", "http"]  // Allowed URL schemes
+    "allowed_schemes": ["https", "http"], // Allowed URL schemes
+    "https_exempt_hosts": []              // Hosts exempt from HTTPS requirement (e.g. [".oa.com", "llm.internal"])
   }
 }
 ```
@@ -393,6 +396,7 @@ protected_headers = [
 require_https = true
 block_private_ips = false
 allowed_schemes = ["https", "http"]
+https_exempt_hosts = []
 ```
 
 ### Default Values Quick Reference
@@ -415,6 +419,7 @@ allowed_schemes = ["https", "http"]
 | **url** | `require_https` | `true` | HTTPS enforced (localhost exempt) |
 | | `block_private_ips` | `false` | Private IP blocking |
 | | `allowed_schemes` | `["https", "http"]` | Allowed URL schemes |
+| | `https_exempt_hosts` | `[]` | Hosts exempt from HTTPS (supports suffix match with leading dot) |
 
 ## Build & Test
 
@@ -464,7 +469,8 @@ src/
 │   ├── zai.rs          # Delegation → OpenAI Completions
 │   ├── minimax.rs      # Delegation → Anthropic
 │   ├── kimi_coding.rs  # Delegation → Anthropic
-│   └── zenmux.rs       # Adaptive 3-way routing
+│   ├── zenmux.rs       # Adaptive 3-way routing
+│   └── opencode_go.rs # Adaptive multi-protocol routing
 ├── catalog/
 │   ├── README.md       # Catalog fetch/enrichment/snapshot documentation
 │   └── mod.rs          # Native model listing + snapshot refresh + metadata stores

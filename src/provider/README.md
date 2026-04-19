@@ -120,6 +120,21 @@ Zenmux is a unique multi-protocol proxy that routes to different protocols based
 
 When a custom (non-zenmux) base URL is provided, it falls back to OpenAI Completions protocol.
 
+### OpenCode Go (Adaptive Multi-Protocol)
+
+| Provider | Module | Struct | Env Var |
+|---|---|---|---|
+| OpenCode Go | `opencode_go.rs` | `OpenCodeGoProvider` | `OPENCODE_GO_API_KEY` |
+
+OpenCode Go is a multi-protocol proxy provider that routes to different protocols based on model ID:
+
+| Model ID Pattern | Routed Protocol | Base URL |
+|---|---|---|
+| Contains `minimax` (case-insensitive) | Anthropic Messages | `https://opencode.ai/zen/go/v1` |
+| Everything else | OpenAI Completions | `https://opencode.ai/zen/go/v1` |
+
+OpenCode Go supports GLM, Kimi, Mimo, and MiniMax models through adaptive protocol selection.
+
 ## API Key Resolution
 
 Keys are resolved in priority order:
@@ -164,7 +179,8 @@ provider/
 ├── deepseek.rs      # DeepSeek → OpenAI Completions (macro-generated, static compat)
 ├── minimax.rs       # MiniMax → Anthropic (hand-written, dual env var)
 ├── kimi_coding.rs   # Kimi Coding → Anthropic (macro-generated)
-└── zenmux.rs        # Zenmux → adaptive 3-way routing (hand-written)
+├── zenmux.rs        # Zenmux → adaptive 3-way routing (hand-written)
+└── opencode_go.rs   # OpenCode Go → adaptive 2-way routing (hand-written, MiniMax → Anthropic, others → OpenAI)
 ```
 
 ## Adding a New Provider
@@ -330,6 +346,21 @@ Zenmux 是独特的多协议代理，根据模型 ID 路由到不同协议：
 
 当提供自定义（非 zenmux）Base URL 时，回退到 OpenAI Completions 协议。
 
+### OpenCode Go（自适应多协议）
+
+| 提供商 | 模块 | 结构体 | 环境变量 |
+|---|---|---|---|
+| OpenCode Go | `opencode_go.rs` | `OpenCodeGoProvider` | `OPENCODE_GO_API_KEY` |
+
+OpenCode Go 是多协议代理提供商，根据模型 ID 路由到不同协议：
+
+| 模型 ID 模式 | 路由协议 | Base URL |
+|---|---|---|
+| 包含 `minimax`（不区分大小写） | Anthropic Messages | `https://opencode.ai/zen/go/v1` |
+| 其他 | OpenAI Completions | `https://opencode.ai/zen/go/v1` |
+
+OpenCode Go 通过自适应协议选择支持 GLM、Kimi、Mimo 和 MiniMax 模型。
+
 ## API Key 解析优先级
 
 Key 按以下优先级解析：
@@ -374,7 +405,8 @@ provider/
 ├── deepseek.rs      # DeepSeek → OpenAI Completions（宏生成，静态兼容性）
 ├── minimax.rs       # MiniMax → Anthropic（手写，双环境变量）
 ├── kimi_coding.rs   # Kimi Coding → Anthropic（宏生成）
-└── zenmux.rs        # Zenmux → 自适应三路路由（手写）
+├── zenmux.rs        # Zenmux → 自适应三路路由（手写）
+└── opencode_go.rs   # OpenCode Go → 自适应双路路由（手写，MiniMax → Anthropic，其他 → OpenAI）
 ```
 
 ## 添加新提供商

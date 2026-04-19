@@ -44,8 +44,14 @@ Four base protocol implementations handle the distinct wire formats:
 | Module | Struct | API Endpoint | SSE Event Flow |
 |---|---|---|---|
 | `openai_completions` | `OpenAICompletionsProtocol` | `POST /chat/completions` | `data: {choices[0].delta}` chunks, `[DONE]` sentinel |
+
+**`finish_reason` tolerance:** Many OpenAI-compatible providers omit `finish_reason` when tool calls are present. The protocol module handles this in two stages: first, the incomplete-stream detector only flags a missing `finish_reason` as incomplete when the `[DONE]` sentinel is also absent; second, if `[DONE]` was received but `finish_reason` is missing and the output contains tool calls, `StopReason::ToolUse` is inferred automatically so the agent loop continues executing tools.
+
 | `openai_responses` | `OpenAIResponsesProtocol` | `POST /responses` | Typed events: `response.output_item.added` → `response.output_text.delta` / `response.function_call_arguments.delta` → `response.output_item.done` → `response.completed` |
 | `anthropic` | `AnthropicProtocol` | `POST /messages` | `message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop` |
+
+**Adaptive thinking `display` field:** For models that require explicit opt-in (currently Opus 4.7), the `thinking` parameter includes an optional `display` field (`"summarized"` or `"omitted"`) controlling how thinking content appears in the response. This is set via `StreamOptions.thinking_display` (`ThinkingDisplay` enum, defaults to `Summarized`). For older models, the field is omitted from the wire format.
+
 | `google` | `GoogleProtocol` | `POST /models/{id}:streamGenerateContent?alt=sse` | JSON chunks with `candidates[].content.parts[]` |
 
 ### Default Base URLs
@@ -79,7 +85,30 @@ Common utilities shared across all protocol implementations:
 | `handle_error_response` | Read error body (bounded), log, emit `Error` event |
 | `emit_terminal_error` | Convert transport/protocol failures into a terminal `Error` event and close the stream |
 | `check_sse_buffer_overflow` | Abort stream if SSE line buffer exceeds configured limit |
+| `emit_incomplete_stream_error` | Emit a structured `[incomplete_stream]` terminal error with provider and detail |
+| `parse_incomplete_stream_error` | Parse an incomplete-stream error back into `(provider, detail)` for upper-layer retry |
 | `debug_preview` | Truncate body string for debug logging |
+
+### Incomplete Stream Detection
+
+When an SSE stream terminates abnormally (connection drop, missing terminal event, unclosed content blocks), each protocol module calls a dedicated detection function after the stream loop exits:
+
+| Module | Function | Key Signals |
+|--------|----------|-------------|
+| `anthropic` | `incomplete_anthropic_stream_detail` | Missing `message_delta`/`message_stop`; unclosed content blocks; unfinished tool-arg JSON; trailing partial SSE frame |
+| `openai_completions` | `incomplete_openai_completions_stream_detail` | Missing `finish_reason` (only if `[DONE]` also absent); missing `[DONE]`; unfinished tool-arg JSON; trailing frame |
+| `openai_responses` | `incomplete_openai_responses_stream_detail` | Missing `response.completed`/`response.done`; unfinished output items; unfinished tool-arg JSON; trailing frame |
+| `google` | `incomplete_google_stream_detail` | Missing candidate `finish_reason`; trailing partial frame |
+
+If a function returns `Some(detail)`, `emit_incomplete_stream_error()` pushes a terminal `Error` event with a `[incomplete_stream]<provider>: <detail>` message. The agent layer can then call `parse_incomplete_stream_error()` on the error message to extract the provider and detail for retry or recovery logic.
+
+### Environment Variables
+
+Protocol-layer behaviour can be tuned through the following environment variables:
+
+| Variable | Values | Default | Used By | Purpose |
+|----------|--------|---------|---------|---------|
+| `TIY_CACHE_RETENTION` | `long`, `none` | (unset → `Short`) | `anthropic`, `openai_responses` | Controls prompt-caching retention policy |
 
 ### Retry Semantics
 
@@ -170,8 +199,14 @@ pub trait LLMProtocol: Send + Sync {
 | 模块 | 结构体 | API 端点 | SSE 事件流 |
 |---|---|---|---|
 | `openai_completions` | `OpenAICompletionsProtocol` | `POST /chat/completions` | `data: {choices[0].delta}` 块，`[DONE]` 终止标记 |
+
+**`finish_reason` 容错：** 许多 OpenAI 兼容提供商在存在工具调用时省略 `finish_reason`。协议模块分两阶段处理：首先，不完整流检测器仅在 `[DONE]` 终止标记也缺失时才将缺失的 `finish_reason` 标记为不完整；其次，若已收到 `[DONE]` 但 `finish_reason` 缺失且输出包含工具调用，则自动推断 `StopReason::ToolUse`，使 Agent 循环继续执行工具。
+
 | `openai_responses` | `OpenAIResponsesProtocol` | `POST /responses` | 类型化事件：`response.output_item.added` → `response.output_text.delta` / `response.function_call_arguments.delta` → `response.output_item.done` → `response.completed` |
 | `anthropic` | `AnthropicProtocol` | `POST /messages` | `message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop` |
+
+**自适应思维 `display` 字段：** 对于需要显式选择的模型（目前为 Opus 4.7），`thinking` 参数包含可选的 `display` 字段（`"summarized"` 或 `"omitted"`），用于控制思维内容在响应中的呈现方式。通过 `StreamOptions.thinking_display`（`ThinkingDisplay` 枚举，默认为 `Summarized`）设置。旧模型在线路格式中省略此字段。
+
 | `google` | `GoogleProtocol` | `POST /models/{id}:streamGenerateContent?alt=sse` | JSON 块，包含 `candidates[].content.parts[]` |
 
 ### 默认 Base URL
@@ -205,7 +240,30 @@ pub trait LLMProtocol: Send + Sync {
 | `handle_error_response` | 读取错误响应体（有上限），记录日志，发出 `Error` 事件 |
 | `emit_terminal_error` | 将传输/协议失败转换为终止 `Error` 事件并关闭流 |
 | `check_sse_buffer_overflow` | 当 SSE 行缓冲区超出限制时中止流 |
+| `emit_incomplete_stream_error` | 发出结构化的 `[incomplete_stream]` 终止错误，包含提供商和详细信息 |
+| `parse_incomplete_stream_error` | 将不完整流错误反向解析为 `(提供商, 详细信息)`，供上层重试使用 |
 | `debug_preview` | 截断请求体字符串用于调试日志 |
+
+### 不完整流检测
+
+当 SSE 流异常终止（连接断开、缺少终止事件、未闭合的内容块等）时，各协议模块在流循环退出后调用专用的检测函数：
+
+| 模块 | 函数 | 关键信号 |
+|------|------|----------|
+| `anthropic` | `incomplete_anthropic_stream_detail` | 缺少 `message_delta`/`message_stop`；未闭合的内容块；未完成的工具参数 JSON；尾部部分 SSE 帧 |
+| `openai_completions` | `incomplete_openai_completions_stream_detail` | 缺少 `finish_reason`（仅在 `[DONE]` 也缺失时）；缺少 `[DONE]`；未完成的工具参数 JSON；尾部帧 |
+| `openai_responses` | `incomplete_openai_responses_stream_detail` | 缺少 `response.completed`/`response.done`；未完成的输出项；未完成的工具参数 JSON；尾部帧 |
+| `google` | `incomplete_google_stream_detail` | 缺少候选 `finish_reason`；尾部部分帧 |
+
+若函数返回 `Some(detail)`，`emit_incomplete_stream_error()` 会推送一个包含 `[incomplete_stream]<提供商>: <详细信息>` 消息的终止 `Error` 事件。Agent 层可调用 `parse_incomplete_stream_error()` 从错误消息中提取提供商和详细信息，用于重试或恢复逻辑。
+
+### 环境变量
+
+协议层行为可通过以下环境变量调整：
+
+| 变量 | 取值 | 默认值 | 使用模块 | 用途 |
+|------|------|--------|----------|------|
+| `TIY_CACHE_RETENTION` | `long`、`none` | （未设置 → `Short`） | `anthropic`、`openai_responses` | 控制提示缓存保留策略 |
 
 ### 重试语义
 
