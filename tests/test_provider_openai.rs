@@ -578,12 +578,11 @@ async fn test_stream_empty_response() {
     let stream = provider.stream(&model, &context, options);
     let result = stream.result().await;
 
-    assert_eq!(result.stop_reason, StopReason::Error);
+    // With [DONE] sentinel present but no finish_reason, the stream is
+    // treated as a normal stop (tolerate missing finish_reason).
+    assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "");
-    assert!(result.error_message.as_deref().is_some_and(|message| {
-        message.contains("[incomplete_stream]openai_completions:")
-            && message.contains("missing finish_reason")
-    }));
+    assert!(result.error_message.is_none());
 }
 
 #[tokio::test]
