@@ -1401,6 +1401,19 @@ async fn run_stream(
         return Ok(());
     }
 
+    // Tolerate missing finish_reason when [DONE] sentinel was received.
+    // Many OpenAI-compatible providers omit finish_reason; the [DONE] sentinel
+    // alone is sufficient evidence the stream completed normally.
+    // output.stop_reason already defaults to StopReason::Stop from the builder,
+    // so no reassignment is needed — just log for debugging.
+    if saw_done_sentinel && !saw_finish_reason {
+        tracing::warn!(
+            url = %url,
+            model = %model.id,
+            "Provider omitted finish_reason but sent [DONE] sentinel; treating as normal stop"
+        );
+    }
+
     if output.stop_reason == StopReason::Error {
         if output.error_message.is_none() {
             output.error_message = Some("Provider returned an error stop reason".to_string());
@@ -1444,7 +1457,7 @@ fn incomplete_openai_completions_stream_detail(
 ) -> Option<String> {
     let mut reasons = Vec::new();
 
-    if !saw_finish_reason {
+    if !saw_finish_reason && !saw_done_sentinel {
         reasons.push("missing finish_reason".to_string());
     }
 
@@ -1690,5 +1703,38 @@ mod tests {
         assert!(detail.contains("missing [DONE] sentinel"));
         assert!(detail.contains("unfinished tool input JSON at indices [1]"));
         assert!(detail.contains("trailing partial SSE frame"));
+    }
+
+    #[test]
+    fn test_incomplete_stream_detail_tolerates_missing_finish_reason_when_done_received() {
+        // When [DONE] sentinel is received but finish_reason is missing,
+        // this should NOT be considered an incomplete stream.
+        let partial_tool_args = HashMap::new();
+
+        let detail = incomplete_openai_completions_stream_detail(
+            false, // no finish_reason
+            true,  // [DONE] received
+            &partial_tool_args,
+            "",
+        );
+
+        assert!(detail.is_none(), "Expected None when [DONE] was received without finish_reason, got: {:?}", detail);
+    }
+
+    #[test]
+    fn test_incomplete_stream_detail_still_reports_when_both_missing() {
+        // When both [DONE] and finish_reason are missing, it IS incomplete.
+        let partial_tool_args = HashMap::new();
+
+        let detail = incomplete_openai_completions_stream_detail(
+            false, // no finish_reason
+            false, // no [DONE]
+            &partial_tool_args,
+            "",
+        )
+        .expect("should report incomplete");
+
+        assert!(detail.contains("missing finish_reason"));
+        assert!(detail.contains("missing [DONE] sentinel"));
     }
 }
