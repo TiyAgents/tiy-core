@@ -23,6 +23,7 @@ pub mod minimax;
 pub mod ollama;
 pub mod openai;
 pub mod openai_compatible;
+pub mod openai_responses;
 pub mod openrouter;
 pub mod xai;
 pub mod zai;
@@ -48,6 +49,7 @@ pub fn register_all_providers() {
     use std::sync::Arc;
     register_provider(Arc::new(openai::OpenAIProvider::new()));
     register_provider(Arc::new(openai_compatible::OpenAICompatibleProvider::new()));
+    register_provider(Arc::new(openai_responses::OpenAIResponsesProvider::new()));
     register_provider(Arc::new(anthropic::AnthropicProvider::new()));
     register_provider(Arc::new(google::GoogleProvider::new()));
     register_provider(Arc::new(ollama::OllamaProvider::new()));

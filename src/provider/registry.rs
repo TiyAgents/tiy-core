@@ -120,6 +120,9 @@ fn create_default_provider(provider: &Provider) -> Option<ArcProtocol> {
         Provider::OpenAICompatible => Some(Arc::new(
             super::openai_compatible::OpenAICompatibleProvider::new(),
         )),
+        Provider::OpenAIResponses => Some(Arc::new(
+            super::openai_responses::OpenAIResponsesProvider::new(),
+        )),
         Provider::Anthropic => Some(Arc::new(super::anthropic::AnthropicProvider::new())),
         Provider::Google => Some(Arc::new(super::google::GoogleProvider::new())),
         Provider::Ollama => Some(Arc::new(super::ollama::OllamaProvider::new())),
