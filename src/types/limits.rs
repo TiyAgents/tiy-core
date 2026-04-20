@@ -446,9 +446,7 @@ impl UrlPolicy {
             // Allow HTTP for localhost/loopback (local development)
             let is_local = parsed.host_str().is_some_and(|h| is_local_host(h));
             // Allow HTTP for explicitly exempted hosts (enterprise intranet)
-            let is_exempt = parsed
-                .host_str()
-                .is_some_and(|h| self.is_https_exempt(h));
+            let is_exempt = parsed.host_str().is_some_and(|h| self.is_https_exempt(h));
             if !is_local && !is_exempt {
                 return Err(format!(
                     "HTTPS is required for non-local URLs, got HTTP: '{}'",
@@ -750,8 +748,7 @@ mod tests {
         assert!(policy.validate("http://llm.oa.com/v1").is_ok());
         assert!(policy.validate("http://LLM.OA.COM/v1").is_ok());
 
-        let policy2 =
-            UrlPolicy::default().with_https_exempt_hosts(vec![".OA.COM".to_string()]);
+        let policy2 = UrlPolicy::default().with_https_exempt_hosts(vec![".OA.COM".to_string()]);
         assert!(policy2.validate("http://api.oa.com/v1").is_ok());
     }
 

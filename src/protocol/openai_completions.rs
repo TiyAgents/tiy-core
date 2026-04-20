@@ -1767,7 +1767,11 @@ mod tests {
             "",
         );
 
-        assert!(detail.is_none(), "Expected None when [DONE] was received without finish_reason, got: {:?}", detail);
+        assert!(
+            detail.is_none(),
+            "Expected None when [DONE] was received without finish_reason, got: {:?}",
+            detail
+        );
     }
 
     #[test]

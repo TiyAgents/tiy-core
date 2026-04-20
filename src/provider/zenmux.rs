@@ -12,6 +12,9 @@
 //!   routes to OpenAI Responses protocol
 //! - Otherwise, routes to Anthropic Messages protocol
 //!
+//! A trailing `:source` suffix on the model ID is ignored for protocol routing.
+//! For example, `claude-opus-4.6:google` still routes to Anthropic protocol.
+//!
 //! When a custom base_url is provided (not empty and not starting with
 //! `https://zenmux.ai`), the provider uses OpenAI Completions protocol
 //! with the given base_url as-is.
@@ -24,7 +27,7 @@ use crate::types::*;
 use async_trait::async_trait;
 
 /// Zenmux base URL prefix used to detect adaptive routing mode.
-const ZENMUX_HOST_PREFIX: &str = "https://zenmux.ai";
+pub(crate) const ZENMUX_HOST_PREFIX: &str = "https://zenmux.ai";
 
 /// Default OpenAI Responses endpoint for Zenmux.
 const ZENMUX_OPENAI_BASE_URL: &str = "https://zenmux.ai/api/v1";
@@ -36,10 +39,35 @@ const ZENMUX_GOOGLE_BASE_URL: &str = "https://zenmux.ai/api/vertex-ai";
 const ZENMUX_ANTHROPIC_BASE_URL: &str = "https://zenmux.ai/api/anthropic/v1";
 
 /// Protocol routing decision for a model.
-enum ProtocolRoute {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProtocolRoute {
     Google,
     OpenAI,
     Anthropic,
+}
+
+/// Returns the model ID portion used for Zenmux protocol routing.
+///
+/// Zenmux allows an optional trailing `:source` suffix to select a channel.
+/// That suffix must not affect protocol detection, so only the segment before
+/// the final `:` is inspected when such a suffix is present.
+pub(crate) fn zenmux_routing_model_id(model_id: &str) -> &str {
+    model_id
+        .rsplit_once(':')
+        .map(|(base, _)| base)
+        .unwrap_or(model_id)
+}
+
+/// Determine the adaptive Zenmux protocol route from a model ID.
+pub(crate) fn zenmux_detect_route(model_id: &str) -> ProtocolRoute {
+    let lower = zenmux_routing_model_id(model_id).to_ascii_lowercase();
+    if lower.contains("google") || lower.contains("gemini") {
+        ProtocolRoute::Google
+    } else if lower.contains("openai") || lower.contains("gpt") {
+        ProtocolRoute::OpenAI
+    } else {
+        ProtocolRoute::Anthropic
+    }
 }
 
 /// Zenmux provider (multi-protocol proxy).
@@ -87,14 +115,7 @@ impl ZenmuxProvider {
 
     /// Determine protocol route based on model ID.
     fn detect_route(model_id: &str) -> ProtocolRoute {
-        let lower = model_id.to_lowercase();
-        if lower.contains("google") || lower.contains("gemini") {
-            ProtocolRoute::Google
-        } else if lower.contains("openai") || lower.contains("gpt") {
-            ProtocolRoute::OpenAI
-        } else {
-            ProtocolRoute::Anthropic
-        }
+        zenmux_detect_route(model_id)
     }
 }
 
@@ -198,5 +219,41 @@ impl LLMProtocol for ZenmuxProvider {
             let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
             provider.stream_simple(&m, context, opts)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{zenmux_detect_route, zenmux_routing_model_id, ProtocolRoute};
+
+    #[test]
+    fn test_zenmux_route_detection_ignores_source_suffix() {
+        assert_eq!(
+            zenmux_routing_model_id("claude-opus-4.6"),
+            "claude-opus-4.6"
+        );
+        assert_eq!(
+            zenmux_detect_route("claude-opus-4.6"),
+            ProtocolRoute::Anthropic
+        );
+        assert_eq!(zenmux_detect_route("gemini-2.5-pro"), ProtocolRoute::Google);
+        assert_eq!(zenmux_detect_route("gpt-4.1"), ProtocolRoute::OpenAI);
+
+        assert_eq!(
+            zenmux_routing_model_id("claude-opus-4.6:google"),
+            "claude-opus-4.6"
+        );
+        assert_eq!(
+            zenmux_detect_route("claude-opus-4.6:google"),
+            ProtocolRoute::Anthropic
+        );
+        assert_eq!(
+            zenmux_detect_route("gemini-2.5-pro:openai"),
+            ProtocolRoute::Google
+        );
+        assert_eq!(
+            zenmux_detect_route("gpt-4.1:anthropic"),
+            ProtocolRoute::OpenAI
+        );
     }
 }

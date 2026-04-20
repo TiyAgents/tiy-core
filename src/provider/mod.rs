@@ -24,11 +24,11 @@ pub mod ollama;
 pub mod openai;
 pub mod openai_compatible;
 pub mod openai_responses;
+pub mod opencode_go;
 pub mod openrouter;
 pub mod xai;
 pub mod zai;
 pub mod zenmux;
-pub mod opencode_go;
 
 // Re-export protocol trait & type aliases (these stay in protocol/)
 pub use crate::protocol::{ArcProtocol, BoxedProtocol, LLMProtocol};

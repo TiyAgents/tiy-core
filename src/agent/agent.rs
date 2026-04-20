@@ -2086,14 +2086,11 @@ fn effective_api_for_model(model: &Model) -> Api {
         Provider::Ollama => Api::Ollama,
         Provider::Zenmux => {
             let base = model.base_url.as_deref().unwrap_or("");
-            let id = model.id.to_ascii_lowercase();
-            if base.is_empty() || base.starts_with("https://zenmux.ai") {
-                if id.contains("google") || id.contains("gemini") {
-                    Api::GoogleVertex
-                } else if id.contains("openai") || id.contains("gpt") {
-                    Api::OpenAIResponses
-                } else {
-                    Api::AnthropicMessages
+            if base.is_empty() || base.starts_with(crate::provider::zenmux::ZENMUX_HOST_PREFIX) {
+                match crate::provider::zenmux::zenmux_detect_route(&model.id) {
+                    crate::provider::zenmux::ProtocolRoute::Google => Api::GoogleVertex,
+                    crate::provider::zenmux::ProtocolRoute::OpenAI => Api::OpenAIResponses,
+                    crate::provider::zenmux::ProtocolRoute::Anthropic => Api::AnthropicMessages,
                 }
             } else {
                 Api::OpenAICompletions
