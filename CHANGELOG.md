@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-04-21
+### :sparkles: New Features
+- [`7aa18af`](https://github.com/TiyAgents/tiycore/commit/7aa18af6bfd9fc90896c956981cdba7602efe7bc) - **catalog**: ✨ expand list-model provider support *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.10] - 2026-04-20
 ### :sparkles: New Features
 - [`879999e`](https://github.com/TiyAgents/tiycore/commit/879999e8e4ca8864b98c49b4f081a6b85830d725) - **provider**: ✨ add standalone OpenAI Responses provider facade *(commit by [@jorben](https://github.com/jorben))*
@@ -156,3 +161,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.8]: https://github.com/TiyAgents/tiycore/compare/0.1.7...0.1.8
 [0.1.9]: https://github.com/TiyAgents/tiycore/compare/0.1.8...0.1.9
 [0.1.10]: https://github.com/TiyAgents/tiycore/compare/0.1.9...0.1.10
+[0.1.12]: https://github.com/TiyAgents/tiycore/compare/0.1.11...0.1.12
