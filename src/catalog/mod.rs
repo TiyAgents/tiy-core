@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+const OPENAI_RESPONSES_BASE_URL: &str = OPENAI_BASE_URL;
 const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -33,9 +35,25 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 const MINIMAX_BASE_URL: &str = "https://api.minimax.io/anthropic";
 const MINIMAX_CN_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
 const KIMI_CODING_BASE_URL: &str = "https://api.kimi.com/coding";
+const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_CATALOG_MANIFEST_URL: &str =
     "https://tiyagents.github.io/tiycore/catalog/manifest.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderAuthScheme {
+    Bearer,
+    AnthropicApiKey,
+    GoogleApiKey,
+    None,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProviderListModelsProfile {
+    default_base_url: Option<&'static str>,
+    auth_scheme: ProviderAuthScheme,
+    api_key_env_vars: &'static [&'static str],
+}
 
 /// Request to fetch models from a provider.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -953,11 +971,14 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
     match provider {
         Provider::OpenAI
         | Provider::OpenAICompatible
+        | Provider::OpenAIResponses
+        | Provider::Google
         | Provider::XAI
         | Provider::Groq
         | Provider::ZAI
         | Provider::DeepSeek
-        | Provider::Ollama => Ok(Box::new(OpenAIModelsAdapter::new(provider.clone()))),
+        | Provider::Ollama
+        | Provider::OpenCodeGo => Ok(Box::new(ModelsEndpointAdapter::new(provider.clone()))),
         Provider::OpenRouter => Ok(Box::new(OpenRouterModelsAdapter::new(provider.clone()))),
         Provider::Zenmux => Ok(Box::new(ZenmuxModelsAdapter::new(provider.clone()))),
         Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {
@@ -970,12 +991,12 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
 }
 
 #[derive(Debug, Clone)]
-struct OpenAIModelsAdapter {
+struct ModelsEndpointAdapter {
     provider: Provider,
     client: Client,
 }
 
-impl OpenAIModelsAdapter {
+impl ModelsEndpointAdapter {
     fn new(provider: Provider) -> Self {
         Self {
             provider,
@@ -985,10 +1006,10 @@ impl OpenAIModelsAdapter {
 }
 
 #[async_trait]
-impl ModelListAdapter for OpenAIModelsAdapter {
+impl ModelListAdapter for ModelsEndpointAdapter {
     async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
         let url = join_url(&resolve_base_url(request)?, "models");
-        let headers = build_openai_headers(&self.provider, request);
+        let headers = build_provider_headers(&self.provider, request);
         send_json_request(&self.client, self.provider.clone(), &url, headers).await
     }
 
@@ -996,7 +1017,7 @@ impl ModelListAdapter for OpenAIModelsAdapter {
         &self,
         raw: &Value,
     ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
-        extract_openai_models(&self.provider, raw)
+        extract_models_from_data(&self.provider, raw)
     }
 }
 
@@ -1019,7 +1040,7 @@ impl OpenRouterModelsAdapter {
 impl ModelListAdapter for OpenRouterModelsAdapter {
     async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
         let base_url = resolve_base_url(request)?;
-        let headers = build_openai_headers(&self.provider, request);
+        let headers = build_provider_headers(&self.provider, request);
 
         let models_url = join_url(&base_url, "models");
         let models_response = send_json_request(
@@ -1060,7 +1081,7 @@ impl ModelListAdapter for OpenRouterModelsAdapter {
         &self,
         raw: &Value,
     ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
-        extract_openai_models(&self.provider, raw)
+        extract_models_from_data(&self.provider, raw)
     }
 }
 
@@ -1083,7 +1104,7 @@ impl ZenmuxModelsAdapter {
 impl ModelListAdapter for ZenmuxModelsAdapter {
     async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
         let base_url = resolve_base_url(request)?;
-        let headers = build_openai_headers(&self.provider, request);
+        let headers = build_provider_headers(&self.provider, request);
 
         let models_url = join_url(&base_url, "models");
         let models_response = send_json_request(
@@ -1124,7 +1145,7 @@ impl ModelListAdapter for ZenmuxModelsAdapter {
         &self,
         raw: &Value,
     ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
-        extract_openai_models(&self.provider, raw)
+        extract_models_from_data(&self.provider, raw)
     }
 }
 
@@ -1146,73 +1167,16 @@ impl AnthropicModelsAdapter {
 #[async_trait]
 impl ModelListAdapter for AnthropicModelsAdapter {
     async fn fetch_raw(&self, request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
-        let mut after_id: Option<String> = None;
-        let mut combined_pages = Vec::new();
-        let mut combined_data = Vec::new();
-        let mut seen_cursors = HashSet::new();
-
-        loop {
-            let url = join_url(&resolve_base_url(request)?, "models");
-            let headers = build_anthropic_headers(&self.provider, request);
-            let mut query = vec![("limit", "1000".to_string())];
-            if let Some(ref cursor) = after_id {
-                query.push(("after_id", cursor.clone()));
-            }
-
-            let response = send_json_request_with_query(
-                &self.client,
-                self.provider.clone(),
-                &url,
-                headers,
-                &query,
-            )
-            .await?;
-
-            combined_data.extend(
-                value_array(&self.provider, &response, "data")?
-                    .iter()
-                    .cloned(),
-            );
-            let has_more = response
-                .get("has_more")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let next_after_id = response
-                .get("last_id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string);
-            combined_pages.push(response);
-
-            if !has_more {
-                break;
-            }
-
-            let cursor = next_after_id.ok_or_else(|| ModelCatalogError::InvalidResponse {
-                provider: self.provider.clone(),
-                message: "paginated response is missing `last_id`".to_string(),
-            })?;
-
-            if !seen_cursors.insert(cursor.clone()) {
-                return Err(ModelCatalogError::PaginationLoop {
-                    provider: self.provider.clone(),
-                    cursor,
-                });
-            }
-
-            after_id = Some(cursor);
-        }
-
-        Ok(json!({
-            "data": combined_data,
-            "pages": combined_pages,
-        }))
+        let url = join_url(&resolve_base_url(request)?, "models");
+        let headers = build_provider_headers(&self.provider, request);
+        send_json_request(&self.client, self.provider.clone(), &url, headers).await
     }
 
     fn extract_models(
         &self,
         raw: &Value,
     ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
-        extract_anthropic_models(&self.provider, raw)
+        extract_models_from_data(&self.provider, raw)
     }
 }
 
@@ -1256,34 +1220,110 @@ fn model_identifier(item: &Value) -> Option<&str> {
         .or_else(|| item.get("name").and_then(Value::as_str))
 }
 
+fn provider_list_models_profile(
+    provider: &Provider,
+) -> Result<ProviderListModelsProfile, ModelCatalogError> {
+    let profile = match provider {
+        Provider::OpenAI => ProviderListModelsProfile {
+            default_base_url: Some(OPENAI_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["OPENAI_API_KEY"],
+        },
+        Provider::OpenAICompatible => ProviderListModelsProfile {
+            default_base_url: None,
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["OPENAI_API_KEY"],
+        },
+        Provider::OpenAIResponses => ProviderListModelsProfile {
+            default_base_url: Some(OPENAI_RESPONSES_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["OPENAI_API_KEY"],
+        },
+        Provider::Google => ProviderListModelsProfile {
+            default_base_url: Some(GOOGLE_BASE_URL),
+            auth_scheme: ProviderAuthScheme::GoogleApiKey,
+            api_key_env_vars: &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+        },
+        Provider::XAI => ProviderListModelsProfile {
+            default_base_url: Some(XAI_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["XAI_API_KEY"],
+        },
+        Provider::Groq => ProviderListModelsProfile {
+            default_base_url: Some(GROQ_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["GROQ_API_KEY"],
+        },
+        Provider::OpenRouter => ProviderListModelsProfile {
+            default_base_url: Some(OPENROUTER_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["OPENROUTER_API_KEY"],
+        },
+        Provider::ZAI => ProviderListModelsProfile {
+            default_base_url: Some(ZAI_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["ZAI_API_KEY"],
+        },
+        Provider::DeepSeek => ProviderListModelsProfile {
+            default_base_url: Some(DEEPSEEK_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["DEEPSEEK_API_KEY"],
+        },
+        Provider::Zenmux => ProviderListModelsProfile {
+            default_base_url: Some(ZENMUX_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["ZENMUX_API_KEY"],
+        },
+        Provider::Ollama => ProviderListModelsProfile {
+            default_base_url: Some(OLLAMA_BASE_URL),
+            auth_scheme: ProviderAuthScheme::None,
+            api_key_env_vars: &[],
+        },
+        Provider::Anthropic => ProviderListModelsProfile {
+            default_base_url: Some(ANTHROPIC_BASE_URL),
+            auth_scheme: ProviderAuthScheme::AnthropicApiKey,
+            api_key_env_vars: &["ANTHROPIC_API_KEY"],
+        },
+        Provider::MiniMax => ProviderListModelsProfile {
+            default_base_url: Some(MINIMAX_BASE_URL),
+            auth_scheme: ProviderAuthScheme::AnthropicApiKey,
+            api_key_env_vars: &["MINIMAX_API_KEY"],
+        },
+        Provider::MiniMaxCN => ProviderListModelsProfile {
+            default_base_url: Some(MINIMAX_CN_BASE_URL),
+            auth_scheme: ProviderAuthScheme::AnthropicApiKey,
+            api_key_env_vars: &["MINIMAX_CN_API_KEY"],
+        },
+        Provider::KimiCoding => ProviderListModelsProfile {
+            default_base_url: Some(KIMI_CODING_BASE_URL),
+            auth_scheme: ProviderAuthScheme::AnthropicApiKey,
+            api_key_env_vars: &["KIMI_API_KEY"],
+        },
+        Provider::OpenCodeGo => ProviderListModelsProfile {
+            default_base_url: Some(OPENCODE_GO_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["OPENCODE_GO_API_KEY"],
+        },
+        _ => {
+            return Err(ModelCatalogError::UnsupportedProvider {
+                provider: provider.clone(),
+            });
+        }
+    };
+
+    Ok(profile)
+}
+
 fn resolve_base_url(request: &FetchModelsRequest) -> Result<String, ModelCatalogError> {
     if let Some(base_url) = request.base_url.as_ref() {
         return Ok(base_url.clone());
     }
 
-    let base_url = match request.provider {
-        Provider::OpenAI => OPENAI_BASE_URL,
-        Provider::OpenAICompatible => {
-            return Err(ModelCatalogError::MissingBaseUrl {
-                provider: request.provider.clone(),
-            })
-        }
-        Provider::XAI => XAI_BASE_URL,
-        Provider::Groq => GROQ_BASE_URL,
-        Provider::OpenRouter => OPENROUTER_BASE_URL,
-        Provider::ZAI => ZAI_BASE_URL,
-        Provider::DeepSeek => DEEPSEEK_BASE_URL,
-        Provider::Zenmux => ZENMUX_BASE_URL,
-        Provider::Ollama => OLLAMA_BASE_URL,
-        Provider::Anthropic => ANTHROPIC_BASE_URL,
-        Provider::MiniMax => MINIMAX_BASE_URL,
-        Provider::MiniMaxCN => MINIMAX_CN_BASE_URL,
-        Provider::KimiCoding => KIMI_CODING_BASE_URL,
-        _ => {
-            return Err(ModelCatalogError::UnsupportedProvider {
-                provider: request.provider.clone(),
-            })
-        }
+    let profile = provider_list_models_profile(&request.provider)?;
+    let Some(base_url) = profile.default_base_url else {
+        return Err(ModelCatalogError::MissingBaseUrl {
+            provider: request.provider.clone(),
+        });
     };
 
     Ok(base_url.to_string())
@@ -1297,36 +1337,42 @@ fn join_url(base_url: &str, path: &str) -> String {
     )
 }
 
-fn build_openai_headers(provider: &Provider, request: &FetchModelsRequest) -> HeaderMap {
+fn build_provider_headers(provider: &Provider, request: &FetchModelsRequest) -> HeaderMap {
+    let profile = provider_list_models_profile(provider)
+        .expect("supported provider profiles should always resolve when building headers");
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     if let Some(api_key) = resolve_api_key(provider, request).filter(|key| !key.is_empty()) {
-        let bearer = format!("Bearer {}", api_key);
-        if let Ok(value) = HeaderValue::from_str(&bearer) {
-            headers.insert(AUTHORIZATION, value);
+        match profile.auth_scheme {
+            ProviderAuthScheme::Bearer => {
+                let bearer = format!("Bearer {}", api_key);
+                if let Ok(value) = HeaderValue::from_str(&bearer) {
+                    headers.insert(AUTHORIZATION, value);
+                }
+            }
+            ProviderAuthScheme::AnthropicApiKey => {
+                headers.insert(
+                    "anthropic-version",
+                    HeaderValue::from_static(ANTHROPIC_VERSION),
+                );
+                if let Ok(value) = HeaderValue::from_str(&api_key) {
+                    headers.insert("x-api-key", value);
+                }
+            }
+            ProviderAuthScheme::GoogleApiKey => {
+                if let Ok(value) = HeaderValue::from_str(&api_key) {
+                    headers.insert("x-goog-api-key", value);
+                }
+            }
+            ProviderAuthScheme::None => {}
         }
-    }
-
-    apply_custom_headers(&mut headers, &request.headers, &HeaderPolicy::default());
-
-    headers
-}
-
-fn build_anthropic_headers(provider: &Provider, request: &FetchModelsRequest) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        "anthropic-version",
-        HeaderValue::from_static(ANTHROPIC_VERSION),
-    );
-
-    if let Some(api_key) = resolve_api_key(provider, request).filter(|key| !key.is_empty()) {
-        if let Ok(value) = HeaderValue::from_str(&api_key) {
-            headers.insert("x-api-key", value);
-        }
+    } else if profile.auth_scheme == ProviderAuthScheme::AnthropicApiKey {
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
     }
 
     apply_custom_headers(&mut headers, &request.headers, &HeaderPolicy::default());
@@ -1339,24 +1385,14 @@ fn resolve_api_key(provider: &Provider, request: &FetchModelsRequest) -> Option<
         return Some(api_key.clone());
     }
 
-    let env_var = match provider {
-        Provider::OpenAI => Some("OPENAI_API_KEY"),
-        Provider::OpenAICompatible => Some("OPENAI_API_KEY"),
-        Provider::XAI => Some("XAI_API_KEY"),
-        Provider::Groq => Some("GROQ_API_KEY"),
-        Provider::OpenRouter => Some("OPENROUTER_API_KEY"),
-        Provider::ZAI => Some("ZAI_API_KEY"),
-        Provider::DeepSeek => Some("DEEPSEEK_API_KEY"),
-        Provider::Zenmux => Some("ZENMUX_API_KEY"),
-        Provider::Anthropic => Some("ANTHROPIC_API_KEY"),
-        Provider::MiniMax => Some("MINIMAX_API_KEY"),
-        Provider::MiniMaxCN => Some("MINIMAX_CN_API_KEY"),
-        Provider::KimiCoding => Some("KIMI_API_KEY"),
-        Provider::Ollama => None,
-        _ => None,
-    };
-
-    env_var.and_then(|name| std::env::var(name).ok())
+    provider_list_models_profile(provider)
+        .ok()
+        .and_then(|profile| {
+            profile
+                .api_key_env_vars
+                .iter()
+                .find_map(|name| std::env::var(name).ok())
+        })
 }
 
 fn read_local_manifest(
@@ -1619,17 +1655,7 @@ async fn send_json_request_with_query(
         .map_err(|source| ModelCatalogError::Request { provider, source })
 }
 
-fn extract_openai_models(
-    provider: &Provider,
-    raw: &Value,
-) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
-    let data = value_array(provider, raw, "data")?;
-    data.iter()
-        .map(|item| extract_model_record(provider, item))
-        .collect()
-}
-
-fn extract_anthropic_models(
+fn extract_models_from_data(
     provider: &Provider,
     raw: &Value,
 ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
