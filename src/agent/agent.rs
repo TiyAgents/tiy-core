@@ -2087,11 +2087,7 @@ fn effective_api_for_model(model: &Model) -> Api {
         Provider::Zenmux => {
             let base = model.base_url.as_deref().unwrap_or("");
             if base.is_empty() || base.starts_with(crate::provider::zenmux::ZENMUX_HOST_PREFIX) {
-                match crate::provider::zenmux::zenmux_detect_route(&model.id) {
-                    crate::provider::zenmux::ProtocolRoute::Google => Api::GoogleVertex,
-                    crate::provider::zenmux::ProtocolRoute::OpenAI => Api::OpenAIResponses,
-                    crate::provider::zenmux::ProtocolRoute::Anthropic => Api::AnthropicMessages,
-                }
+                crate::provider::zenmux::zenmux_detect_api(&model.id)
             } else {
                 Api::OpenAICompletions
             }
@@ -2112,6 +2108,44 @@ fn effective_api_for_model(model: &Model) -> Api {
         | Provider::DeepSeek => Api::OpenAICompletions,
         Provider::AmazonBedrock => Api::BedrockConverseStream,
         Provider::Custom(name) => Api::Custom(name.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_api_for_model;
+    use crate::types::{Api, Model, Provider};
+
+    fn zenmux_model(id: &str, base_url: Option<&str>) -> Model {
+        let mut builder = Model::builder()
+            .id(id)
+            .name(id)
+            .provider(Provider::Zenmux)
+            .context_window(128000)
+            .max_tokens(8192);
+        if let Some(base_url) = base_url {
+            builder = builder.base_url(base_url);
+        }
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn test_effective_api_for_zenmux_kimi_models_uses_openai_completions() {
+        assert_eq!(
+            effective_api_for_model(&zenmux_model("kimi-k2.5", None)),
+            Api::OpenAICompletions
+        );
+        assert_eq!(
+            effective_api_for_model(&zenmux_model("moonshotai/kimi-k2.5", None)),
+            Api::OpenAICompletions
+        );
+        assert_eq!(
+            effective_api_for_model(&zenmux_model(
+                "moonshotai/kimi-k2.5:anthropic",
+                Some("https://zenmux.ai/api/v1")
+            )),
+            Api::OpenAICompletions
+        );
     }
 }
 

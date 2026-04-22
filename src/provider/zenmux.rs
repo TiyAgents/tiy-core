@@ -2,12 +2,15 @@
 //!
 //! Zenmux is a multi-protocol proxy that supports:
 //! - OpenAI Responses protocol at `https://zenmux.ai/api/v1`
+//! - OpenAI-compatible protocol at `https://zenmux.ai/api/v1`
 //! - Google Vertex AI protocol at `https://zenmux.ai/api/vertex-ai`
 //! - Anthropic Messages protocol at `https://zenmux.ai/api/anthropic/v1`
 //!
 //! Adaptive routing logic (when base_url is empty or starts with `https://zenmux.ai`):
 //! - If the model ID contains "google" or "gemini" (case-insensitive),
 //!   routes to Google Vertex AI protocol
+//! - If the model ID contains "kimi" or "moonshotai" (case-insensitive),
+//!   routes to OpenAI-compatible protocol
 //! - If the model ID contains "openai" or "gpt" (case-insensitive),
 //!   routes to OpenAI Responses protocol
 //! - Otherwise, routes to Anthropic Messages protocol
@@ -29,7 +32,7 @@ use async_trait::async_trait;
 /// Zenmux base URL prefix used to detect adaptive routing mode.
 pub(crate) const ZENMUX_HOST_PREFIX: &str = "https://zenmux.ai";
 
-/// Default OpenAI Responses endpoint for Zenmux.
+/// Default OpenAI-family endpoint for Zenmux.
 const ZENMUX_OPENAI_BASE_URL: &str = "https://zenmux.ai/api/v1";
 
 /// Default Google Vertex AI endpoint for Zenmux.
@@ -42,7 +45,8 @@ const ZENMUX_ANTHROPIC_BASE_URL: &str = "https://zenmux.ai/api/anthropic/v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProtocolRoute {
     Google,
-    OpenAI,
+    OpenAICompatible,
+    OpenAIResponses,
     Anthropic,
 }
 
@@ -63,11 +67,28 @@ pub(crate) fn zenmux_detect_route(model_id: &str) -> ProtocolRoute {
     let lower = zenmux_routing_model_id(model_id).to_ascii_lowercase();
     if lower.contains("google") || lower.contains("gemini") {
         ProtocolRoute::Google
+    } else if lower.contains("kimi") || lower.contains("moonshotai") {
+        ProtocolRoute::OpenAICompatible
     } else if lower.contains("openai") || lower.contains("gpt") {
-        ProtocolRoute::OpenAI
+        ProtocolRoute::OpenAIResponses
     } else {
         ProtocolRoute::Anthropic
     }
+}
+
+/// Map a Zenmux adaptive route to the corresponding API type.
+pub(crate) fn zenmux_api_for_route(route: ProtocolRoute) -> Api {
+    match route {
+        ProtocolRoute::Google => Api::GoogleVertex,
+        ProtocolRoute::OpenAICompatible => Api::OpenAICompletions,
+        ProtocolRoute::OpenAIResponses => Api::OpenAIResponses,
+        ProtocolRoute::Anthropic => Api::AnthropicMessages,
+    }
+}
+
+/// Determine the adaptive Zenmux API type from a model ID.
+pub(crate) fn zenmux_detect_api(model_id: &str) -> Api {
+    zenmux_api_for_route(zenmux_detect_route(model_id))
 }
 
 /// Zenmux provider (multi-protocol proxy).
@@ -148,23 +169,28 @@ impl LLMProtocol for ZenmuxProvider {
             // Adaptive mode: choose protocol and endpoint based on model ID.
             // Clear options.base_url so the routed endpoint in model.base_url takes effect.
             opts.base_url = None;
-            match Self::detect_route(&m.id) {
+            let route = Self::detect_route(&m.id);
+            m.api = Some(zenmux_api_for_route(route));
+            match route {
                 ProtocolRoute::Google => {
                     m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
-                    m.api = Some(Api::GoogleVertex);
                     let provider = crate::protocol::google::GoogleProtocol::new();
                     provider.stream(&m, context, opts)
                 }
-                ProtocolRoute::OpenAI => {
+                ProtocolRoute::OpenAICompatible => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
-                    m.api = Some(Api::OpenAIResponses);
+                    let provider =
+                        crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                    provider.stream(&m, context, opts)
+                }
+                ProtocolRoute::OpenAIResponses => {
+                    m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     let provider =
                         crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {
                     m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
-                    m.api = Some(Api::AnthropicMessages);
                     let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                     provider.stream(&m, context, opts)
                 }
@@ -192,23 +218,28 @@ impl LLMProtocol for ZenmuxProvider {
 
         if Self::should_adapt(&opts.base.base_url, &m.base_url) {
             opts.base.base_url = None;
-            match Self::detect_route(&m.id) {
+            let route = Self::detect_route(&m.id);
+            m.api = Some(zenmux_api_for_route(route));
+            match route {
                 ProtocolRoute::Google => {
                     m.base_url = Some(ZENMUX_GOOGLE_BASE_URL.to_string());
-                    m.api = Some(Api::GoogleVertex);
                     let provider = crate::protocol::google::GoogleProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
-                ProtocolRoute::OpenAI => {
+                ProtocolRoute::OpenAICompatible => {
                     m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
-                    m.api = Some(Api::OpenAIResponses);
+                    let provider =
+                        crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                    provider.stream_simple(&m, context, opts)
+                }
+                ProtocolRoute::OpenAIResponses => {
+                    m.base_url = Some(ZENMUX_OPENAI_BASE_URL.to_string());
                     let provider =
                         crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
                 ProtocolRoute::Anthropic => {
                     m.base_url = Some(ZENMUX_ANTHROPIC_BASE_URL.to_string());
-                    m.api = Some(Api::AnthropicMessages);
                     let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
@@ -224,7 +255,11 @@ impl LLMProtocol for ZenmuxProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{zenmux_detect_route, zenmux_routing_model_id, ProtocolRoute};
+    use super::{
+        zenmux_api_for_route, zenmux_detect_api, zenmux_detect_route, zenmux_routing_model_id,
+        ProtocolRoute,
+    };
+    use crate::types::Api;
 
     #[test]
     fn test_zenmux_route_detection_ignores_source_suffix() {
@@ -237,7 +272,18 @@ mod tests {
             ProtocolRoute::Anthropic
         );
         assert_eq!(zenmux_detect_route("gemini-2.5-pro"), ProtocolRoute::Google);
-        assert_eq!(zenmux_detect_route("gpt-4.1"), ProtocolRoute::OpenAI);
+        assert_eq!(
+            zenmux_detect_route("gpt-4.1"),
+            ProtocolRoute::OpenAIResponses
+        );
+        assert_eq!(
+            zenmux_detect_route("kimi-k2.5"),
+            ProtocolRoute::OpenAICompatible
+        );
+        assert_eq!(
+            zenmux_detect_route("moonshotai/kimi-k2.5"),
+            ProtocolRoute::OpenAICompatible
+        );
 
         assert_eq!(
             zenmux_routing_model_id("claude-opus-4.6:google"),
@@ -253,7 +299,39 @@ mod tests {
         );
         assert_eq!(
             zenmux_detect_route("gpt-4.1:anthropic"),
-            ProtocolRoute::OpenAI
+            ProtocolRoute::OpenAIResponses
         );
+        assert_eq!(
+            zenmux_detect_route("moonshotai/kimi-k2.5:anthropic"),
+            ProtocolRoute::OpenAICompatible
+        );
+    }
+
+    #[test]
+    fn test_zenmux_route_to_api_mapping() {
+        assert_eq!(
+            zenmux_api_for_route(ProtocolRoute::Google),
+            Api::GoogleVertex
+        );
+        assert_eq!(
+            zenmux_api_for_route(ProtocolRoute::OpenAICompatible),
+            Api::OpenAICompletions
+        );
+        assert_eq!(
+            zenmux_api_for_route(ProtocolRoute::OpenAIResponses),
+            Api::OpenAIResponses
+        );
+        assert_eq!(
+            zenmux_api_for_route(ProtocolRoute::Anthropic),
+            Api::AnthropicMessages
+        );
+
+        assert_eq!(zenmux_detect_api("gemini-2.5-pro"), Api::GoogleVertex);
+        assert_eq!(zenmux_detect_api("gpt-4.1"), Api::OpenAIResponses);
+        assert_eq!(
+            zenmux_detect_api("moonshotai/kimi-k2.5"),
+            Api::OpenAICompletions
+        );
+        assert_eq!(zenmux_detect_api("claude-opus-4.6"), Api::AnthropicMessages);
     }
 }

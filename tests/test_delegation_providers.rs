@@ -616,8 +616,10 @@ fn test_zenmux_model_route_detection() {
         let lower = id.to_lowercase();
         if lower.contains("google") || lower.contains("gemini") {
             "google"
+        } else if lower.contains("kimi") || lower.contains("moonshotai") {
+            "openai-compatible"
         } else if lower.contains("openai") || lower.contains("gpt") {
-            "openai"
+            "openai-responses"
         } else {
             "anthropic"
         }
@@ -627,11 +629,15 @@ fn test_zenmux_model_route_detection() {
     assert_eq!(detect_route("google/gemini-pro"), "google");
     assert_eq!(detect_route("GEMINI-1.5-PRO"), "google");
     assert_eq!(detect_route("some-google-model"), "google");
-    // OpenAI models
-    assert_eq!(detect_route("gpt-4o"), "openai");
-    assert_eq!(detect_route("gpt-4o-mini"), "openai");
-    assert_eq!(detect_route("GPT-4.1"), "openai");
-    assert_eq!(detect_route("openai/o3"), "openai");
+    // OpenAI-compatible Kimi / Moonshot models
+    assert_eq!(detect_route("kimi-k2.5"), "openai-compatible");
+    assert_eq!(detect_route("moonshotai/kimi-k2.5"), "openai-compatible");
+    assert_eq!(detect_route("MOONSHOTAI/KIMI-K2.5"), "openai-compatible");
+    // OpenAI Responses models
+    assert_eq!(detect_route("gpt-4o"), "openai-responses");
+    assert_eq!(detect_route("gpt-4o-mini"), "openai-responses");
+    assert_eq!(detect_route("GPT-4.1"), "openai-responses");
+    assert_eq!(detect_route("openai/o3"), "openai-responses");
     // Anthropic (default) models
     assert_eq!(detect_route("claude-sonnet-4"), "anthropic");
     assert_eq!(detect_route("llama-3.3-70b"), "anthropic");
