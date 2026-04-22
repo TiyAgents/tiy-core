@@ -2,6 +2,9 @@
 
 /// Default base URL for OpenAI Chat Completions API.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const NON_VISION_USER_IMAGE_PLACEHOLDER: &str = "(image omitted: model does not support images)";
+const NON_VISION_TOOL_IMAGE_PLACEHOLDER: &str =
+    "(tool image omitted: model does not support images)";
 
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
@@ -251,6 +254,8 @@ struct ChatCompletionRequest {
     max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAITool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptionsConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -516,8 +521,7 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
                     });
                 }
 
-                let openai_msg = convert_user_message(user_msg, model);
-                messages.push(openai_msg);
+                messages.push(convert_user_message(user_msg, model));
                 last_was_tool_result = false;
             }
             Message::Assistant(assistant_msg) => {
@@ -528,8 +532,7 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
                 last_was_tool_result = false;
             }
             Message::ToolResult(tool_result) => {
-                let openai_msg = convert_tool_result(tool_result, model);
-                messages.push(openai_msg);
+                messages.extend(convert_tool_result(tool_result, model));
                 last_was_tool_result = true;
             }
         }
@@ -539,6 +542,61 @@ fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
     maybe_add_openrouter_anthropic_cache_control(&mut messages, model);
 
     messages
+}
+
+fn text_part(text: impl Into<String>) -> OpenAIContentPart {
+    OpenAIContentPart {
+        content_type: "text".to_string(),
+        text: Some(text.into()),
+        image_url: None,
+        cache_control: None,
+    }
+}
+
+fn image_part(image: &ImageContent) -> OpenAIContentPart {
+    OpenAIContentPart {
+        content_type: "image_url".to_string(),
+        text: None,
+        image_url: Some(ImageUrl {
+            url: format!("data:{};base64,{}", image.mime_type, image.data),
+        }),
+        cache_control: None,
+    }
+}
+
+fn normalize_user_parts(blocks: &[ContentBlock], model: &Model) -> Vec<OpenAIContentPart> {
+    let mut parts = Vec::new();
+    let mut previous_was_placeholder = false;
+
+    for block in blocks {
+        match block {
+            ContentBlock::Text(t) => {
+                let text = sanitize_surrogates(&t.text);
+                previous_was_placeholder = text == NON_VISION_USER_IMAGE_PLACEHOLDER;
+                parts.push(text_part(text));
+            }
+            ContentBlock::Image(img) => {
+                if model.supports_image() {
+                    parts.push(image_part(img));
+                    previous_was_placeholder = false;
+                } else if !previous_was_placeholder {
+                    parts.push(text_part(NON_VISION_USER_IMAGE_PLACEHOLDER));
+                    previous_was_placeholder = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    parts
+}
+
+fn build_user_content(parts: Vec<OpenAIContentPart>) -> OpenAIContent {
+    if parts.len() == 1 && parts[0].content_type == "text" {
+        return OpenAIContent::Text(parts[0].text.clone().unwrap_or_default());
+    }
+
+    OpenAIContent::Parts(parts)
 }
 
 fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage {
@@ -552,51 +610,19 @@ fn convert_user_message(user_msg: &UserMessage, model: &Model) -> OpenAIMessage 
             extra_fields: HashMap::new(),
         },
         UserContent::Blocks(blocks) => {
-            let parts: Vec<OpenAIContentPart> = blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text(t) => Some(OpenAIContentPart {
-                        content_type: "text".to_string(),
-                        text: Some(sanitize_surrogates(&t.text)),
-                        image_url: None,
-                        cache_control: None,
-                    }),
-                    ContentBlock::Image(img) => {
-                        if model.supports_image() {
-                            Some(OpenAIContentPart {
-                                content_type: "image_url".to_string(),
-                                text: None,
-                                image_url: Some(ImageUrl {
-                                    url: format!("data:{};base64,{}", img.mime_type, img.data),
-                                }),
-                                cache_control: None,
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                })
-                .collect();
+            let parts = normalize_user_parts(blocks, model);
 
-            if parts.is_empty() {
-                OpenAIMessage {
-                    role: "user".to_string(),
-                    content: Some(OpenAIContent::Text(String::new())),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                    extra_fields: HashMap::new(),
-                }
-            } else {
-                OpenAIMessage {
-                    role: "user".to_string(),
-                    content: Some(OpenAIContent::Parts(parts)),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                    extra_fields: HashMap::new(),
-                }
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(if parts.is_empty() {
+                    OpenAIContent::Text(String::new())
+                } else {
+                    build_user_content(parts)
+                }),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                extra_fields: HashMap::new(),
             }
         }
     }
@@ -736,7 +762,7 @@ fn convert_assistant_message(
     Some(msg)
 }
 
-fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAIMessage {
+fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> Vec<OpenAIMessage> {
     let text: String = tool_result
         .content
         .iter()
@@ -744,16 +770,29 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
         .map(|t| sanitize_surrogates(&t.text))
         .collect::<Vec<_>>()
         .join("\n");
+    let text_is_empty = text.is_empty();
+
+    let images: Vec<&ImageContent> = tool_result
+        .content
+        .iter()
+        .filter_map(|b| b.as_image())
+        .collect();
 
     let requires_name = model
         .compat
         .as_ref()
         .is_some_and(|c| c.requires_tool_result_name);
 
-    OpenAIMessage {
+    let mut messages = vec![OpenAIMessage {
         role: "tool".to_string(),
-        content: Some(OpenAIContent::Text(if text.is_empty() {
-            "(no output)".to_string()
+        content: Some(OpenAIContent::Text(if text_is_empty {
+            if images.is_empty() {
+                "(no output)".to_string()
+            } else if model.supports_image() {
+                "(image output attached)".to_string()
+            } else {
+                NON_VISION_TOOL_IMAGE_PLACEHOLDER.to_string()
+            }
         } else {
             text
         })),
@@ -765,6 +804,44 @@ fn convert_tool_result(tool_result: &ToolResultMessage, model: &Model) -> OpenAI
             None
         },
         extra_fields: HashMap::new(),
+    }];
+
+    if !images.is_empty() {
+        if model.supports_image() {
+            let parts = images.into_iter().map(image_part).collect::<Vec<_>>();
+            messages.push(OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(build_user_content(parts)),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                extra_fields: HashMap::new(),
+            });
+        } else if text_is_empty {
+            messages[0].content = Some(OpenAIContent::Text(
+                NON_VISION_TOOL_IMAGE_PLACEHOLDER.to_string(),
+            ));
+        }
+    }
+
+    messages
+}
+
+fn convert_tool_choice(tool_choice: Option<&ToolChoice>) -> Option<serde_json::Value> {
+    match tool_choice? {
+        ToolChoice::Mode(ToolChoiceMode::Auto) => Some(serde_json::json!("auto")),
+        ToolChoice::Mode(ToolChoiceMode::None) => Some(serde_json::json!("none")),
+        ToolChoice::Mode(ToolChoiceMode::Any | ToolChoiceMode::Required) => {
+            Some(serde_json::json!("required"))
+        }
+        ToolChoice::Named(ToolChoiceNamed::Tool { name }) => Some(serde_json::json!({
+            "type": "function",
+            "function": { "name": name }
+        })),
+        ToolChoice::Named(ToolChoiceNamed::Function { function }) => Some(serde_json::json!({
+            "type": "function",
+            "function": { "name": function.name }
+        })),
     }
 }
 
@@ -964,6 +1041,7 @@ async fn run_stream(
         max_tokens,
         max_completion_tokens,
         tools,
+        tool_choice: convert_tool_choice(options.tool_choice.as_ref()),
         stream_options,
         reasoning_effort,
         store,
@@ -1060,6 +1138,46 @@ async fn run_stream(
     let mut line_buffer = String::new(); // Buffer for incomplete SSE lines
     let mut saw_finish_reason = false;
     let mut saw_done_sentinel = false;
+
+    let finish_current_block = |output: &mut AssistantMessage,
+                                stream: &AssistantMessageEventStream,
+                                block: Option<ContentBlock>| {
+        if let Some(block) = block {
+            let content_index = output.content.len();
+            match block {
+                ContentBlock::Text(text) => {
+                    let content = text.text.clone();
+                    output.content.push(ContentBlock::Text(text));
+                    stream.push(AssistantMessageEvent::TextEnd {
+                        content_index,
+                        content,
+                        partial: output.clone(),
+                    });
+                }
+                ContentBlock::Thinking(thinking) => {
+                    let content = thinking.thinking.clone();
+                    output.content.push(ContentBlock::Thinking(thinking));
+                    stream.push(AssistantMessageEvent::ThinkingEnd {
+                        content_index,
+                        content,
+                        partial: output.clone(),
+                    });
+                }
+                ContentBlock::ToolCall(tool_call) => {
+                    let tool_call_clone = tool_call.clone();
+                    output.content.push(ContentBlock::ToolCall(tool_call));
+                    stream.push(AssistantMessageEvent::ToolCallEnd {
+                        content_index,
+                        tool_call: tool_call_clone,
+                        partial: output.clone(),
+                    });
+                }
+                ContentBlock::Image(image) => {
+                    output.content.push(ContentBlock::Image(image));
+                }
+            }
+        }
+    };
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -1211,9 +1329,11 @@ async fn run_stream(
                         if let Some(ref content) = delta.content {
                             if !content.is_empty() {
                                 if current_block.as_ref().is_none_or(|b| !b.is_text()) {
-                                    if let Some(block) = current_block.take() {
-                                        output.content.push(block);
-                                    }
+                                    finish_current_block(
+                                        &mut output,
+                                        &stream,
+                                        current_block.take(),
+                                    );
                                     current_block = Some(ContentBlock::Text(TextContent::new("")));
                                     emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::TextStart {
@@ -1239,15 +1359,28 @@ async fn run_stream(
                         let reasoning = delta
                             .reasoning_content
                             .as_ref()
-                            .or(delta.reasoning.as_ref())
-                            .or(delta.reasoning_text.as_ref());
+                            .map(|content| (content, "reasoning_content"))
+                            .or_else(|| {
+                                delta
+                                    .reasoning
+                                    .as_ref()
+                                    .map(|content| (content, "reasoning"))
+                            })
+                            .or_else(|| {
+                                delta
+                                    .reasoning_text
+                                    .as_ref()
+                                    .map(|content| (content, "reasoning_text"))
+                            });
 
-                        if let Some(content) = reasoning {
+                        if let Some((content, source_field)) = reasoning {
                             if !content.is_empty() {
                                 if current_block.as_ref().is_none_or(|b| !b.is_thinking()) {
-                                    if let Some(block) = current_block.take() {
-                                        output.content.push(block);
-                                    }
+                                    finish_current_block(
+                                        &mut output,
+                                        &stream,
+                                        current_block.take(),
+                                    );
                                     current_block =
                                         Some(ContentBlock::Thinking(ThinkingContent::new("")));
                                     emitted_semantic_event = true;
@@ -1261,6 +1394,10 @@ async fn run_stream(
                                     current_block
                                 {
                                     thinking_block.thinking.push_str(content);
+                                    if thinking_block.thinking_signature.is_none() {
+                                        thinking_block.thinking_signature =
+                                            Some(source_field.to_string());
+                                    }
                                     emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::ThinkingDelta {
                                         content_index: output.content.len(),
@@ -1280,9 +1417,7 @@ async fn run_stream(
 
                             if is_new {
                                 // Finish previous block
-                                if let Some(block) = current_block.take() {
-                                    output.content.push(block);
-                                }
+                                finish_current_block(&mut output, &stream, current_block.take());
 
                                 let id = tc.id.clone().unwrap_or_default();
                                 let name = tc
@@ -1394,9 +1529,7 @@ async fn run_stream(
     );
 
     // Finish current block
-    if let Some(block) = current_block.take() {
-        output.content.push(block);
-    }
+    finish_current_block(&mut output, &stream, current_block.take());
 
     if let Some(detail) = incomplete_detail {
         tracing::error!(

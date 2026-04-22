@@ -137,7 +137,12 @@ async fn test_same_model_strips_server_ids_when_store_is_false() {
                     thinking_signature: Some(r#"{"type":"reasoning","id":"rs_123"}"#.to_string()),
                     redacted: false,
                 }),
-                ContentBlock::Text(TextContent::new("Calling the tool.")),
+                ContentBlock::Text(TextContent {
+                    text: "Calling the tool.".to_string(),
+                    text_signature: Some(
+                        r#"{"v":1,"id":"msg_sig","phase":"completed"}"#.to_string(),
+                    ),
+                }),
                 ContentBlock::ToolCall(ToolCall::new(
                     "call_123|fc_123",
                     "double_number",
@@ -172,8 +177,6 @@ async fn test_same_model_strips_server_ids_when_store_is_false() {
         .as_array()
         .expect("input should be an array");
 
-    // With store=false, reasoning items should NOT be replayed (server won't
-    // recognize the IDs since they were never persisted).
     assert!(
         !input.iter().any(|item| {
             item.get("type") == Some(&json!("reasoning"))
@@ -182,16 +185,31 @@ async fn test_same_model_strips_server_ids_when_store_is_false() {
         "reasoning item should be stripped when store=false"
     );
 
+    let message_item = input
+        .iter()
+        .find(|item| {
+            item.get("type") == Some(&json!("message"))
+                && item.get("role") == Some(&json!("assistant"))
+        })
+        .expect("assistant message should exist");
+    assert!(message_item.get("id").is_none());
+    assert!(message_item.get("phase").is_none());
+
     let function_call = input
         .iter()
         .find(|item| item.get("type") == Some(&json!("function_call")))
         .expect("function_call item should exist");
-    // function_call should not have server-side "id" when store=false
-    assert!(
-        function_call.get("id").is_none(),
-        "function_call should not have server-side id when store=false"
-    );
+    assert!(function_call.get("id").is_none());
     assert_eq!(function_call.get("call_id"), Some(&json!("call_123")));
+
+    let function_call_output = input
+        .iter()
+        .find(|item| item.get("type") == Some(&json!("function_call_output")))
+        .expect("function_call_output item should exist");
+    assert_eq!(
+        function_call_output.get("call_id"),
+        function_call.get("call_id")
+    );
 }
 
 #[tokio::test]
@@ -275,6 +293,97 @@ async fn test_different_model_omits_openai_function_item_id() {
         .expect("function_call item should exist");
     assert!(function_call.get("id").is_none());
     assert_eq!(function_call.get("call_id"), Some(&json!("call_abc")));
+
+    let assistant_message = input
+        .iter()
+        .find(|item| {
+            item.get("type") == Some(&json!("message"))
+                && item.get("role") == Some(&json!("assistant"))
+        })
+        .expect("assistant message should exist");
+    assert!(assistant_message.get("id").is_none());
+}
+
+#[tokio::test]
+async fn test_store_false_replay_clamps_long_responses_call_id_consistently() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(success_sse())
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri(), "gpt-4o");
+    let captured = Arc::new(Mutex::new(None));
+
+    let long_call_id = "helper_agentid_super_long_tool_call_id_1234567890_extra";
+    let composite_id = format!("{}|fc_helper_generated_item_identifier", long_call_id);
+
+    let mut context = Context::new();
+    context.add_message(Message::User(UserMessage::text("Use the tool.")));
+    context.add_message(Message::Assistant(
+        AssistantMessage::builder()
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAI)
+            .model("gpt-4o")
+            .content(vec![ContentBlock::ToolCall(ToolCall::new(
+                &composite_id,
+                "double_number",
+                json!({"value": 21}),
+            ))])
+            .stop_reason(StopReason::ToolUse)
+            .build()
+            .unwrap(),
+    ));
+    context.add_message(Message::ToolResult(ToolResultMessage::text(
+        &composite_id,
+        "double_number",
+        "42",
+        false,
+    )));
+    context.add_message(Message::User(UserMessage::text("What was the result?")));
+
+    let result = provider
+        .stream(
+            &model,
+            &context,
+            make_options("test-key", Some(captured.clone())),
+        )
+        .result()
+        .await;
+
+    assert_eq!(result.stop_reason, StopReason::Stop);
+
+    let payload = captured.lock().clone().expect("payload should be captured");
+    let input = payload["input"]
+        .as_array()
+        .expect("input should be an array");
+
+    let function_call = input
+        .iter()
+        .find(|item| item.get("type") == Some(&json!("function_call")))
+        .expect("function_call item should exist");
+    let function_call_output = input
+        .iter()
+        .find(|item| item.get("type") == Some(&json!("function_call_output")))
+        .expect("function_call_output item should exist");
+
+    let replayed_call_id = function_call["call_id"]
+        .as_str()
+        .expect("function_call.call_id should be string");
+    assert_eq!(replayed_call_id.len(), 40);
+    assert_eq!(
+        function_call_output["call_id"].as_str(),
+        Some(replayed_call_id)
+    );
+    assert!(function_call.get("id").is_none());
 }
 
 #[tokio::test]

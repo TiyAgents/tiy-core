@@ -6,6 +6,9 @@
 
 /// Default base URL for OpenAI Responses API.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const NON_VISION_USER_IMAGE_PLACEHOLDER: &str = "(image omitted: model does not support images)";
+const NON_VISION_TOOL_IMAGE_PLACEHOLDER: &str =
+    "(tool image omitted: model does not support images)";
 
 use crate::protocol::LLMProtocol;
 use crate::stream::{parse_streaming_json, AssistantMessageEventStream};
@@ -178,6 +181,8 @@ struct ResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ResponsesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ResponsesReasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     include: Option<Vec<String>>,
@@ -201,6 +206,8 @@ enum ResponsesContentPart {
     InputImage { image_url: String },
     #[serde(rename = "output_text")]
     OutputText { text: String },
+    #[serde(rename = "refusal")]
+    Refusal { refusal: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -332,43 +339,24 @@ struct InputTokensDetails {
 
 fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::Value> {
     // When `store` is false (the current default), server-side item IDs are not
-    // persisted.  Referencing them in subsequent requests causes 400 errors like
-    // "Item with id 'rs_...' not found".  We strip all server-side IDs from the
+    // persisted. Referencing them in subsequent requests causes 400 errors like
+    // "Item with id 'rs_...' not found". We strip all server-side IDs from the
     // replayed conversation to avoid this.
     //
     // TODO: if `store` is ever made configurable, pass the flag in and
-    //       conditionally preserve IDs when `store == true`.
+    // conditionally preserve IDs when `store == true`.
     let strip_server_ids = true;
-    let mut items = Vec::new();
     let transformed = transform_messages(&context.messages, target_model, None);
+    let mut items = Vec::new();
 
     for msg in &transformed {
         match msg {
             Message::User(user_msg) => {
                 let content = match &user_msg.content {
                     UserContent::Text(text) => ResponsesContent::Text(sanitize_surrogates(text)),
-                    UserContent::Blocks(blocks) => {
-                        let parts: Vec<ResponsesContentPart> = blocks
-                            .iter()
-                            .filter_map(|b| match b {
-                                ContentBlock::Text(t) => Some(ResponsesContentPart::InputText {
-                                    text: sanitize_surrogates(&t.text),
-                                }),
-                                ContentBlock::Image(img) => {
-                                    target_model.supports_image().then(|| {
-                                        ResponsesContentPart::InputImage {
-                                            image_url: format!(
-                                                "data:{};base64,{}",
-                                                img.mime_type, img.data
-                                            ),
-                                        }
-                                    })
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        ResponsesContent::Parts(parts)
-                    }
+                    UserContent::Blocks(blocks) => ResponsesContent::Parts(
+                        normalize_user_parts_for_responses(blocks, target_model),
+                    ),
                 };
                 items.push(serde_json::json!({
                     "type": "message",
@@ -377,10 +365,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                 }));
             }
             Message::Assistant(assistant_msg) => {
-                let is_same_model = assistant_msg.provider == target_model.provider
-                    && assistant_msg.api
-                        == target_model.api.clone().unwrap_or(Api::OpenAIResponses)
-                    && assistant_msg.model == target_model.id;
+                let is_same_model = is_same_openai_responses_model(assistant_msg, target_model);
 
                 for block in &assistant_msg.content {
                     match block {
@@ -423,15 +408,14 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                             items.push(message);
                         }
                         ContentBlock::ToolCall(tc) => {
-                            let (call_id, item_id) = if tc.id.contains('|') {
-                                let parts: Vec<&str> = tc.id.splitn(2, '|').collect();
-                                (
-                                    parts[0].to_string(),
-                                    parts.get(1).unwrap_or(&"").to_string(),
-                                )
-                            } else {
-                                (tc.id.clone(), format!("fc_{}", tc.id))
-                            };
+                            let call_id = normalize_responses_call_id(&tc.id);
+                            let is_different_model = assistant_msg.model != target_model.id
+                                && assistant_msg.provider == target_model.provider
+                                && assistant_msg.api
+                                    == target_model.api.clone().unwrap_or(Api::OpenAIResponses);
+                            let item_id = responses_item_id_from_tool_call_id(&tc.id)
+                                .map(normalize_id_part)
+                                .filter(|item_id| !item_id.is_empty());
 
                             let mut function_call = serde_json::json!({
                                 "type": "function_call",
@@ -440,8 +424,12 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                                 "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
                             });
 
-                            if !strip_server_ids && (is_same_model || !item_id.starts_with("fc_")) {
-                                function_call["id"] = serde_json::Value::String(item_id);
+                            if !strip_server_ids {
+                                if let Some(item_id) = item_id {
+                                    if !is_different_model || !item_id.starts_with("fc_") {
+                                        function_call["id"] = serde_json::Value::String(item_id);
+                                    }
+                                }
                             }
 
                             items.push(function_call);
@@ -451,34 +439,12 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                 }
             }
             Message::ToolResult(tool_result) => {
-                let text: String = tool_result
-                    .content
-                    .iter()
-                    .filter_map(|b| b.as_text())
-                    .map(|t| t.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                // Parse composite ID
-                let call_id = if tool_result.tool_call_id.contains('|') {
-                    tool_result
-                        .tool_call_id
-                        .splitn(2, '|')
-                        .next()
-                        .unwrap_or(&tool_result.tool_call_id)
-                        .to_string()
-                } else {
-                    tool_result.tool_call_id.clone()
-                };
+                let call_id = normalize_responses_call_id(&tool_result.tool_call_id);
 
                 items.push(serde_json::json!({
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": if text.is_empty() {
-                        "(no output)".to_string()
-                    } else {
-                        text
-                    },
+                    "output": tool_result_output_value(tool_result, target_model),
                 }));
             }
         }
@@ -528,6 +494,146 @@ fn parse_text_signature(signature: Option<&str>) -> Option<ParsedTextSignature> 
         id: signature.to_string(),
         phase: None,
     })
+}
+
+fn normalize_id_part(part: &str) -> String {
+    let sanitized: String = part
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    sanitized.trim_end_matches('_').to_string()
+}
+
+fn normalize_responses_call_id(id: &str) -> String {
+    let raw_call_id = id.splitn(2, '|').next().unwrap_or(id);
+    let normalized = normalize_id_part(raw_call_id);
+    if normalized.len() > 40 {
+        normalized[..40].to_string()
+    } else {
+        normalized
+    }
+}
+
+fn responses_item_id_from_tool_call_id(id: &str) -> Option<&str> {
+    id.split_once('|').map(|(_, item_id)| item_id)
+}
+
+fn is_same_openai_responses_model(assistant_msg: &AssistantMessage, target_model: &Model) -> bool {
+    assistant_msg.provider == target_model.provider
+        && assistant_msg.api == target_model.api.clone().unwrap_or(Api::OpenAIResponses)
+        && assistant_msg.model == target_model.id
+}
+
+fn convert_tool_choice(tool_choice: Option<&ToolChoice>) -> Option<serde_json::Value> {
+    match tool_choice? {
+        ToolChoice::Mode(ToolChoiceMode::Auto) => Some(serde_json::json!("auto")),
+        ToolChoice::Mode(ToolChoiceMode::None) => Some(serde_json::json!("none")),
+        ToolChoice::Mode(ToolChoiceMode::Any | ToolChoiceMode::Required) => {
+            Some(serde_json::json!("required"))
+        }
+        ToolChoice::Named(ToolChoiceNamed::Tool { name }) => Some(serde_json::json!({
+            "type": "function",
+            "name": name,
+        })),
+        ToolChoice::Named(ToolChoiceNamed::Function { function }) => Some(serde_json::json!({
+            "type": "function",
+            "name": function.name,
+        })),
+    }
+}
+
+fn input_text_part(text: impl Into<String>) -> ResponsesContentPart {
+    ResponsesContentPart::InputText { text: text.into() }
+}
+
+fn input_image_part(image: &ImageContent) -> ResponsesContentPart {
+    ResponsesContentPart::InputImage {
+        image_url: format!("data:{};base64,{}", image.mime_type, image.data),
+    }
+}
+
+fn normalize_user_parts_for_responses(
+    blocks: &[ContentBlock],
+    target_model: &Model,
+) -> Vec<ResponsesContentPart> {
+    let mut parts = Vec::new();
+    let mut previous_was_placeholder = false;
+
+    for block in blocks {
+        match block {
+            ContentBlock::Text(t) => {
+                let text = sanitize_surrogates(&t.text);
+                previous_was_placeholder = text == NON_VISION_USER_IMAGE_PLACEHOLDER;
+                parts.push(input_text_part(text));
+            }
+            ContentBlock::Image(img) => {
+                if target_model.supports_image() {
+                    parts.push(input_image_part(img));
+                    previous_was_placeholder = false;
+                } else if !previous_was_placeholder {
+                    parts.push(input_text_part(NON_VISION_USER_IMAGE_PLACEHOLDER));
+                    previous_was_placeholder = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    parts
+}
+
+fn tool_result_output_value(
+    tool_result: &ToolResultMessage,
+    target_model: &Model,
+) -> serde_json::Value {
+    let text = tool_result
+        .content
+        .iter()
+        .filter_map(|b| b.as_text())
+        .map(|t| sanitize_surrogates(&t.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let images: Vec<&ImageContent> = tool_result
+        .content
+        .iter()
+        .filter_map(|b| b.as_image())
+        .collect();
+
+    if !images.is_empty() && target_model.supports_image() {
+        let mut output_parts = Vec::new();
+        if !text.is_empty() {
+            output_parts.push(serde_json::json!({
+                "type": "input_text",
+                "text": text,
+            }));
+        }
+        for image in images {
+            output_parts.push(serde_json::json!({
+                "type": "input_image",
+                "image_url": format!("data:{};base64,{}", image.mime_type, image.data),
+            }));
+        }
+        serde_json::Value::Array(output_parts)
+    } else {
+        serde_json::Value::String(if text.is_empty() {
+            if images.is_empty() {
+                "(no output)".to_string()
+            } else if target_model.supports_image() {
+                "(see attached image)".to_string()
+            } else {
+                NON_VISION_TOOL_IMAGE_PLACEHOLDER.to_string()
+            }
+        } else {
+            text
+        })
+    }
 }
 
 fn sanitize_surrogates(text: &str) -> String {
@@ -644,6 +750,7 @@ async fn run_stream(
         },
         prompt_cache_retention: get_prompt_cache_retention(base, cache_retention),
         tools,
+        tool_choice: convert_tool_choice(options.tool_choice.as_ref()),
         reasoning: reasoning.clone(),
         include: reasoning
             .as_ref()
@@ -1105,6 +1212,86 @@ async fn run_stream(
                     }
                 }
 
+                "response.function_call_arguments.done" => {
+                    if let Ok(ref val) = parsed {
+                        let output_index = val
+                            .get("output_index")
+                            .and_then(|i| i.as_u64())
+                            .unwrap_or(0) as usize;
+                        let arguments = val
+                            .get("arguments")
+                            .and_then(|args| args.as_str())
+                            .unwrap_or("");
+
+                        if !item_content_map.contains_key(&output_index) {
+                            let call_id = val
+                                .get("call_id")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let name = val
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let item_id = val
+                                .get("item_id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let composite_id = format!("{}|{}", call_id, item_id);
+                            let content_idx = output.content.len();
+                            output.content.push(ContentBlock::ToolCall(ToolCall::new(
+                                &composite_id,
+                                &name,
+                                serde_json::Value::Object(serde_json::Map::new()),
+                            )));
+                            partial_tool_args.insert(output_index, String::new());
+                            open_output_items.insert(output_index);
+                            item_content_map.insert(
+                                output_index,
+                                ItemInfo {
+                                    content_idx,
+                                    item_type: ItemType::FunctionCall,
+                                    item_id,
+                                    call_id: Some(call_id),
+                                    name: Some(name),
+                                },
+                            );
+                            emitted_semantic_event = true;
+                            stream.push(AssistantMessageEvent::ToolCallStart {
+                                content_index: content_idx,
+                                partial: output.clone(),
+                            });
+                        }
+
+                        if let Some(info) = item_content_map.get(&output_index) {
+                            let idx = info.content_idx;
+                            let previous = partial_tool_args
+                                .get(&output_index)
+                                .cloned()
+                                .unwrap_or_default();
+                            partial_tool_args.insert(output_index, arguments.to_string());
+                            let parsed_args = parse_streaming_json(arguments);
+                            if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                output.content.get_mut(idx)
+                            {
+                                tc.arguments = parsed_args;
+                            }
+                            if let Some(delta) = arguments.strip_prefix(&previous) {
+                                if !delta.is_empty() {
+                                    emitted_semantic_event = true;
+                                    stream.push(AssistantMessageEvent::ToolCallDelta {
+                                        content_index: idx,
+                                        delta: delta.to_string(),
+                                        partial: output.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
                 "response.reasoning_summary_text.delta" => {
                     if let Ok(ref val) = parsed {
                         let output_index = val
@@ -1232,16 +1419,44 @@ async fn run_stream(
                                     });
                                 }
                                 ItemType::FunctionCall => {
-                                    // Finalize tool call args
-                                    if let Some(args_str) = partial_tool_args.get(&output_index) {
-                                        if let Ok(parsed) =
-                                            serde_json::from_str::<serde_json::Value>(args_str)
+                                    if let Some(item) = val.get("item") {
+                                        let final_arguments = item
+                                            .get("arguments")
+                                            .and_then(|args| args.as_str())
+                                            .or_else(|| {
+                                                partial_tool_args
+                                                    .get(&output_index)
+                                                    .map(String::as_str)
+                                            })
+                                            .unwrap_or("{}");
+                                        if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                            output.content.get_mut(idx)
                                         {
-                                            if let Some(ContentBlock::ToolCall(ref mut tc)) =
-                                                output.content.get_mut(idx)
+                                            tc.arguments = parse_streaming_json(final_arguments);
+                                            if let Some(name) =
+                                                item.get("name").and_then(|name| name.as_str())
                                             {
-                                                tc.arguments = parsed;
+                                                tc.name = name.to_string();
                                             }
+                                            let call_id = item
+                                                .get("call_id")
+                                                .and_then(|call_id| call_id.as_str())
+                                                .unwrap_or_default();
+                                            let item_id = item
+                                                .get("id")
+                                                .and_then(|id| id.as_str())
+                                                .unwrap_or_default();
+                                            if !call_id.is_empty() || !item_id.is_empty() {
+                                                tc.id = format!("{}|{}", call_id, item_id);
+                                            }
+                                        }
+                                    } else if let Some(args_str) =
+                                        partial_tool_args.get(&output_index)
+                                    {
+                                        if let Some(ContentBlock::ToolCall(ref mut tc)) =
+                                            output.content.get_mut(idx)
+                                        {
+                                            tc.arguments = parse_streaming_json(args_str);
                                         }
                                     }
                                     let tool_call = output
@@ -1265,6 +1480,23 @@ async fn run_stream(
                                         if let Some(ContentBlock::Thinking(ref mut t)) =
                                             output.content.get_mut(idx)
                                         {
+                                            let summary = item
+                                                .get("summary")
+                                                .and_then(|summary| summary.as_array())
+                                                .map(|parts| {
+                                                    parts
+                                                        .iter()
+                                                        .filter_map(|part| {
+                                                            part.get("text")
+                                                                .and_then(|text| text.as_str())
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n\n")
+                                                })
+                                                .unwrap_or_default();
+                                            if !summary.is_empty() {
+                                                t.thinking = summary;
+                                            }
                                             t.thinking_signature = Some(item.to_string());
                                         }
                                     }
@@ -1596,6 +1828,58 @@ mod tests {
 
         let items = convert_messages(&context, &model);
         assert_eq!(items.len(), 3); // user + function_call + function_call_output
+        assert_eq!(items[1]["call_id"], serde_json::json!("call_abc"));
+        assert_eq!(items[2]["call_id"], serde_json::json!("call_abc"));
+        assert!(items[1].get("id").is_none());
+    }
+
+    #[test]
+    fn test_convert_tool_call_composite_id_clamps_only_call_id() {
+        let mut context = Context::new();
+        let long_call_id = "helper_agentid_super_long_tool_call_id_1234567890_extra";
+        let composite_id = format!("{}|fc_item_1234567890", long_call_id);
+        context.add_message(Message::User(UserMessage::text("Hello")));
+        context.add_message(Message::Assistant(
+            AssistantMessage::builder()
+                .api(Api::OpenAIResponses)
+                .provider(Provider::OpenAI)
+                .model("gpt-4o")
+                .content(vec![ContentBlock::ToolCall(ToolCall::new(
+                    &composite_id,
+                    "get_weather",
+                    serde_json::json!({"city": "Tokyo"}),
+                ))])
+                .stop_reason(StopReason::ToolUse)
+                .build()
+                .unwrap(),
+        ));
+        context.add_message(Message::ToolResult(ToolResultMessage::text(
+            &composite_id,
+            "get_weather",
+            "Sunny 25°C",
+            false,
+        )));
+
+        let model = Model::builder()
+            .id("gpt-4o")
+            .name("GPT-4o")
+            .api(Api::OpenAIResponses)
+            .provider(Provider::OpenAI)
+            .context_window(128000)
+            .max_tokens(16384)
+            .build()
+            .unwrap();
+
+        let items = convert_messages(&context, &model);
+        let function_call_call_id = items[1]["call_id"]
+            .as_str()
+            .expect("function_call call_id should be string");
+        let function_call_output_call_id = items[2]["call_id"]
+            .as_str()
+            .expect("function_call_output call_id should be string");
+        assert_eq!(function_call_call_id.len(), 40);
+        assert_eq!(function_call_call_id, function_call_output_call_id);
+        assert!(items[1].get("id").is_none());
     }
 
     #[test]

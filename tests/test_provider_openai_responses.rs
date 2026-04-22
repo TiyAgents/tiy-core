@@ -1704,6 +1704,109 @@ async fn test_stream_non_composite_tool_call_id() {
 }
 
 #[tokio::test]
+async fn test_stream_function_call_arguments_done_and_tool_choice_payload() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = responses_sse(vec![
+        ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":""}}).to_string()),
+        ("response.function_call_arguments.delta", &json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"q\":","item_id":"fc_1","call_id":"call_1","name":"lookup"}).to_string()),
+        ("response.function_call_arguments.done", &json!({"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"q\":\"tokyo\"}","item_id":"fc_1","call_id":"call_1","name":"lookup"}).to_string()),
+        ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"tokyo\"}"}}).to_string()),
+        ("response.completed", &json!({"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":20,"output_tokens":1,"total_tokens":21},"output":[]}}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("test", "use tool");
+    context.set_tools(vec![Tool::new(
+        "lookup",
+        "Lookup",
+        json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+    )]);
+    let mut options = make_options("key");
+    options.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Required));
+    options.on_payload = Some(Arc::new({
+        let captured = captured.clone();
+        move |payload, _model| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                *captured.lock() = Some(payload.clone());
+                Some(payload)
+            })
+        }
+    }));
+
+    let result = provider.stream(&model, &context, options).result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert_eq!(result.tool_calls()[0].arguments["q"], "tokyo");
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(payload["tool_choice"], json!("required"));
+}
+
+#[tokio::test]
+async fn test_tool_result_images_become_function_call_output_parts() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(responses_sse(vec![
+                    ("response.output_item.added", &json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}).to_string()),
+                    ("response.output_text.delta", &json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"}).to_string()),
+                    ("response.output_item.done", &json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1"}}).to_string()),
+                    ("response.completed", &json!({"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12},"output":[]}}).to_string()),
+                ]))
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAIResponsesProtocol::new();
+    let model = make_model(&server.uri());
+    let mut context = Context::new();
+    context.add_message(Message::ToolResult(ToolResultMessage {
+        role: Role::ToolResult,
+        tool_call_id: "call_1|fc_1".to_string(),
+        tool_name: "vision_tool".to_string(),
+        content: vec![
+            ContentBlock::Text(TextContent::new("caption")),
+            ContentBlock::Image(ImageContent::new("abcd", "image/png")),
+        ],
+        details: None,
+        is_error: false,
+        timestamp: 0,
+    }));
+    let options = make_options_with_capture("key", captured.clone());
+
+    let _ = provider.stream(&model, &context, options).result().await;
+    let payload = captured.lock().clone().expect("payload captured");
+    let output_item = payload["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == json!("function_call_output"))
+        .cloned()
+        .expect("function_call_output should exist");
+    assert!(output_item["output"].is_array());
+    assert_eq!(output_item["output"][0]["type"], json!("input_text"));
+    assert_eq!(output_item["output"][1]["type"], json!("input_image"));
+}
+
+#[tokio::test]
 async fn test_stream_cancelled_status() {
     let server = MockServer::start().await;
 

@@ -586,6 +586,91 @@ async fn test_stream_empty_response() {
 }
 
 #[tokio::test]
+async fn test_stream_done_without_finish_reason_but_with_tool_calls_infers_tool_use() {
+    let server = MockServer::start().await;
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{\"city\":\"Tokyo\"}"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        })
+        .to_string(),
+        "[DONE]",
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "use tool");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert!(result.has_tool_calls());
+    assert_eq!(result.tool_calls()[0].name, "get_weather");
+}
+
+#[tokio::test]
+async fn test_stream_tolerates_null_tool_calls_in_chunk_delta() {
+    let server = MockServer::start().await;
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": null, "content": "hello"}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1}
+        })
+        .to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("test", "hello");
+    let options = make_options("key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    assert_eq!(result.text_content(), "hello");
+    assert!(!result.has_tool_calls());
+}
+
+#[tokio::test]
 async fn test_stream_length_stop_reason() {
     let server = MockServer::start().await;
 
@@ -843,6 +928,153 @@ async fn test_stream_reasoning_text_field() {
 
     assert_eq!(result.text_content(), "Done");
     assert!(result.thinking_content().contains("Hmm..."));
+    let thinking = result
+        .content
+        .iter()
+        .find_map(|block| block.as_thinking())
+        .expect("thinking block should exist");
+    assert_eq!(
+        thinking.thinking_signature.as_deref(),
+        Some("reasoning_text")
+    );
+}
+
+#[tokio::test]
+async fn test_stream_emits_block_end_events_and_tool_choice_payload() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = sse_response(vec![
+        &json!({
+            "choices": [{"index": 0, "delta": {"reasoning": "think"}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {"content": "text"}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{\"q\":\"v\"}"}}]}, "finish_reason": null}]
+        })
+        .to_string(),
+        &json!({
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        })
+        .to_string(),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = make_model(&server.uri());
+    let mut context = make_context("test", "use tool");
+    context.set_tools(vec![Tool::new(
+        "lookup",
+        "Lookup",
+        json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+    )]);
+    let mut options = make_options("key");
+    options.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Required));
+    options.on_payload = Some(Arc::new({
+        let captured = captured.clone();
+        move |payload, _model| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                *captured.lock() = Some(payload.clone());
+                Some(payload)
+            })
+        }
+    }));
+
+    let mut stream = provider.stream(&model, &context, options);
+    let mut saw_text_end = false;
+    let mut saw_thinking_end = false;
+    let mut saw_tool_end = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            AssistantMessageEvent::TextEnd { .. } => saw_text_end = true,
+            AssistantMessageEvent::ThinkingEnd { .. } => saw_thinking_end = true,
+            AssistantMessageEvent::ToolCallEnd { .. } => saw_tool_end = true,
+            _ => {}
+        }
+    }
+    let result = stream.result().await;
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    assert!(saw_text_end && saw_thinking_end && saw_tool_end);
+
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(payload["tool_choice"], json!("required"));
+}
+
+#[tokio::test]
+async fn test_convert_non_vision_user_image_to_placeholder() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_response(vec![
+                    &json!({
+                        "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": null}]
+                    })
+                    .to_string(),
+                    &json!({
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+                    })
+                    .to_string(),
+                ]))
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAICompletionsProtocol::new();
+    let model = Model::builder()
+        .id("gpt-4o-mini")
+        .name("GPT-4o Mini")
+        .api(Api::OpenAICompletions)
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .input(vec![InputType::Text])
+        .context_window(128000)
+        .max_tokens(16384)
+        .build()
+        .unwrap();
+    let mut context = Context::new();
+    context.add_message(Message::User(UserMessage::blocks(vec![
+        ContentBlock::Image(ImageContent::new("abc", "image/png")),
+    ])));
+    let mut options = make_options("key");
+    options.on_payload = Some(Arc::new({
+        let captured = captured.clone();
+        move |payload, _model| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                *captured.lock() = Some(payload.clone());
+                Some(payload)
+            })
+        }
+    }));
+
+    let _ = provider.stream(&model, &context, options).result().await;
+    let payload = captured.lock().clone().expect("payload captured");
+    assert!(payload["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|msg| msg["content"] == json!("(image omitted: model does not support images)")));
 }
 
 #[tokio::test]
