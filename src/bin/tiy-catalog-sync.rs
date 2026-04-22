@@ -526,6 +526,7 @@ mod tests {
                     pricing: None,
                     patch_source: Some("catalog-patch:openrouter:z-ai/glm-5".to_string()),
                 }],
+                injections: vec![],
             },
         );
 
@@ -533,5 +534,100 @@ mod tests {
         assert_eq!(patched[0].context_window, Some(200_000));
         assert_eq!(patched[0].max_output_tokens, Some(16_384));
         assert_eq!(patched[0].source, "catalog-patch:openrouter:z-ai/glm-5");
+    }
+
+    #[test]
+    fn injects_missing_model_via_patch_config() {
+        let models = vec![CatalogModelMetadata {
+            canonical_model_key: "openai:gpt-4o".to_string(),
+            aliases: vec!["openai/gpt-4o".to_string()],
+            display_name: Some("OpenAI: GPT-4o".to_string()),
+            description: None,
+            context_window: Some(128_000),
+            max_output_tokens: Some(16_384),
+            max_input_tokens: None,
+            modalities: None,
+            capabilities: None,
+            pricing: None,
+            source: "openrouter".to_string(),
+            raw: json!({}),
+        }];
+
+        let injection = CatalogModelMetadata {
+            canonical_model_key: "deepseek:deepseek-reasoner".to_string(),
+            aliases: vec!["deepseek/deepseek-reasoner".to_string()],
+            display_name: Some("DeepSeek: DeepSeek-V3.2-Thinking".to_string()),
+            description: Some("DeepSeek-V3.2-Thinking reasoning model".to_string()),
+            context_window: Some(128_000),
+            max_output_tokens: Some(64_000),
+            max_input_tokens: None,
+            modalities: Some(vec!["text".to_string()]),
+            capabilities: Some(vec!["reasoning".to_string()]),
+            pricing: None,
+            source: "catalog-injection:deepseek:deepseek-reasoner".to_string(),
+            raw: json!({}),
+        };
+
+        let result = apply_model_patches(
+            models,
+            &ModelPatchConfig {
+                patches: vec![],
+                injections: vec![injection.clone()],
+            },
+        );
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].canonical_model_key, "deepseek:deepseek-reasoner");
+        assert_eq!(
+            result[1].display_name.as_deref(),
+            Some("DeepSeek: DeepSeek-V3.2-Thinking")
+        );
+        assert_eq!(result[1].context_window, Some(128_000));
+        assert_eq!(result[1].max_output_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn injection_skips_duplicate_canonical_key() {
+        let models = vec![CatalogModelMetadata {
+            canonical_model_key: "deepseek:deepseek-reasoner".to_string(),
+            aliases: vec!["deepseek/deepseek-reasoner".to_string()],
+            display_name: Some("Existing".to_string()),
+            description: None,
+            context_window: Some(64_000),
+            max_output_tokens: None,
+            max_input_tokens: None,
+            modalities: None,
+            capabilities: None,
+            pricing: None,
+            source: "openrouter".to_string(),
+            raw: json!({}),
+        }];
+
+        let injection = CatalogModelMetadata {
+            canonical_model_key: "deepseek:deepseek-reasoner".to_string(),
+            aliases: vec!["deepseek/deepseek-reasoner".to_string()],
+            display_name: Some("Injected".to_string()),
+            description: None,
+            context_window: Some(128_000),
+            max_output_tokens: Some(64_000),
+            max_input_tokens: None,
+            modalities: None,
+            capabilities: None,
+            pricing: None,
+            source: "catalog-injection:deepseek:deepseek-reasoner".to_string(),
+            raw: json!({}),
+        };
+
+        let result = apply_model_patches(
+            models,
+            &ModelPatchConfig {
+                patches: vec![],
+                injections: vec![injection],
+            },
+        );
+
+        // Should not duplicate — existing entry wins.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].display_name.as_deref(), Some("Existing"));
     }
 }

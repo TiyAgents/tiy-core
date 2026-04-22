@@ -6,5 +6,25 @@
       "context_window": 200000,
       "patch_source": "catalog-patch:openrouter:z-ai/glm-5"
     }
+  ],
+  "injections": [
+    {
+      "canonical_model_key": "deepseek:deepseek-reasoner",
+      "aliases": [
+        "deepseek/deepseek-reasoner"
+      ],
+      "display_name": "DeepSeek: DeepSeek-V3.2-Thinking",
+      "description": "DeepSeek-V3.2-Thinking reasoning model",
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "modalities": [
+        "text"
+      ],
+      "capabilities": [
+        "reasoning"
+      ],
+      "source": "catalog-injection:deepseek:deepseek-reasoner",
+      "raw": {}
+    }
   ]
 }
