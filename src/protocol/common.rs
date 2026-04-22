@@ -93,12 +93,15 @@ pub fn validate_url_or_error(
 }
 
 /// Return a truncated preview of the body string for debug logging.
+///
+/// The truncation point is always clamped to a char boundary so multi-byte
+/// characters (e.g. CJK) are never split.
 pub fn debug_preview(body: &str, max_len: usize) -> &str {
-    if body.len() > max_len {
-        &body[..max_len]
-    } else {
-        body
+    if body.len() <= max_len {
+        return body;
     }
+    // floor_char_boundary returns the nearest char boundary <= max_len.
+    &body[..body.floor_char_boundary(max_len)]
 }
 
 /// OpenAI-style APIs reject very small output-token limits.
