@@ -998,7 +998,7 @@ async fn test_stream_redacted_thinking() {
 
     let sse_body = anthropic_sse(vec![
         ("message_start", &json!({"type":"message_start","message":{"id":"msg_rt","type":"message","role":"assistant","model":"claude-3-5-sonnet","usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}).to_string()),
-        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking"}}).to_string()),
+        ("content_block_start", &json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque_redacted_sig"}}).to_string()),
         ("content_block_stop", &json!({"type":"content_block_stop","index":0}).to_string()),
         ("content_block_start", &json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}).to_string()),
         ("content_block_delta", &json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}).to_string()),
@@ -1026,6 +1026,13 @@ async fn test_stream_redacted_thinking() {
     let result = stream.result().await;
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "answer");
+    let thinking_block = result.content[0].as_thinking().expect("thinking block");
+    assert!(thinking_block.redacted);
+    assert_eq!(
+        thinking_block.thinking_signature.as_deref(),
+        Some("opaque_redacted_sig")
+    );
+    assert_eq!(thinking_block.thinking, "[Reasoning redacted]");
 }
 
 #[tokio::test]
@@ -1065,6 +1072,256 @@ async fn test_stream_with_signature_delta() {
     assert_eq!(result.stop_reason, StopReason::Stop);
     assert_eq!(result.text_content(), "result");
     assert!(result.thinking_content().contains("deep thought"));
+}
+
+#[tokio::test]
+async fn test_stream_with_tool_call_start_input() {
+    let server = MockServer::start().await;
+
+    let sse_body = anthropic_sse(vec![
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_tool_start_input",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_start",
+            &json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_start_01",
+                    "name": "get_weather",
+                    "input": {"city": "Paris", "unit": "celsius"}
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "content_block_stop",
+            &json!({
+                "type": "content_block_stop",
+                "index": 0
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 8}
+            })
+            .to_string(),
+        ),
+        ("message_stop", &json!({"type": "message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProtocol::new();
+    let model = make_model(&server.uri());
+    let context = make_context("You are helpful.", "Check the weather");
+    let options = make_options("test-key");
+
+    let stream = provider.stream(&model, &context, options);
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::ToolUse);
+    let tool_calls = result.tool_calls();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "toolu_start_01");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments["city"], "Paris");
+    assert_eq!(tool_calls[0].arguments["unit"], "celsius");
+}
+
+#[tokio::test]
+async fn test_stream_payload_sends_disabled_thinking_for_off() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = anthropic_sse(vec![
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_thinking_disabled",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 5}
+            })
+            .to_string(),
+        ),
+        ("message_stop", &json!({"type": "message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProtocol::new();
+    let model = Model::builder()
+        .id("claude-3-5-sonnet")
+        .name("Claude 3.5 Sonnet")
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .base_url(server.uri())
+        .reasoning(true)
+        .input(vec![InputType::Text, InputType::Image])
+        .context_window(200000)
+        .max_tokens(8192)
+        .build()
+        .unwrap();
+    let context = make_context("You are helpful.", "Hello");
+
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: make_options_with_capture("test-key", captured.clone()),
+            reasoning: Some(tiycore::thinking::ThinkingLevel::Off),
+            thinking_budget_tokens: None,
+            thinking_display: None,
+        },
+    );
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(payload["thinking"], json!({"type": "disabled"}));
+}
+
+#[tokio::test]
+async fn test_stream_payload_sends_budget_thinking_display() {
+    let server = MockServer::start().await;
+    let captured = Arc::new(Mutex::new(None));
+
+    let sse_body = anthropic_sse(vec![
+        (
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_thinking_budget",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 5}
+            })
+            .to_string(),
+        ),
+        ("message_stop", &json!({"type": "message_stop"}).to_string()),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(sse_body)
+                .insert_header("content-type", "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProtocol::new();
+    let model = Model::builder()
+        .id("claude-3-5-sonnet")
+        .name("Claude 3.5 Sonnet")
+        .api(Api::AnthropicMessages)
+        .provider(Provider::Anthropic)
+        .base_url(server.uri())
+        .reasoning(true)
+        .input(vec![InputType::Text, InputType::Image])
+        .context_window(200000)
+        .max_tokens(8192)
+        .build()
+        .unwrap();
+    let context = make_context("You are helpful.", "Hello");
+
+    let stream = provider.stream_simple(
+        &model,
+        &context,
+        SimpleStreamOptions {
+            base: make_options_with_capture("test-key", captured.clone()),
+            reasoning: Some(tiycore::thinking::ThinkingLevel::Low),
+            thinking_budget_tokens: Some(2048),
+            thinking_display: Some(tiycore::thinking::ThinkingDisplay::Omitted),
+        },
+    );
+    let result = stream.result().await;
+
+    assert_eq!(result.stop_reason, StopReason::Stop);
+    let payload = captured.lock().clone().expect("payload captured");
+    assert_eq!(
+        payload["thinking"],
+        json!({
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "omitted"
+        })
+    );
 }
 
 #[tokio::test]

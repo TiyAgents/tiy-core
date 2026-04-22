@@ -255,6 +255,12 @@ enum AnthropicThinkingParam {
         #[serde(rename = "type")]
         param_type: String,
         budget_tokens: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
+    Disabled {
+        #[serde(rename = "type")]
+        param_type: String,
     },
 }
 
@@ -335,21 +341,31 @@ fn build_thinking_options(
         return (None, None);
     }
 
+    if matches!(level, ThinkingLevel::Off) {
+        return (
+            Some(AnthropicThinkingParam::Disabled {
+                param_type: "disabled".to_string(),
+            }),
+            None,
+        );
+    }
+
     let level = clamp_reasoning(level, model);
+    let display = Some(
+        thinking_display
+            .unwrap_or(crate::thinking::ThinkingDisplay::Summarized)
+            .to_string(),
+    );
     if supports_adaptive_thinking(&model.id) {
-        let display = if requires_thinking_display(&model.id) {
-            Some(
-                thinking_display
-                    .unwrap_or(crate::thinking::ThinkingDisplay::Summarized)
-                    .to_string(),
-            )
+        let adaptive_display = if requires_thinking_display(&model.id) {
+            display
         } else {
             None
         };
         (
             Some(AnthropicThinkingParam::Adaptive {
                 param_type: "adaptive".to_string(),
-                display,
+                display: adaptive_display,
             }),
             Some(AnthropicOutputConfig {
                 effort: map_adaptive_effort(level, &model.id).to_string(),
@@ -367,6 +383,7 @@ fn build_thinking_options(
                 budget_tokens: thinking_budget_tokens.unwrap_or_else(|| {
                     crate::thinking::ThinkingConfig::default_budget(budget_level)
                 }),
+                display,
             }),
             None,
         )
@@ -496,9 +513,14 @@ enum ContentBlockInfo {
         thinking: String,
     },
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking {},
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
-    ToolUse { id: String, name: String },
+    ToolUse {
+        id: String,
+        name: String,
+        #[serde(default)]
+        input: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -1231,23 +1253,32 @@ async fn run_stream(
                                     partial: output.clone(),
                                 });
                             }
-                            ContentBlockInfo::RedactedThinking { .. } => {
+                            ContentBlockInfo::RedactedThinking { data } => {
                                 while block_types.len() <= idx {
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::RedactedThinking;
                                 open_blocks.insert(idx);
-                                let mut thinking = ThinkingContent::new("");
+                                let mut thinking = ThinkingContent::new("[Reasoning redacted]");
                                 thinking.redacted = true;
+                                thinking.thinking_signature = Some(data);
                                 output.content.push(ContentBlock::Thinking(thinking));
                             }
-                            ContentBlockInfo::ToolUse { id, name } => {
+                            ContentBlockInfo::ToolUse { id, name, input } => {
                                 while block_types.len() <= idx {
                                     block_types.push(BlockType::Unknown);
                                 }
                                 block_types[idx] = BlockType::ToolUse;
                                 open_blocks.insert(idx);
-                                partial_tool_args.insert(idx, String::new());
+                                let initial_args = input;
+                                let initial_args_str = match &initial_args {
+                                    serde_json::Value::Null => String::new(),
+                                    serde_json::Value::Object(map) if map.is_empty() => {
+                                        String::new()
+                                    }
+                                    _ => serde_json::to_string(&initial_args).unwrap_or_default(),
+                                };
+                                partial_tool_args.insert(idx, initial_args_str);
                                 output.content.push(ContentBlock::ToolCall(ToolCall::new(
                                     id,
                                     if oauth_token {
@@ -1255,7 +1286,7 @@ async fn run_stream(
                                     } else {
                                         name
                                     },
-                                    serde_json::Value::Object(serde_json::Map::new()),
+                                    initial_args,
                                 )));
                                 emitted_semantic_event = true;
                                 stream.push(AssistantMessageEvent::ToolCallStart {
