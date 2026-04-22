@@ -246,6 +246,11 @@ pub struct ListModelsResult {
 pub struct ModelPatchConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patches: Vec<ModelPatch>,
+    /// Models to inject into the catalog when the upstream source does not
+    /// include them at all. Injected entries are appended after patches are
+    /// applied and are deduplicated by `canonical_model_key`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub injections: Vec<CatalogModelMetadata>,
 }
 
 /// A targeted patch for correcting generated catalog model metadata.
@@ -740,6 +745,19 @@ pub fn apply_model_patches(
 
             if let Some(patch_source) = patch.patch_source.as_ref() {
                 model.source = patch_source.clone();
+            }
+        }
+    }
+
+    // Append injected models that are not already present in the catalog.
+    if !patch_config.injections.is_empty() {
+        let existing_keys: HashSet<String> = models
+            .iter()
+            .map(|m| m.canonical_model_key.clone())
+            .collect();
+        for injection in &patch_config.injections {
+            if !existing_keys.contains(&injection.canonical_model_key) {
+                models.push(injection.clone());
             }
         }
     }
