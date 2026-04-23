@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-04-23
+### :sparkles: New Features
+- [`8671ab8`](https://github.com/TiyAgents/tiycore/commit/8671ab8691930906ad8f00d0cc4843d22c90caeb) - **protocol**: ✨ improve OpenAI Responses ID normalization with hashing *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.13] - 2026-04-22
 ### :sparkles: New Features
 - [`464e0c0`](https://github.com/TiyAgents/tiycore/commit/464e0c01681ef3c9b0865459bf742d3b4e889614) - **catalog**: ✨ add model injections to catalog patches *(PR [#14](https://github.com/TiyAgents/tiycore/pull/14) by [@jorben](https://github.com/jorben))*
@@ -180,3 +185,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.11]: https://github.com/TiyAgents/tiycore/compare/0.1.10...0.1.11
 [0.1.12]: https://github.com/TiyAgents/tiycore/compare/0.1.11...0.1.12
 [0.1.13]: https://github.com/TiyAgents/tiycore/compare/0.1.12...0.1.13
+[0.1.14]: https://github.com/TiyAgents/tiycore/compare/0.1.13...0.1.14
