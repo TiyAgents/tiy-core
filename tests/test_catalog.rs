@@ -188,35 +188,34 @@ async fn test_list_models_for_openai_responses_uses_bearer_header() {
 }
 
 #[tokio::test]
-async fn test_list_models_for_opencode_go_uses_bearer_header() {
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/models"))
-        .and(header("authorization", "Bearer opencode-go-key"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
-                {
-                    "id": "glm-4.6",
-                    "display_name": "GLM 4.6"
-                }
-            ]
-        })))
-        .mount(&server)
-        .await;
-
+async fn test_list_models_for_opencode_go_uses_predefined_list() {
+    // OpenCode Go uses PredefinedModelsAdapter, not HTTP calls
     let result = list_models(FetchModelsRequest {
         provider: Provider::OpenCodeGo,
         api_key: Some("opencode-go-key".to_string()),
-        base_url: Some(format!("{}/v1", server.uri())),
+        base_url: None,
         headers: None,
     })
     .await
     .expect("opencode go list should succeed");
 
-    assert_eq!(result.models.len(), 1);
-    assert_eq!(result.models[0].raw_id, "glm-4.6");
-    assert_eq!(result.models[0].display_name.as_deref(), Some("GLM 4.6"));
+    // Should return 5 predefined models
+    assert_eq!(result.models.len(), 5);
+
+    // Verify all expected model IDs are present
+    let model_ids: Vec<&str> = result.models.iter().map(|m| m.raw_id.as_str()).collect();
+    assert!(model_ids.contains(&"glm-5.1"));
+    assert!(model_ids.contains(&"kimi-k2.6"));
+    assert!(model_ids.contains(&"mimo-v2.5-pro"));
+    assert!(model_ids.contains(&"mimo-v2.5"));
+    assert!(model_ids.contains(&"minimax-m2.7"));
+
+    // Verify no metadata is pre-filled (enriched by upstream catalog)
+    for model in &result.models {
+        assert!(model.display_name.is_none());
+        assert!(model.context_window.is_none());
+        assert!(model.max_output_tokens.is_none());
+    }
 }
 
 #[tokio::test]
