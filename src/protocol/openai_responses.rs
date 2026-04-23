@@ -18,6 +18,7 @@ use crate::types::*;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// OpenAI Responses API provider.
@@ -414,7 +415,7 @@ fn convert_messages(context: &Context, target_model: &Model) -> Vec<serde_json::
                                 && assistant_msg.api
                                     == target_model.api.clone().unwrap_or(Api::OpenAIResponses);
                             let item_id = responses_item_id_from_tool_call_id(&tc.id)
-                                .map(normalize_id_part)
+                                .map(normalize_responses_item_id)
                                 .filter(|item_id| !item_id.is_empty());
 
                             let mut function_call = serde_json::json!({
@@ -511,14 +512,43 @@ fn normalize_id_part(part: &str) -> String {
     sanitized.trim_end_matches('_').to_string()
 }
 
+fn short_hash_hex(input: &str, hex_len: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    hex[..hex_len.min(hex.len())].to_string()
+}
+
+fn hashed_responses_call_id(raw_call_id: &str) -> String {
+    format!("call_{}", short_hash_hex(raw_call_id, 35))
+}
+
 fn normalize_responses_call_id(id: &str) -> String {
-    let raw_call_id = id.splitn(2, '|').next().unwrap_or(id);
+    let raw_call_id = id.split('|').next().unwrap_or(id);
     let normalized = normalize_id_part(raw_call_id);
-    if normalized.len() > 40 {
-        normalized[..40].to_string()
-    } else {
+    if !normalized.is_empty() && normalized.len() <= 40 && normalized == raw_call_id {
         normalized
+    } else {
+        hashed_responses_call_id(raw_call_id)
     }
+}
+
+fn normalize_responses_item_id(item_id: &str) -> String {
+    let normalized = normalize_id_part(item_id);
+    if normalized.is_empty() || normalized != item_id {
+        return format!("fc_{}", short_hash_hex(item_id, 24));
+    }
+
+    if normalized.starts_with("fc_") {
+        return normalized;
+    }
+
+    if normalized.len() <= 61 {
+        return format!("fc_{normalized}");
+    }
+
+    format!("fc_{}", short_hash_hex(item_id, 24))
 }
 
 fn responses_item_id_from_tool_call_id(id: &str) -> Option<&str> {
@@ -1420,13 +1450,18 @@ async fn run_stream(
                                 }
                                 ItemType::FunctionCall => {
                                     if let Some(item) = val.get("item") {
-                                        let final_arguments = item
-                                            .get("arguments")
-                                            .and_then(|args| args.as_str())
+                                        let final_arguments = partial_tool_args
+                                            .get(&output_index)
+                                            .and_then(|args| {
+                                                if args.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(args.as_str())
+                                                }
+                                            })
                                             .or_else(|| {
-                                                partial_tool_args
-                                                    .get(&output_index)
-                                                    .map(String::as_str)
+                                                item.get("arguments")
+                                                    .and_then(|args| args.as_str())
                                             })
                                             .unwrap_or("{}");
                                         if let Some(ContentBlock::ToolCall(ref mut tc)) =
@@ -1834,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_tool_call_composite_id_clamps_only_call_id() {
+    fn test_convert_tool_call_composite_id_hashes_long_call_id() {
         let mut context = Context::new();
         let long_call_id = "helper_agentid_super_long_tool_call_id_1234567890_extra";
         let composite_id = format!("{}|fc_item_1234567890", long_call_id);
@@ -1877,9 +1912,30 @@ mod tests {
         let function_call_output_call_id = items[2]["call_id"]
             .as_str()
             .expect("function_call_output call_id should be string");
-        assert_eq!(function_call_call_id.len(), 40);
         assert_eq!(function_call_call_id, function_call_output_call_id);
+        assert!(function_call_call_id.starts_with("call_"));
+        assert!(function_call_call_id.len() <= 40);
+        assert_ne!(function_call_call_id, long_call_id);
         assert!(items[1].get("id").is_none());
+    }
+
+    #[test]
+    fn test_normalize_responses_item_id_hashes_long_item_id() {
+        let long_item_id =
+            "foreign:item/with spaces/and/slashes/that/is/definitely/too/long/for/responses";
+        let item_id = normalize_responses_item_id(long_item_id);
+        assert!(item_id.starts_with("fc_"));
+        assert!(item_id.len() <= 64);
+        assert_ne!(item_id, long_item_id);
+    }
+
+    #[test]
+    fn test_normalize_responses_item_id_hashes_long_prefixed_item_id_instead_of_truncating() {
+        let long_prefixed_item_id = format!("fc_{}", "a".repeat(62));
+        let item_id = normalize_responses_item_id(&long_prefixed_item_id);
+        assert!(item_id.starts_with("fc_"));
+        assert!(item_id.len() <= 64);
+        assert_ne!(item_id, long_prefixed_item_id);
     }
 
     #[test]

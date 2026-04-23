@@ -305,7 +305,7 @@ async fn test_different_model_omits_openai_function_item_id() {
 }
 
 #[tokio::test]
-async fn test_store_false_replay_clamps_long_responses_call_id_consistently() {
+async fn test_store_false_replay_hashes_long_responses_call_id_consistently() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -378,7 +378,8 @@ async fn test_store_false_replay_clamps_long_responses_call_id_consistently() {
     let replayed_call_id = function_call["call_id"]
         .as_str()
         .expect("function_call.call_id should be string");
-    assert_eq!(replayed_call_id.len(), 40);
+    assert!(replayed_call_id.starts_with("call_"));
+    assert!(replayed_call_id.len() <= 40);
     assert_eq!(
         function_call_output["call_id"].as_str(),
         Some(replayed_call_id)
