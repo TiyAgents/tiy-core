@@ -1528,7 +1528,11 @@ fn incomplete_anthropic_stream_detail(
 ) -> Option<String> {
     let mut reasons = Vec::new();
 
-    if !saw_message_delta {
+    // When message_stop was received, tolerate a missing message_delta —
+    // some proxies / compatible endpoints omit it. This mirrors the
+    // OpenAI Completions tolerance where [DONE] compensates for a missing
+    // finish_reason.
+    if !saw_message_delta && !saw_message_stop {
         reasons.push("missing message_delta".to_string());
     }
     if !saw_message_stop {
