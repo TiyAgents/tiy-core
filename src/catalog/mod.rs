@@ -985,6 +985,110 @@ trait ModelListAdapter: Send + Sync {
         -> Result<Vec<ProviderExtractedModel>, ModelCatalogError>;
 }
 
+/// OpenCode Go pre-defined models (provider does not expose a list-models endpoint).
+/// Only model IDs are returned; metadata will be enriched by the upstream catalog.
+fn opencode_go_predefined_models() -> Vec<ProviderExtractedModel> {
+    vec![
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "glm-5.1".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "kimi-k2.6".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "mimo-v2.5-pro".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "mimo-v2.5".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "minimax-m2.7".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+    ]
+}
+
+#[derive(Debug, Clone)]
+struct PredefinedModelsAdapter {
+    provider: Provider,
+    models: Vec<ProviderExtractedModel>,
+}
+
+impl PredefinedModelsAdapter {
+    fn new(provider: Provider, models: Vec<ProviderExtractedModel>) -> Self {
+        Self { provider, models }
+    }
+}
+
+#[async_trait]
+impl ModelListAdapter for PredefinedModelsAdapter {
+    async fn fetch_raw(&self, _request: &FetchModelsRequest) -> Result<Value, ModelCatalogError> {
+        let data: Vec<Value> = self
+            .models
+            .iter()
+            .map(|model| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("id".to_string(), json!(model.raw_id));
+                json!(obj)
+            })
+            .collect();
+        Ok(json!({ "data": data }))
+    }
+
+    fn extract_models(&self, raw: &Value) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
+        extract_models_from_data(&self.provider, raw)
+    }
+}
+
 fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCatalogError> {
     match provider {
         Provider::OpenAI
@@ -995,8 +1099,11 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
         | Provider::Groq
         | Provider::ZAI
         | Provider::DeepSeek
-        | Provider::Ollama
-        | Provider::OpenCodeGo => Ok(Box::new(ModelsEndpointAdapter::new(provider.clone()))),
+        | Provider::Ollama => Ok(Box::new(ModelsEndpointAdapter::new(provider.clone()))),
+        Provider::OpenCodeGo => Ok(Box::new(PredefinedModelsAdapter::new(
+            provider.clone(),
+            opencode_go_predefined_models(),
+        ))),
         Provider::OpenRouter => Ok(Box::new(OpenRouterModelsAdapter::new(provider.clone()))),
         Provider::Zenmux => Ok(Box::new(ZenmuxModelsAdapter::new(provider.clone()))),
         Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {

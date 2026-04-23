@@ -264,91 +264,10 @@ fn get_deepseek_models() -> Vec<Model> {
 }
 
 fn get_opencode_go_models() -> Vec<Model> {
-    let base = "https://opencode.ai/zen/go/v1";
-    vec![
-        // OpenAI-compatible models
-        Model::builder()
-            .id("glm-5.1")
-            .name("GLM-5.1")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        Model::builder()
-            .id("glm-5")
-            .name("GLM-5")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        Model::builder()
-            .id("kimi-k2.5")
-            .name("Kimi K2.5")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        Model::builder()
-            .id("mimo-v2-pro")
-            .name("Mimo V2 Pro")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        Model::builder()
-            .id("mimo-v2-omni")
-            .name("Mimo V2 Omni")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![
-                crate::types::InputType::Text,
-                crate::types::InputType::Image,
-            ])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        // Anthropic-compatible models
-        Model::builder()
-            .id("minimax-m2.7")
-            .name("MiniMax M2.7")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-        Model::builder()
-            .id("minimax-m2.5")
-            .name("MiniMax M2.5")
-            .provider(Provider::OpenCodeGo)
-            .base_url(base)
-            .reasoning(false)
-            .input(vec![crate::types::InputType::Text])
-            .context_window(131072)
-            .max_tokens(16384)
-            .build()
-            .unwrap(),
-    ]
+    // OpenCode Go models are not registered in ModelRegistry.
+    // They are served via PredefinedModelsAdapter in the catalog module,
+    // and metadata is enriched by the upstream catalog.
+    vec![]
 }
 
 /// Global model registry (single instance shared by all functions).
