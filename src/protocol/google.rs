@@ -940,6 +940,7 @@ async fn run_stream(
     let mut current_thinking_index: Option<usize> = None;
     let mut line_buffer = String::new();
     let mut saw_candidate_finish_reason = false;
+    let mut saw_usage_metadata = false;
 
     let mut byte_stream = response.bytes_stream();
     while let Some(chunk_result) = super::common::next_stream_item_with_cancel(
@@ -977,6 +978,7 @@ async fn run_stream(
                 current_thinking_index = None;
                 line_buffer.clear();
                 saw_candidate_finish_reason = false;
+                saw_usage_metadata = false;
 
                 let Some(response) = super::common::send_request_with_retry(
                     &client,
@@ -1059,6 +1061,7 @@ async fn run_stream(
 
                     // Handle usage metadata
                     if let Some(ref usage) = chunk_data.usage_metadata {
+                        saw_usage_metadata = true;
                         output.usage.input = usage.prompt_token_count;
                         output.usage.output =
                             usage.candidates_token_count + usage.thoughts_token_count;
@@ -1245,7 +1248,7 @@ async fn run_stream(
         }
     }
 
-    if let Some(detail) = incomplete_google_stream_detail(saw_candidate_finish_reason, &line_buffer)
+    if let Some(detail) = incomplete_google_stream_detail(saw_candidate_finish_reason, saw_usage_metadata, &line_buffer)
     {
         tracing::error!(
             url = %url,
@@ -1302,11 +1305,16 @@ async fn run_stream(
 
 fn incomplete_google_stream_detail(
     saw_candidate_finish_reason: bool,
+    saw_usage_metadata: bool,
     line_buffer: &str,
 ) -> Option<String> {
     let mut reasons = Vec::new();
 
-    if !saw_candidate_finish_reason {
+    // When usage_metadata was received the server considers the response
+    // complete, so tolerate a missing candidate finish_reason — some
+    // proxy / gateway setups strip it while still delivering the final
+    // usage chunk.
+    if !saw_candidate_finish_reason && !saw_usage_metadata {
         reasons.push("missing candidate finish_reason".to_string());
     }
 
@@ -1362,11 +1370,25 @@ mod tests {
 
     #[test]
     fn test_incomplete_google_stream_detail_reports_missing_termination() {
-        let detail = incomplete_google_stream_detail(false, "data: {");
+        let detail = incomplete_google_stream_detail(false, false, "data: {");
 
         assert_eq!(
             detail.as_deref(),
             Some("missing candidate finish_reason; trailing partial SSE frame")
         );
+    }
+
+    #[test]
+    fn test_incomplete_google_stream_detail_usage_compensates_finish_reason() {
+        // usage_metadata received but finish_reason missing — should only report trailing frame
+        let detail = incomplete_google_stream_detail(false, true, "data: {");
+        assert_eq!(
+            detail.as_deref(),
+            Some("trailing partial SSE frame")
+        );
+
+        // usage_metadata received, no trailing — should be None (complete)
+        let detail = incomplete_google_stream_detail(false, true, "");
+        assert!(detail.is_none());
     }
 }

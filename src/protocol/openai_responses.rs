@@ -1691,7 +1691,10 @@ fn incomplete_openai_responses_stream_detail(
         reasons.push("missing response.completed/response.done event".to_string());
     }
 
-    if !open_output_items.is_empty() {
+    // When response.completed/done was received, tolerate unfinished output
+    // items — some proxies skip individual output_item.done events but still
+    // deliver the terminal response event with full usage / status.
+    if !saw_response_completion && !open_output_items.is_empty() {
         let mut indexes: Vec<_> = open_output_items.iter().copied().collect();
         indexes.sort_unstable();
         reasons.push(format!(
@@ -1704,7 +1707,13 @@ fn incomplete_openai_responses_stream_detail(
         ));
     }
 
-    let mut incomplete_tool_indexes: Vec<_> = open_output_items
+    // Tool-arg incompleteness is also gated on !saw_response_completion for
+    // the same reason: a terminal event confirms the server considers the
+    // response finished.
+    let mut incomplete_tool_indexes: Vec<_> = if saw_response_completion {
+        Vec::new()
+    } else {
+        open_output_items
         .iter()
         .copied()
         .filter(|index| {
@@ -1713,7 +1722,8 @@ fn incomplete_openai_responses_stream_detail(
                 !trimmed.is_empty() && serde_json::from_str::<serde_json::Value>(trimmed).is_err()
             })
         })
-        .collect();
+        .collect()
+    };
     incomplete_tool_indexes.sort_unstable();
     if !incomplete_tool_indexes.is_empty() {
         reasons.push(format!(
@@ -2006,5 +2016,31 @@ mod tests {
         assert!(detail.contains("unfinished output items at indices [2]"));
         assert!(detail.contains("unfinished tool input JSON at indices [2]"));
         assert!(detail.contains("trailing partial SSE frame"));
+    }
+
+    #[test]
+    fn test_incomplete_openai_responses_completion_compensates_open_items() {
+        let mut open_output_items = HashSet::new();
+        open_output_items.insert(0);
+        let mut partial_tool_args = HashMap::new();
+        partial_tool_args.insert(0, "{\"path\":\"logs".to_string());
+
+        // response.completed received — should tolerate open items and tool JSON
+        let detail = incomplete_openai_responses_stream_detail(
+            true,
+            &open_output_items,
+            &partial_tool_args,
+            "",
+        );
+        assert!(detail.is_none(), "expected None when response.completed compensates, got: {:?}", detail);
+
+        // trailing frame is still reported even with response.completed
+        let detail = incomplete_openai_responses_stream_detail(
+            true,
+            &open_output_items,
+            &partial_tool_args,
+            "event: partial",
+        );
+        assert_eq!(detail.as_deref(), Some("trailing partial SSE frame"));
     }
 }
