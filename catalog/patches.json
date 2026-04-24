@@ -21,7 +21,8 @@
         "text"
       ],
       "capabilities": [
-        "reasoning"
+        "reasoning",
+        "tools"
       ],
       "source": "catalog-injection:deepseek:deepseek-reasoner",
       "raw": {}
@@ -41,7 +42,8 @@
         "text"
       ],
       "capabilities": [
-        "reasoning"
+        "reasoning",
+        "tools"
       ],
       "source": "catalog-injection:minimax:minimax-m2.7-highspeed",
       "raw": {}
