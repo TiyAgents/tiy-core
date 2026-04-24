@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-04-24
+### :sparkles: New Features
+- [`da763ba`](https://github.com/TiyAgents/tiycore/commit/da763baf53f751a3ae0e28fb9d60ad0b7f3ab30c) - **catalog**: ✨ add MiniMax & MiniMaxCN predefined model support *(commit by [@jorben](https://github.com/jorben))*
+
+### :bug: Bug Fixes
+- [`8fcd40e`](https://github.com/TiyAgents/tiycore/commit/8fcd40ecd23a0e8e3daf53d6c5c727cc74a6bed7) - **protocol**: 🐛 tolerate missing message_delta when message_stop present *(commit by [@jorben](https://github.com/jorben))*
+- [`e9e36af`](https://github.com/TiyAgents/tiycore/commit/e9e36af09957b39c6dff7979caa773c336da5f6b) - **protocol**: 🐛 tolerate missing terminal events when usage metadata is received *(commit by [@jorben](https://github.com/jorben))*
+- [`5801c72`](https://github.com/TiyAgents/tiycore/commit/5801c72c5f55621505be7c2593a96343634a91a0) - **provider**: 🐛 correct MiniMax base URLs to include /v1 suffix *(commit by [@jorben](https://github.com/jorben))*
+- [`91ae5eb`](https://github.com/TiyAgents/tiycore/commit/91ae5ebc77461bffd2de73952e79d5bde2929672) - **provider**: 🐛 correct MiniMax model base URL assignment and borrowing *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.15] - 2026-04-23
 ### :sparkles: New Features
 - [`274c04c`](https://github.com/TiyAgents/tiycore/commit/274c04c08d492086400980d172e6167017d4d573) - **catalog**: ✨ add predefined models adapter for OpenCode Go *(PR [#17](https://github.com/TiyAgents/tiycore/pull/17) by [@HayWolf](https://github.com/HayWolf))*
@@ -192,3 +203,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.13]: https://github.com/TiyAgents/tiycore/compare/0.1.12...0.1.13
 [0.1.14]: https://github.com/TiyAgents/tiycore/compare/0.1.13...0.1.14
 [0.1.15]: https://github.com/TiyAgents/tiycore/compare/0.1.14...0.1.15
+[0.1.16]: https://github.com/TiyAgents/tiycore/compare/0.1.15...0.1.16
