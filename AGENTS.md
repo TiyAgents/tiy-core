@@ -117,6 +117,48 @@ ProtocolRegistry: HashMap<String, ArcProtocol> keyed by Provider::as_str()
 ModelRegistry: HashMap<provider, HashMap<model_id, Model>>
 ```
 
+### Catalog Module
+
+The Catalog module (`src/catalog/`) manages model listing and metadata enrichment:
+- Fetches native model lists from provider APIs
+- Extracts a shared intermediate model shape (`raw_id`, `display_name`, `context_window`, `max_output_tokens`, etc.)
+- Enriches from a local snapshot-backed metadata store (`CatalogSnapshot`)
+- Supports stale-while-revalidate snapshot refresh from a published remote manifest
+
+**Patching Catalog Model Metadata**
+
+When a model is missing from the upstream source (e.g., OpenRouter) or its metadata needs correction, add an entry to `catalog/patches.json` rather than modifying Rust source code.
+
+The patches file has two sections:
+
+- **`patches`**: Overrides fields for existing catalog entries matched by `source` + `alias` or `canonical_model_key`.
+- **`injections`**: Injects entirely new models that do not exist in the upstream source. Injected entries are deduplicated by `canonical_model_key`.
+
+Example injection for a missing model:
+
+```json
+{
+  "canonical_model_key": "minimax:minimax-m2.7-highspeed",
+  "aliases": [
+    "minimax/minimax-m2.7-highspeed",
+    "minimax-m2.7-highspeed",
+    "MiniMax-M2.7-highspeed"
+  ],
+  "display_name": "MiniMax: MiniMax M2.7 highspeed",
+  "description": "MiniMax M2.7 highspeed reasoning model",
+  "context_window": 2048000,
+  "max_output_tokens": 131070,
+  "modalities": ["text"],
+  "capabilities": ["reasoning"],
+  "source": "catalog-injection:minimax:minimax-m2.7-highspeed",
+  "raw": {}
+}
+```
+
+The `source` field for injections should follow the convention `catalog-injection:<provider>:<model-key>`.
+
+The `tiy-catalog-sync` binary (`src/bin/tiy-catalog-sync.rs`) reads `catalog/patches.json`, applies patches and injections, and publishes the resulting `catalog.json` + `manifest.json`.
+
 ## Adding a New Provider
 
 **New wire-format protocol** (rare — only if a completely new HTTP/SSE wire format is needed):

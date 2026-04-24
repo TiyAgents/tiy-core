@@ -25,6 +25,26 @@
       ],
       "source": "catalog-injection:deepseek:deepseek-reasoner",
       "raw": {}
+    },
+    {
+      "canonical_model_key": "minimax:minimax-m2.7-highspeed",
+      "aliases": [
+        "minimax/minimax-m2.7-highspeed",
+        "minimax-m2.7-highspeed",
+        "MiniMax-M2.7-highspeed"
+      ],
+      "display_name": "MiniMax: MiniMax M2.7 highspeed",
+      "description": "MiniMax M2.7 highspeed reasoning model",
+      "context_window": 2048000,
+      "max_output_tokens": 131070,
+      "modalities": [
+        "text"
+      ],
+      "capabilities": [
+        "reasoning"
+      ],
+      "source": "catalog-injection:minimax:minimax-m2.7-highspeed",
+      "raw": {}
     }
   ]
 }
