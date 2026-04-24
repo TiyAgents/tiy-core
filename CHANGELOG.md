@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-04-24
+### :sparkles: New Features
+- [`735e94f`](https://github.com/TiyAgents/tiycore/commit/735e94f11bbb7c8b2390dc709c1e6c7674fe3a95) - **catalog**: ✨ add tools capability to DeepSeek and MiniMax injections *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.16] - 2026-04-24
 ### :sparkles: New Features
 - [`da763ba`](https://github.com/TiyAgents/tiycore/commit/da763baf53f751a3ae0e28fb9d60ad0b7f3ab30c) - **catalog**: ✨ add MiniMax & MiniMaxCN predefined model support *(commit by [@jorben](https://github.com/jorben))*
@@ -204,3 +209,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.14]: https://github.com/TiyAgents/tiycore/compare/0.1.13...0.1.14
 [0.1.15]: https://github.com/TiyAgents/tiycore/compare/0.1.14...0.1.15
 [0.1.16]: https://github.com/TiyAgents/tiycore/compare/0.1.15...0.1.16
+[0.1.17]: https://github.com/TiyAgents/tiycore/compare/0.1.16...0.1.17
