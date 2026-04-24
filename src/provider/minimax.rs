@@ -21,8 +21,8 @@ pub struct MiniMaxProvider {
 }
 
 impl MiniMaxProvider {
-    const DEFAULT_BASE_URL: &'static str = "https://api.minimax.io/anthropic/v1";
-    const DEFAULT_CN_BASE_URL: &'static str = "https://api.minimaxi.com/anthropic/v1";
+    const DEFAULT_BASE_URL: &str = "https://api.minimax.io/anthropic/v1";
+    const DEFAULT_CN_BASE_URL: &str = "https://api.minimaxi.com/anthropic/v1";
 
     /// Create a new MiniMax provider.
     pub fn new() -> Self {
@@ -83,14 +83,15 @@ impl LLMProtocol for MiniMaxProvider {
         options: StreamOptions,
     ) -> AssistantMessageEventStream {
         let mut opts = options;
+        let mut model = model.clone();
         if opts.api_key.is_none() {
             opts.api_key = self.resolve_api_key(&opts, &model.provider);
         }
         if opts.base_url.is_none() && model.base_url.is_none() {
-            opts.base_url = Some(Self::default_base_url(&model.provider).to_string());
+            model.base_url = Some(Self::default_base_url(&model.provider).to_string());
         }
         let provider = crate::protocol::anthropic::AnthropicProtocol::new();
-        provider.stream(model, context, opts)
+        provider.stream(&model, context, opts)
     }
 
     fn stream_simple(
@@ -100,14 +101,15 @@ impl LLMProtocol for MiniMaxProvider {
         options: SimpleStreamOptions,
     ) -> AssistantMessageEventStream {
         let mut opts = options;
+        let mut model = model.clone();
         if opts.base.api_key.is_none() {
             opts.base.api_key = self.resolve_api_key(&opts.base, &model.provider);
         }
         if opts.base.base_url.is_none() && model.base_url.is_none() {
-            opts.base.base_url = Some(Self::default_base_url(&model.provider).to_string());
+            model.base_url = Some(Self::default_base_url(&model.provider).to_string());
         }
         let provider = crate::protocol::anthropic::AnthropicProtocol::new();
-        provider.stream_simple(model, context, opts)
+        provider.stream_simple(&model, context, opts)
     }
 }
 
