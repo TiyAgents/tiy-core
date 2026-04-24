@@ -219,6 +219,56 @@ async fn test_list_models_for_opencode_go_uses_predefined_list() {
 }
 
 #[tokio::test]
+async fn test_list_models_for_minimax_uses_predefined_list() {
+    let result = list_models(FetchModelsRequest {
+        provider: Provider::MiniMax,
+        api_key: None,
+        base_url: None,
+        headers: None,
+    })
+    .await
+    .expect("minimax list should succeed");
+
+    assert_eq!(result.models.len(), 2);
+
+    let model_ids: Vec<&str> = result.models.iter().map(|m| m.raw_id.as_str()).collect();
+    assert!(model_ids.contains(&"MiniMax-M2.7"));
+    assert!(model_ids.contains(&"MiniMax-M2.7-highspeed"));
+
+    for model in &result.models {
+        assert_eq!(model.provider, Provider::MiniMax);
+        assert!(model.display_name.is_none());
+        assert!(model.context_window.is_none());
+        assert!(model.max_output_tokens.is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_list_models_for_minimax_cn_uses_predefined_list() {
+    let result = list_models(FetchModelsRequest {
+        provider: Provider::MiniMaxCN,
+        api_key: None,
+        base_url: None,
+        headers: None,
+    })
+    .await
+    .expect("minimax-cn list should succeed");
+
+    assert_eq!(result.models.len(), 2);
+
+    let model_ids: Vec<&str> = result.models.iter().map(|m| m.raw_id.as_str()).collect();
+    assert!(model_ids.contains(&"MiniMax-M2.7"));
+    assert!(model_ids.contains(&"MiniMax-M2.7-highspeed"));
+
+    for model in &result.models {
+        assert_eq!(model.provider, Provider::MiniMaxCN);
+        assert!(model.display_name.is_none());
+        assert!(model.context_window.is_none());
+        assert!(model.max_output_tokens.is_none());
+    }
+}
+
+#[tokio::test]
 async fn test_list_models_rejects_unimplemented_provider() {
     let error = list_models(FetchModelsRequest::new(Provider::GoogleVertex))
         .await

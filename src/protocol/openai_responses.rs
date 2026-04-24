@@ -1460,8 +1460,7 @@ async fn run_stream(
                                                 }
                                             })
                                             .or_else(|| {
-                                                item.get("arguments")
-                                                    .and_then(|args| args.as_str())
+                                                item.get("arguments").and_then(|args| args.as_str())
                                             })
                                             .unwrap_or("{}");
                                         if let Some(ContentBlock::ToolCall(ref mut tc)) =
@@ -1714,15 +1713,16 @@ fn incomplete_openai_responses_stream_detail(
         Vec::new()
     } else {
         open_output_items
-        .iter()
-        .copied()
-        .filter(|index| {
-            partial_tool_args.get(index).is_some_and(|args| {
-                let trimmed = args.trim();
-                !trimmed.is_empty() && serde_json::from_str::<serde_json::Value>(trimmed).is_err()
+            .iter()
+            .copied()
+            .filter(|index| {
+                partial_tool_args.get(index).is_some_and(|args| {
+                    let trimmed = args.trim();
+                    !trimmed.is_empty()
+                        && serde_json::from_str::<serde_json::Value>(trimmed).is_err()
+                })
             })
-        })
-        .collect()
+            .collect()
     };
     incomplete_tool_indexes.sort_unstable();
     if !incomplete_tool_indexes.is_empty() {
@@ -2032,7 +2032,11 @@ mod tests {
             &partial_tool_args,
             "",
         );
-        assert!(detail.is_none(), "expected None when response.completed compensates, got: {:?}", detail);
+        assert!(
+            detail.is_none(),
+            "expected None when response.completed compensates, got: {:?}",
+            detail
+        );
 
         // trailing frame is still reported even with response.completed
         let detail = incomplete_openai_responses_stream_detail(

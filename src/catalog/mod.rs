@@ -1057,6 +1057,39 @@ fn opencode_go_predefined_models() -> Vec<ProviderExtractedModel> {
     ]
 }
 
+/// MiniMax pre-defined models (provider does not expose a list-models endpoint).
+/// Only model IDs are returned; metadata will be enriched by the upstream catalog.
+fn minimax_predefined_models() -> Vec<ProviderExtractedModel> {
+    vec![
+        ProviderExtractedModel {
+            provider: Provider::MiniMax,
+            raw_id: "MiniMax-M2.7".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::MiniMax,
+            raw_id: "MiniMax-M2.7-highspeed".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+    ]
+}
+
 #[derive(Debug, Clone)]
 struct PredefinedModelsAdapter {
     provider: Provider,
@@ -1084,7 +1117,10 @@ impl ModelListAdapter for PredefinedModelsAdapter {
         Ok(json!({ "data": data }))
     }
 
-    fn extract_models(&self, raw: &Value) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
+    fn extract_models(
+        &self,
+        raw: &Value,
+    ) -> Result<Vec<ProviderExtractedModel>, ModelCatalogError> {
         extract_models_from_data(&self.provider, raw)
     }
 }
@@ -1104,9 +1140,13 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
             provider.clone(),
             opencode_go_predefined_models(),
         ))),
+        Provider::MiniMax | Provider::MiniMaxCN => Ok(Box::new(PredefinedModelsAdapter::new(
+            provider.clone(),
+            minimax_predefined_models(),
+        ))),
         Provider::OpenRouter => Ok(Box::new(OpenRouterModelsAdapter::new(provider.clone()))),
         Provider::Zenmux => Ok(Box::new(ZenmuxModelsAdapter::new(provider.clone()))),
-        Provider::Anthropic | Provider::MiniMax | Provider::MiniMaxCN | Provider::KimiCoding => {
+        Provider::Anthropic | Provider::KimiCoding => {
             Ok(Box::new(AnthropicModelsAdapter::new(provider.clone())))
         }
         _ => Err(ModelCatalogError::UnsupportedProvider {

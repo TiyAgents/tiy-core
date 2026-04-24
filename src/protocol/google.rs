@@ -1248,8 +1248,11 @@ async fn run_stream(
         }
     }
 
-    if let Some(detail) = incomplete_google_stream_detail(saw_candidate_finish_reason, saw_usage_metadata, &line_buffer)
-    {
+    if let Some(detail) = incomplete_google_stream_detail(
+        saw_candidate_finish_reason,
+        saw_usage_metadata,
+        &line_buffer,
+    ) {
         tracing::error!(
             url = %url,
             model = %model.id,
@@ -1382,10 +1385,7 @@ mod tests {
     fn test_incomplete_google_stream_detail_usage_compensates_finish_reason() {
         // usage_metadata received but finish_reason missing — should only report trailing frame
         let detail = incomplete_google_stream_detail(false, true, "data: {");
-        assert_eq!(
-            detail.as_deref(),
-            Some("trailing partial SSE frame")
-        );
+        assert_eq!(detail.as_deref(), Some("trailing partial SSE frame"));
 
         // usage_metadata received, no trailing — should be None (complete)
         let detail = incomplete_google_stream_detail(false, true, "");
