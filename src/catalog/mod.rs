@@ -32,8 +32,8 @@ const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const ZENMUX_BASE_URL: &str = "https://zenmux.ai/api/v1";
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
-const MINIMAX_BASE_URL: &str = "https://api.minimax.io/anthropic";
-const MINIMAX_CN_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
+const MINIMAX_BASE_URL: &str = "https://api.minimax.io/anthropic/v1";
+const MINIMAX_CN_BASE_URL: &str = "https://api.minimaxi.com/anthropic/v1";
 const KIMI_CODING_BASE_URL: &str = "https://api.kimi.com/coding";
 const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -2070,6 +2070,12 @@ fn collect_supported_parameter_capabilities(item: &Value) -> Option<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimax_default_base_urls_include_v1_suffix() {
+        assert_eq!(MINIMAX_BASE_URL, "https://api.minimax.io/anthropic/v1");
+        assert_eq!(MINIMAX_CN_BASE_URL, "https://api.minimaxi.com/anthropic/v1");
+    }
 
     #[test]
     fn normalizes_alias_candidates_across_provider_variants() {

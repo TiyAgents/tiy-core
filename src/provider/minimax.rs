@@ -1,8 +1,8 @@
 //! MiniMax provider (reuses Anthropic Messages protocol).
 //!
 //! MiniMax exposes an Anthropic-compatible API endpoint at:
-//! - `https://api.minimax.io/anthropic` (international)
-//! - `https://api.minimaxi.com/anthropic` (minimax-cn, China mainland)
+//! - `https://api.minimax.io/anthropic/v1` (international)
+//! - `https://api.minimaxi.com/anthropic/v1` (minimax-cn, China mainland)
 //!
 //! This provider delegates all streaming to `AnthropicProtocol`.
 //!
@@ -21,6 +21,9 @@ pub struct MiniMaxProvider {
 }
 
 impl MiniMaxProvider {
+    const DEFAULT_BASE_URL: &'static str = "https://api.minimax.io/anthropic/v1";
+    const DEFAULT_CN_BASE_URL: &'static str = "https://api.minimaxi.com/anthropic/v1";
+
     /// Create a new MiniMax provider.
     pub fn new() -> Self {
         Self {
@@ -52,6 +55,13 @@ impl MiniMaxProvider {
         };
         std::env::var(env_var).ok()
     }
+
+    fn default_base_url(provider: &Provider) -> &'static str {
+        match provider {
+            Provider::MiniMaxCN => Self::DEFAULT_CN_BASE_URL,
+            _ => Self::DEFAULT_BASE_URL,
+        }
+    }
 }
 
 impl Default for MiniMaxProvider {
@@ -76,6 +86,9 @@ impl LLMProtocol for MiniMaxProvider {
         if opts.api_key.is_none() {
             opts.api_key = self.resolve_api_key(&opts, &model.provider);
         }
+        if opts.base_url.is_none() && model.base_url.is_none() {
+            opts.base_url = Some(Self::default_base_url(&model.provider).to_string());
+        }
         let provider = crate::protocol::anthropic::AnthropicProtocol::new();
         provider.stream(model, context, opts)
     }
@@ -90,7 +103,27 @@ impl LLMProtocol for MiniMaxProvider {
         if opts.base.api_key.is_none() {
             opts.base.api_key = self.resolve_api_key(&opts.base, &model.provider);
         }
+        if opts.base.base_url.is_none() && model.base_url.is_none() {
+            opts.base.base_url = Some(Self::default_base_url(&model.provider).to_string());
+        }
         let provider = crate::protocol::anthropic::AnthropicProtocol::new();
         provider.stream_simple(model, context, opts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_base_urls_include_v1_suffix() {
+        assert_eq!(
+            MiniMaxProvider::default_base_url(&Provider::MiniMax),
+            "https://api.minimax.io/anthropic/v1"
+        );
+        assert_eq!(
+            MiniMaxProvider::default_base_url(&Provider::MiniMaxCN),
+            "https://api.minimaxi.com/anthropic/v1"
+        );
     }
 }
