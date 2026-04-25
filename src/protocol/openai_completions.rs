@@ -711,7 +711,13 @@ fn convert_assistant_message(
     }
 
     let content = if text_content.is_empty() {
-        None
+        // When reasoning_content exists but content is empty, send "" instead of null
+        // for provider compatibility (some providers reject null content with reasoning)
+        if thinking_text.is_some() {
+            Some(OpenAIContent::Text(String::new()))
+        } else {
+            None
+        }
     } else {
         Some(OpenAIContent::Text(text_content))
     };
