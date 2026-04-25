@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-04-25
+### :sparkles: New Features
+- [`6b71c79`](https://github.com/TiyAgents/tiycore/commit/6b71c79d1680a3ace5ad927d3834b8cb1983d3d8) - **protocol**: ✨ dump request body on client errors for debugging *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.18] - 2026-04-25
 ### :bug: Bug Fixes
 - [`67826dc`](https://github.com/TiyAgents/tiycore/commit/67826dc46f896cca53e4d7a0842b6d1ddd6923bd) - **protocol**: 🐛 handle empty content with reasoning for provider compatibility *(commit by [@jorben](https://github.com/jorben))*
@@ -216,3 +221,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.16]: https://github.com/TiyAgents/tiycore/compare/0.1.15...0.1.16
 [0.1.17]: https://github.com/TiyAgents/tiycore/compare/0.1.16...0.1.17
 [0.1.18]: https://github.com/TiyAgents/tiycore/compare/0.1.17...0.1.18
+[0.1.19]: https://github.com/TiyAgents/tiycore/compare/0.1.18...0.1.19
