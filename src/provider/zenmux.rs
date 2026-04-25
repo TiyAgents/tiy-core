@@ -9,7 +9,7 @@
 //! Adaptive routing logic (when base_url is empty or starts with `https://zenmux.ai`):
 //! - If the model ID contains "google" or "gemini" (case-insensitive),
 //!   routes to Google Vertex AI protocol
-//! - If the model ID contains "kimi" or "moonshotai" (case-insensitive),
+//! - If the model ID contains "deepseek", "kimi" or "moonshotai" (case-insensitive),
 //!   routes to OpenAI-compatible protocol
 //! - If the model ID contains "openai" or "gpt" (case-insensitive),
 //!   routes to OpenAI Responses protocol
@@ -67,7 +67,7 @@ pub(crate) fn zenmux_detect_route(model_id: &str) -> ProtocolRoute {
     let lower = zenmux_routing_model_id(model_id).to_ascii_lowercase();
     if lower.contains("google") || lower.contains("gemini") {
         ProtocolRoute::Google
-    } else if lower.contains("kimi") || lower.contains("moonshotai") {
+    } else if lower.contains("deepseek") || lower.contains("kimi") || lower.contains("moonshotai") {
         ProtocolRoute::OpenAICompatible
     } else if lower.contains("openai") || lower.contains("gpt") {
         ProtocolRoute::OpenAIResponses
@@ -277,6 +277,14 @@ mod tests {
             ProtocolRoute::OpenAIResponses
         );
         assert_eq!(
+            zenmux_detect_route("deepseek-r1"),
+            ProtocolRoute::OpenAICompatible
+        );
+        assert_eq!(
+            zenmux_detect_route("deepseek-v3-0324"),
+            ProtocolRoute::OpenAICompatible
+        );
+        assert_eq!(
             zenmux_detect_route("kimi-k2.5"),
             ProtocolRoute::OpenAICompatible
         );
@@ -328,6 +336,7 @@ mod tests {
 
         assert_eq!(zenmux_detect_api("gemini-2.5-pro"), Api::GoogleVertex);
         assert_eq!(zenmux_detect_api("gpt-4.1"), Api::OpenAIResponses);
+        assert_eq!(zenmux_detect_api("deepseek-r1"), Api::OpenAICompletions);
         assert_eq!(
             zenmux_detect_api("moonshotai/kimi-k2.5"),
             Api::OpenAICompletions
