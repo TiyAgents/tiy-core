@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [`6b71c79`](https://github.com/TiyAgents/tiycore/commit/6b71c79d1680a3ace5ad927d3834b8cb1983d3d8) - **protocol**: ✨ dump request body on client errors for debugging *(commit by [@jorben](https://github.com/jorben))*
 
 
+## [0.1.18] - 2026-04-25
+### :bug: Bug Fixes
+- [`67826dc`](https://github.com/TiyAgents/tiycore/commit/67826dc46f896cca53e4d7a0842b6d1ddd6923bd) - **protocol**: 🐛 handle empty content with reasoning for provider compatibility *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.17] - 2026-04-24
 ### :sparkles: New Features
 - [`735e94f`](https://github.com/TiyAgents/tiycore/commit/735e94f11bbb7c8b2390dc709c1e6c7674fe3a95) - **catalog**: ✨ add tools capability to DeepSeek and MiniMax injections *(commit by [@jorben](https://github.com/jorben))*
@@ -215,4 +220,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.15]: https://github.com/TiyAgents/tiycore/compare/0.1.14...0.1.15
 [0.1.16]: https://github.com/TiyAgents/tiycore/compare/0.1.15...0.1.16
 [0.1.17]: https://github.com/TiyAgents/tiycore/compare/0.1.16...0.1.17
+[0.1.18]: https://github.com/TiyAgents/tiycore/compare/0.1.17...0.1.18
 [0.1.19]: https://github.com/TiyAgents/tiycore/compare/0.1.18...0.1.19
