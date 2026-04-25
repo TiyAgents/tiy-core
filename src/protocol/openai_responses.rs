@@ -854,6 +854,7 @@ async fn run_stream(
             &mut output,
             &stream,
             "OpenAI Responses",
+            &request_body,
         )
         .await;
         return Ok(());
@@ -942,6 +943,7 @@ async fn run_stream(
                         &mut output,
                         &stream,
                         "OpenAI Responses",
+                        &request_body,
                     )
                     .await;
                     return Ok(());

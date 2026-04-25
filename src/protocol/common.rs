@@ -146,6 +146,7 @@ pub async fn handle_error_response(
     output: &mut AssistantMessage,
     stream: &AssistantMessageEventStream,
     provider_name: &str,
+    request_body: &str,
 ) {
     let status = response.status();
     let body = crate::types::read_error_body(response, limits.http.max_error_body_bytes).await;
@@ -156,6 +157,16 @@ pub async fn handle_error_response(
         response_body = %body,
         "{} request failed", provider_name
     );
+    // Dump full request body on client errors (4xx) to aid debugging malformed payloads
+    if status.is_client_error() {
+        tracing::warn!(
+            url = %url,
+            model = %model.id,
+            status = %status,
+            request_body = %request_body,
+            "{} client error request body dump", provider_name
+        );
+    }
     output.stop_reason = StopReason::Error;
     output.error_message = Some(crate::types::truncate_error_message(
         &format!("HTTP {}: {}", status, body),

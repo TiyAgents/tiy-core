@@ -1063,6 +1063,7 @@ async fn run_stream(
             &mut output,
             &stream,
             "Anthropic Messages",
+            &request_body,
         )
         .await;
         return Ok(());
@@ -1151,6 +1152,7 @@ async fn run_stream(
                         &mut output,
                         &stream,
                         "Anthropic Messages",
+                        &request_body,
                     )
                     .await;
                     return Ok(());
