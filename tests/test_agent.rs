@@ -160,13 +160,15 @@ fn test_agent_context_default() {
 fn test_agent_event_variants() {
     let _start = AgentEvent::AgentStart;
     let _end = AgentEvent::AgentEnd { messages: vec![] };
-    let _turn_start = AgentEvent::TurnStart;
+    let _turn_start = AgentEvent::TurnStart { turn_index: 0 };
     let _tool_start = AgentEvent::ToolExecutionStart {
+        turn_index: 0,
         tool_call_id: "id".to_string(),
         tool_name: "tool".to_string(),
         args: json!({}),
     };
     let _tool_end = AgentEvent::ToolExecutionEnd {
+        turn_index: 0,
         tool_call_id: "id".to_string(),
         tool_name: "tool".to_string(),
         result: json!({}),

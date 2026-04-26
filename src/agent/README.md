@@ -365,7 +365,7 @@ Subscribe to agent events for UI updates, logging, telemetry.
 let unsub = agent.subscribe(|event: &AgentEvent| {
     match event {
         AgentEvent::AgentStart => println!("Agent started"),
-        AgentEvent::TurnStart => println!("New turn"),
+        AgentEvent::TurnStart { turn_index, .. } => println!("New turn {turn_index}"),
         AgentEvent::MessageUpdate { message, assistant_event } => {
             if let AssistantMessageEvent::TextDelta { delta, .. } = assistant_event.as_ref() {
                 print!("{}", delta);  // stream text to UI

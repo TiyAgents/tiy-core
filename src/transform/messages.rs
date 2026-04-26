@@ -59,6 +59,7 @@ fn transform_assistant_message(
     let same_api = target_model.api.as_ref().is_none_or(|api| *api == msg.api);
     let is_same_model =
         msg.provider == target_model.provider && same_api && msg.model == target_model.id;
+    let is_same_provider = msg.provider == target_model.provider;
 
     let mut new_msg = msg.clone();
 
@@ -67,7 +68,9 @@ fn transform_assistant_message(
         .content
         .iter()
         .flat_map(|block| match block {
-            ContentBlock::Thinking(thinking) => transform_thinking_block(thinking, is_same_model),
+            ContentBlock::Thinking(thinking) => {
+                transform_thinking_block(thinking, is_same_model, is_same_provider)
+            }
             ContentBlock::ToolCall(tc) => {
                 let mut new_tc = tc.clone();
                 if let Some(normalize) = normalize_tool_call_id {
@@ -85,8 +88,12 @@ fn transform_assistant_message(
     new_msg
 }
 
-fn transform_thinking_block(thinking: &ThinkingContent, is_same_model: bool) -> Vec<ContentBlock> {
-    // If same provider and model, keep thinking block
+fn transform_thinking_block(
+    thinking: &ThinkingContent,
+    is_same_model: bool,
+    is_same_provider: bool,
+) -> Vec<ContentBlock> {
+    // Same provider and model: keep thinking block intact (including signature)
     if is_same_model {
         return vec![ContentBlock::Thinking(thinking.clone())];
     }
@@ -96,6 +103,18 @@ fn transform_thinking_block(thinking: &ThinkingContent, is_same_model: bool) -> 
         return Vec::new();
     }
 
+    // Same provider, different model: keep thinking structure but clear signature
+    // (signature may be model-version-specific, but the thinking text is still
+    // valuable for context, e.g., DeepSeek reasoning_content across model versions)
+    if is_same_provider && !thinking.thinking.trim().is_empty() {
+        return vec![ContentBlock::Thinking(ThinkingContent {
+            thinking: thinking.thinking.clone(),
+            thinking_signature: None,
+            redacted: false,
+        })];
+    }
+
+    // Cross-provider: degrade to plain text
     if thinking.thinking.trim().is_empty() {
         Vec::new()
     } else {

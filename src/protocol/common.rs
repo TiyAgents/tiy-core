@@ -415,6 +415,83 @@ pub fn parse_incomplete_stream_error(error_message: &str) -> Option<(String, Str
     Some((provider.trim().to_string(), detail.trim().to_string()))
 }
 
+/// Emit `ThinkingEnd` and/or `TextEnd` events for any open content blocks
+/// before an error or incomplete-stream event is pushed.
+///
+/// This ensures downstream consumers always see a matching end event for
+/// every start event, even when the stream is interrupted by a transport
+/// error, timeout, or protocol-level error.
+///
+/// The function is idempotent: passing `None` for an index means that block
+/// type is not currently open.
+pub fn emit_pending_block_ends(
+    stream: &AssistantMessageEventStream,
+    output: &AssistantMessage,
+    open_thinking_index: Option<usize>,
+    open_text_index: Option<usize>,
+) {
+    if let Some(idx) = open_thinking_index {
+        emit_thinking_end(stream, output, idx);
+    }
+    if let Some(idx) = open_text_index {
+        emit_text_end(stream, output, idx);
+    }
+}
+
+/// Emit end events for multiple open thinking/text blocks (sorted by index).
+///
+/// Used when a protocol supports interleaved blocks (e.g., Anthropic's
+/// interleaved thinking beta) where more than one block of the same type
+/// may be open simultaneously.
+pub fn emit_pending_block_ends_multi(
+    stream: &AssistantMessageEventStream,
+    output: &AssistantMessage,
+    mut open_thinking_indices: Vec<usize>,
+    mut open_text_indices: Vec<usize>,
+) {
+    open_thinking_indices.sort_unstable();
+    open_text_indices.sort_unstable();
+
+    for idx in open_thinking_indices {
+        emit_thinking_end(stream, output, idx);
+    }
+    for idx in open_text_indices {
+        emit_text_end(stream, output, idx);
+    }
+}
+
+fn emit_thinking_end(
+    stream: &AssistantMessageEventStream,
+    output: &AssistantMessage,
+    idx: usize,
+) {
+    let content = output
+        .content
+        .get(idx)
+        .and_then(|b| b.as_thinking())
+        .map(|t| t.thinking.clone())
+        .unwrap_or_default();
+    stream.push(AssistantMessageEvent::ThinkingEnd {
+        content_index: idx,
+        content,
+        partial: output.clone(),
+    });
+}
+
+fn emit_text_end(stream: &AssistantMessageEventStream, output: &AssistantMessage, idx: usize) {
+    let content = output
+        .content
+        .get(idx)
+        .and_then(|b| b.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default();
+    stream.push(AssistantMessageEvent::TextEnd {
+        content_index: idx,
+        content,
+        partial: output.clone(),
+    });
+}
+
 /// Emit a terminal background-task error unless the stream has already ended.
 pub fn emit_background_task_error(
     model: &Model,

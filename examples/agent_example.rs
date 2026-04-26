@@ -297,7 +297,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ec.fetch_add(1, Ordering::SeqCst);
         match event {
             AgentEvent::AgentStart => println!("  [event] AgentStart"),
-            AgentEvent::TurnStart => println!("  [event] TurnStart"),
+            AgentEvent::TurnStart { .. } => println!("  [event] TurnStart"),
             AgentEvent::MessageUpdate {
                 assistant_event, ..
             } => {

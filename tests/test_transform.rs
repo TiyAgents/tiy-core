@@ -503,3 +503,160 @@ fn test_mapper_denormalize_missing() {
     let mapper = ToolCallIdMapper::new(Provider::Anthropic);
     assert!(mapper.denormalize("nonexistent").is_none());
 }
+
+// ============================================================================
+// Same-provider cross-model thinking preservation (改造 4)
+// ============================================================================
+
+#[test]
+fn test_transform_thinking_same_provider_different_model_preserves_structure() {
+    // Same provider (Anthropic), different model — thinking should stay as Thinking
+    // but with signature cleared.
+    let target = make_model(
+        Provider::Anthropic,
+        Api::AnthropicMessages,
+        "claude-opus-5",
+    );
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Anthropic,
+            Api::AnthropicMessages,
+            "claude-sonnet-4",
+            vec![
+                ContentBlock::Thinking(ThinkingContent {
+                    thinking: "Deep thought here".to_string(),
+                    thinking_signature: Some("sig_abc".to_string()),
+                    redacted: false,
+                }),
+                ContentBlock::Text(TextContent::new("Answer")),
+            ],
+            StopReason::Stop,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    assert_eq!(result.len(), 2);
+    if let Message::Assistant(ref a) = result[1] {
+        // Thinking block is preserved as Thinking (not downgraded to Text)
+        assert!(a.content[0].is_thinking(), "expected thinking block");
+        let thinking = a.content[0].as_thinking().unwrap();
+        assert_eq!(thinking.thinking, "Deep thought here");
+        // Signature is cleared for cross-model
+        assert!(
+            thinking.thinking_signature.is_none(),
+            "signature should be cleared for cross-model"
+        );
+        // Text block untouched
+        assert!(a.content[1].is_text());
+    } else {
+        panic!("Expected assistant message");
+    }
+}
+
+#[test]
+fn test_transform_thinking_same_provider_redacted_still_dropped() {
+    // Same provider, different model, redacted thinking — should still be dropped
+    let target = make_model(
+        Provider::Anthropic,
+        Api::AnthropicMessages,
+        "claude-opus-5",
+    );
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Anthropic,
+            Api::AnthropicMessages,
+            "claude-sonnet-4",
+            vec![
+                ContentBlock::Thinking(ThinkingContent {
+                    thinking: String::new(),
+                    thinking_signature: Some("opaque".to_string()),
+                    redacted: true,
+                }),
+                ContentBlock::Text(TextContent::new("Answer")),
+            ],
+            StopReason::Stop,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    if let Message::Assistant(ref a) = result[1] {
+        // Redacted thinking is dropped even for same provider
+        assert_eq!(a.content.len(), 1);
+        assert!(a.content[0].is_text());
+    } else {
+        panic!("Expected assistant message");
+    }
+}
+
+#[test]
+fn test_transform_thinking_same_provider_empty_thinking_dropped() {
+    // Same provider, different model, empty thinking — should be dropped
+    let target = make_model(
+        Provider::Anthropic,
+        Api::AnthropicMessages,
+        "claude-opus-5",
+    );
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Anthropic,
+            Api::AnthropicMessages,
+            "claude-sonnet-4",
+            vec![
+                ContentBlock::Thinking(ThinkingContent::new("   ")),
+                ContentBlock::Text(TextContent::new("Answer")),
+            ],
+            StopReason::Stop,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    if let Message::Assistant(ref a) = result[1] {
+        assert_eq!(a.content.len(), 1);
+        assert!(a.content[0].is_text());
+    } else {
+        panic!("Expected assistant message");
+    }
+}
+
+#[test]
+fn test_transform_thinking_same_provider_tool_call_signature_cleared() {
+    // Same provider, different model — tool call thought_signature should be cleared
+    let target = make_model(
+        Provider::Google,
+        Api::GoogleGenerativeAi,
+        "gemini-3.0-pro",
+    );
+
+    let messages = vec![
+        Message::User(UserMessage::text("Hello")),
+        Message::Assistant(make_assistant_msg(
+            Provider::Google,
+            Api::GoogleGenerativeAi,
+            "gemini-2.5-flash",
+            vec![ContentBlock::ToolCall(ToolCall {
+                id: "call_1".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"q": "test"}),
+                thought_signature: Some("sig_1".to_string()),
+            })],
+            StopReason::ToolUse,
+        )),
+    ];
+
+    let result = transform_messages(&messages, &target, None);
+    if let Message::Assistant(ref a) = result[1] {
+        let tool_call = a.content[0].as_tool_call().expect("expected tool call");
+        assert!(
+            tool_call.thought_signature.is_none(),
+            "thought_signature should be cleared for cross-model same-provider"
+        );
+    } else {
+        panic!("Expected assistant message");
+    }
+}

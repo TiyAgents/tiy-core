@@ -1162,6 +1162,9 @@ async fn run_stream(
                 continue;
             }
             Err(err) => {
+                // Close any open thinking/text blocks before emitting the error
+                let (thinking_indices, text_indices) = find_open_block_indices(&open_blocks, &block_types);
+                super::common::emit_pending_block_ends_multi(&stream, &output, thinking_indices, text_indices);
                 super::common::emit_terminal_error(
                     &mut output,
                     format!("Anthropic stream transport error: {}", err),
@@ -1461,6 +1464,15 @@ async fn run_stream(
                             .unwrap_or("Unknown Anthropic error");
                         output.stop_reason = StopReason::Error;
                         output.error_message = Some(error_msg.to_string());
+                        // Close any open thinking/text blocks before emitting the error
+                        let (thinking_indices, text_indices) =
+                            find_open_block_indices(&open_blocks, &block_types);
+                        super::common::emit_pending_block_ends_multi(
+                            &stream,
+                            &output,
+                            thinking_indices,
+                            text_indices,
+                        );
                         stream.push(AssistantMessageEvent::Error {
                             reason: StopReason::Error,
                             error: output,
@@ -1491,6 +1503,9 @@ async fn run_stream(
             detail = %detail,
             "Anthropic stream ended before protocol completion"
         );
+        // Close any open thinking/text blocks before emitting the incomplete error
+        let (thinking_indices, text_indices) = find_open_block_indices(&open_blocks, &block_types);
+        super::common::emit_pending_block_ends_multi(&stream, &output, thinking_indices, text_indices);
         super::common::emit_incomplete_stream_error(
             &mut output,
             "anthropic",
@@ -1518,6 +1533,24 @@ enum BlockType {
     Thinking,
     RedactedThinking,
     ToolUse,
+}
+
+/// Collect all open thinking and text block indices from the Anthropic
+/// block state. Returns `(thinking_indices, text_indices)`.
+fn find_open_block_indices(
+    open_blocks: &HashSet<usize>,
+    block_types: &[BlockType],
+) -> (Vec<usize>, Vec<usize>) {
+    let mut thinking_indices = Vec::new();
+    let mut text_indices = Vec::new();
+    for &idx in open_blocks {
+        match block_types.get(idx) {
+            Some(BlockType::Thinking) => thinking_indices.push(idx),
+            Some(BlockType::Text) => text_indices.push(idx),
+            _ => {}
+        }
+    }
+    (thinking_indices, text_indices)
 }
 
 fn incomplete_anthropic_stream_detail(

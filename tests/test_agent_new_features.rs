@@ -810,7 +810,7 @@ async fn test_prompt_and_tool_results_emit_message_lifecycle_events() {
     let started_roles_capture = Arc::clone(&started_roles);
     let ended_tool_results_capture = Arc::clone(&ended_tool_results);
     let _unsub = agent.subscribe(move |event| match event {
-        AgentEvent::MessageStart { message } => {
+        AgentEvent::MessageStart { message, .. } => {
             started_roles_capture.lock().push(match message {
                 AgentMessage::User(_) => "user".to_string(),
                 AgentMessage::Assistant(_) => "assistant".to_string(),
@@ -820,6 +820,7 @@ async fn test_prompt_and_tool_results_emit_message_lifecycle_events() {
         }
         AgentEvent::MessageEnd {
             message: AgentMessage::ToolResult(tool_result),
+            ..
         } => {
             ended_tool_results_capture
                 .lock()
@@ -852,11 +853,13 @@ async fn test_assistant_message_start_emits_once_before_message_end() {
     let _unsub = agent.subscribe(move |event| match event {
         AgentEvent::MessageStart {
             message: AgentMessage::Assistant(_),
+            ..
         } => assistant_events_capture
             .lock()
             .push("assistant_start".to_string()),
         AgentEvent::MessageEnd {
             message: AgentMessage::Assistant(_),
+            ..
         } => assistant_events_capture
             .lock()
             .push("assistant_end".to_string()),
@@ -908,7 +911,7 @@ async fn test_standalone_agent_loop_apis_work() {
         event_types.push(match event {
             AgentEvent::AgentStart => "agent_start".to_string(),
             AgentEvent::AgentEnd { .. } => "agent_end".to_string(),
-            AgentEvent::TurnStart => "turn_start".to_string(),
+            AgentEvent::TurnStart { .. } => "turn_start".to_string(),
             AgentEvent::TurnEnd { .. } => "turn_end".to_string(),
             AgentEvent::MessageStart { .. } => "message_start".to_string(),
             AgentEvent::MessageUpdate { .. } => "message_update".to_string(),
@@ -1317,6 +1320,53 @@ async fn test_transform_context_called() {
 }
 
 // ============================================================================
+// Pre-serialization message hook (on_messages)
+// ============================================================================
+
+#[tokio::test]
+async fn test_on_messages_hook_not_set_is_noop() {
+    // When on_messages is not set, build_context should work exactly as before.
+    let response = make_assistant_message("Done");
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+
+    let result = agent.prompt("hello").await;
+    assert!(result.is_ok(), "on_messages=None should not break anything");
+}
+
+#[tokio::test]
+async fn test_on_messages_hook_called_with_model() {
+    let response = make_assistant_message("Done");
+    let provider: ArcProtocol = Arc::new(MockProvider::new(vec![response]));
+
+    let agent = Agent::with_model(make_model());
+    agent.set_provider(provider);
+
+    let hook_called = Arc::new(AtomicUsize::new(0));
+    let hc = hook_called.clone();
+
+    agent.set_on_messages(move |messages, model| {
+        let hc = hc.clone();
+        async move {
+            hc.fetch_add(1, Ordering::SeqCst);
+            // Verify we receive the model info
+            assert!(!model.id.is_empty(), "model should have an id");
+            // Pass messages through unchanged
+            messages
+        }
+    });
+
+    let result = agent.prompt("hello").await;
+    assert!(result.is_ok());
+    assert!(
+        hook_called.load(Ordering::SeqCst) >= 1,
+        "on_messages hook should be called at least once"
+    );
+}
+
+// ============================================================================
 // Dynamic API Key (getApiKey)
 // ============================================================================
 
@@ -1469,6 +1519,7 @@ fn test_agent_config_new_has_defaults() {
 #[test]
 fn test_agent_event_turn_end_serialization() {
     let event = AgentEvent::TurnEnd {
+        turn_index: 0,
         message: AgentMessage::User(UserMessage::text("hello")),
         tool_results: vec![],
     };
@@ -1479,6 +1530,7 @@ fn test_agent_event_turn_end_serialization() {
 #[test]
 fn test_agent_event_tool_execution_update_serialization() {
     let event = AgentEvent::ToolExecutionUpdate {
+        turn_index: 0,
         tool_call_id: "call_1".to_string(),
         tool_name: "my_tool".to_string(),
         args: json!({"x": 1}),

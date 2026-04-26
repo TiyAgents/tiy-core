@@ -1017,6 +1017,13 @@ async fn run_stream(
                 continue;
             }
             Err(err) => {
+                // Close any open thinking/text blocks before emitting the error
+                super::common::emit_pending_block_ends(
+                    &stream,
+                    &output,
+                    current_thinking_index,
+                    current_text_index,
+                );
                 super::common::emit_terminal_error(
                     &mut output,
                     format!("Google stream transport error: {}", err),
@@ -1260,6 +1267,13 @@ async fn run_stream(
             model = %model.id,
             detail = %detail,
             "Google stream ended before protocol completion"
+        );
+        // Close any open thinking/text blocks before emitting the incomplete error
+        super::common::emit_pending_block_ends(
+            &stream,
+            &output,
+            current_thinking_index,
+            current_text_index,
         );
         super::common::emit_incomplete_stream_error(
             &mut output,

@@ -381,6 +381,26 @@ impl Agent {
         self.hooks.write().on_payload = Some(hook);
     }
 
+    /// Set the pre-serialization message hook.
+    ///
+    /// Called after `convert_to_llm` converts `AgentMessage[]` into `Message[]`
+    /// and before the messages are assembled into a `Context`. The hook receives
+    /// the target `Model`, allowing provider-specific structural normalisation
+    /// (e.g., injecting `reasoning_content` for DeepSeek) at the typed-message
+    /// level rather than on raw JSON.
+    pub fn set_on_messages<F, Fut>(&self, handler: F)
+    where
+        F: Fn(Vec<Message>, Model) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<Message>> + Send + 'static,
+    {
+        let handler = Arc::new(move |messages: Vec<Message>, model: Model| {
+            let fut = handler(messages, model);
+            Box::pin(fut)
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Message>> + Send>>
+        });
+        self.hooks.write().on_messages = Some(handler);
+    }
+
     /// Set a custom stream function to replace the default provider streaming.
     ///
     /// Useful for proxy backends, custom routing, etc.
@@ -802,6 +822,15 @@ impl Agent {
             Self::default_convert_to_llm(messages)
         };
 
+        // Step 2.5: on_messages hook (pre-serialization, with Model)
+        let on_messages = self.hooks.read().on_messages.clone();
+        let llm_messages = if let Some(ref handler) = on_messages {
+            let model = self.config.read().model.clone();
+            handler(llm_messages, model).await
+        } else {
+            llm_messages
+        };
+
         // Step 3: Build Context
         let mut context = if system_prompt.is_empty() {
             Context::new()
@@ -912,16 +941,26 @@ impl Agent {
         message: AgentMessage,
         emit_start: bool,
         emit_end: bool,
+        turn_index: usize,
     ) {
         self.state.add_message(message.clone());
         new_messages.push(message.clone());
         if emit_start {
             self.emit(AgentEvent::MessageStart {
+                turn_index,
                 message: message.clone(),
             });
         }
         if emit_end {
-            self.emit(AgentEvent::MessageEnd { message });
+            let response_id = match &message {
+                AgentMessage::Assistant(a) => a.response_id.clone(),
+                _ => None,
+            };
+            self.emit(AgentEvent::MessageEnd {
+                turn_index,
+                response_id,
+                message,
+            });
         }
     }
 
@@ -929,6 +968,7 @@ impl Agent {
         &self,
         new_messages: &mut Vec<AgentMessage>,
         error: &AgentError,
+        turn_index: usize,
     ) -> AgentMessage {
         let model = self.config.read().model.clone();
         let partial = self
@@ -944,7 +984,7 @@ impl Agent {
         let terminal =
             self.build_terminal_assistant_message(&model, partial, stop_reason, error_message);
         let message = AgentMessage::Assistant(terminal);
-        self.append_run_message(new_messages, message.clone(), true, true);
+        self.append_run_message(new_messages, message.clone(), true, true, turn_index);
         message
     }
 
@@ -978,7 +1018,11 @@ impl Agent {
     }
 
     /// Run a single LLM turn: call provider, consume stream, return AssistantMessage.
-    async fn run_turn(&self, provider: &ArcProtocol) -> Result<AssistantMessage, AgentError> {
+    async fn run_turn(
+        &self,
+        provider: &ArcProtocol,
+        turn_index: usize,
+    ) -> Result<AssistantMessage, AgentError> {
         let context = self.build_context().await;
         let model = self.config.read().model.clone();
         let options = self.build_simple_stream_options().await;
@@ -1030,9 +1074,14 @@ impl Agent {
                     for steer_msg in steering {
                         self.state.add_message(steer_msg.clone());
                         self.emit(AgentEvent::MessageStart {
+                            turn_index,
                             message: steer_msg.clone(),
                         });
-                        self.emit(AgentEvent::MessageEnd { message: steer_msg });
+                        self.emit(AgentEvent::MessageEnd {
+                            turn_index,
+                            response_id: None,
+                            message: steer_msg,
+                        });
                     }
                     // Abort current turn and restart
                     return Err(AgentError::Other("Steered".to_string()));
@@ -1045,10 +1094,12 @@ impl Agent {
                     *self.state.stream_message.write() =
                         Some(AgentMessage::Assistant(partial.clone()));
                     self.emit(AgentEvent::MessageStart {
+                        turn_index,
                         message: AgentMessage::Assistant(partial.clone()),
                     });
                     emitted_message_start = true;
                     self.emit(AgentEvent::MessageUpdate {
+                        turn_index,
                         message: AgentMessage::Assistant(partial.clone()),
                         assistant_event: Box::new(event.clone()),
                     });
@@ -1060,6 +1111,7 @@ impl Agent {
                         *self.state.stream_message.write() =
                             Some(AgentMessage::Assistant(partial.clone()));
                         self.emit(AgentEvent::MessageUpdate {
+                            turn_index,
                             message: AgentMessage::Assistant(partial.clone()),
                             assistant_event: Box::new(event.clone()),
                         });
@@ -1068,6 +1120,7 @@ impl Agent {
                 _ => {
                     if let Some(partial) = event.partial_message() {
                         self.emit(AgentEvent::MessageUpdate {
+                            turn_index,
                             message: AgentMessage::Assistant(partial.clone()),
                             assistant_event: Box::new(event.clone()),
                         });
@@ -1091,6 +1144,7 @@ impl Agent {
         *self.state.stream_message.write() = None;
         if !emitted_message_start {
             self.emit(AgentEvent::MessageStart {
+                turn_index,
                 message: AgentMessage::Assistant(result.clone()),
             });
         }
@@ -1107,6 +1161,7 @@ impl Agent {
         &self,
         assistant_msg: &AssistantMessage,
         context: &Context,
+        turn_index: usize,
     ) -> Vec<ToolResultMessage> {
         let tool_calls = assistant_msg.tool_calls();
         if tool_calls.is_empty() {
@@ -1143,6 +1198,7 @@ impl Agent {
                     let tc_clone = (*tc).clone();
 
                     self.emit(AgentEvent::ToolExecutionStart {
+                        turn_index,
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
                         args: tc_args.clone(),
@@ -1155,6 +1211,7 @@ impl Agent {
                         validate_tool_call_or_error(&tc_name, &tc_args, &tool_defs, &security)
                     {
                         self.emit(AgentEvent::ToolExecutionEnd {
+                            turn_index,
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
                             result: tool_result_payload(&result),
@@ -1178,6 +1235,7 @@ impl Agent {
                     .await
                     {
                         self.emit(AgentEvent::ToolExecutionEnd {
+                            turn_index,
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
                             result: tool_result_payload(&result),
@@ -1212,6 +1270,7 @@ impl Agent {
                                 tool_timeout,
                                 abort_flag: abort,
                                 abort_signal,
+                                turn_index,
                             })
                             .await;
 
@@ -1234,6 +1293,7 @@ impl Agent {
 
                 for result in ordered_results.into_iter().flatten() {
                     self.emit(AgentEvent::ToolExecutionEnd {
+                        turn_index,
                         tool_call_id: result.tool_call_id.clone(),
                         tool_name: result.tool_name.clone(),
                         result: tool_result_message_payload(&result),
@@ -1261,6 +1321,7 @@ impl Agent {
                     let tc_clone = (*tc).clone();
 
                     self.emit(AgentEvent::ToolExecutionStart {
+                        turn_index,
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
                         args: tc_args.clone(),
@@ -1275,6 +1336,7 @@ impl Agent {
                         let result_msg =
                             build_tool_result_message(tc_id.clone(), tc_name.clone(), result, true);
                         self.emit(AgentEvent::ToolExecutionEnd {
+                            turn_index,
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
                             result: tool_result_message_payload(&result_msg),
@@ -1299,6 +1361,7 @@ impl Agent {
                         let result_msg =
                             build_tool_result_message(tc_id.clone(), tc_name.clone(), result, true);
                         self.emit(AgentEvent::ToolExecutionEnd {
+                            turn_index,
                             tool_call_id: tc_id.clone(),
                             tool_name: tc_name.clone(),
                             result: tool_result_message_payload(&result_msg),
@@ -1324,6 +1387,7 @@ impl Agent {
                             tool_timeout,
                             abort_flag,
                             abort_signal: abort_signal.clone(),
+                            turn_index,
                         })
                         .await;
 
@@ -1334,6 +1398,7 @@ impl Agent {
                         final_is_error,
                     );
                     self.emit(AgentEvent::ToolExecutionEnd {
+                        turn_index,
                         tool_call_id: tc_id.clone(),
                         tool_name: tc_name.clone(),
                         result: tool_result_message_payload(&result_msg),
@@ -1371,7 +1436,7 @@ impl Agent {
                 Ok(provider) => Some(provider),
                 Err(error) => {
                     let mut messages = Vec::new();
-                    self.append_terminal_error_message(&mut messages, &error);
+                    self.append_terminal_error_message(&mut messages, &error, 0);
                     *self.state.error.write() = Some(error.to_string());
                     return AgentRunOutcome::error(messages, error);
                 }
@@ -1397,7 +1462,7 @@ impl Agent {
                     Some(AgentMessage::Assistant(message))
                         if message.stop_reason == StopReason::Aborted
                 ) {
-                    self.append_terminal_error_message(&mut new_messages, &error);
+                    self.append_terminal_error_message(&mut new_messages, &error, turn_count);
                 }
                 *self.state.error.write() = Some(error.to_string());
                 return AgentRunOutcome::error(new_messages, error);
@@ -1412,20 +1477,22 @@ impl Agent {
                 );
             }
 
-            self.emit(AgentEvent::TurnStart);
+            self.emit(AgentEvent::TurnStart {
+                turn_index: turn_count,
+            });
             let turn_snapshot = self.snapshot();
             let new_messages_len_before_turn = new_messages.len();
 
             // Run one LLM turn
             let dummy_provider: ArcProtocol = Arc::new(DummyProvider);
             let active_provider = provider.as_ref().unwrap_or(&dummy_provider);
-            let assistant_result = self.run_turn(active_provider).await;
+            let assistant_result = self.run_turn(active_provider, turn_count).await;
 
             match assistant_result {
                 Ok(assistant_msg) => {
                     // Add assistant message to state and new_messages
                     let agent_msg = AgentMessage::Assistant(assistant_msg.clone());
-                    self.append_run_message(&mut new_messages, agent_msg.clone(), false, true);
+                    self.append_run_message(&mut new_messages, agent_msg.clone(), false, true, turn_count);
 
                     // Check if there are tool calls
                     if assistant_msg.has_tool_calls()
@@ -1434,21 +1501,25 @@ impl Agent {
                         // Build context snapshot for tool hook use after the assistant message
                         // has been committed to state, matching the visible conversation.
                         let context = self.build_context().await;
-                        let tool_results = self.execute_tool_calls(&assistant_msg, &context).await;
+                        let tool_results = self.execute_tool_calls(&assistant_msg, &context, turn_count).await;
 
                         for result in &tool_results {
                             let result_msg = AgentMessage::ToolResult(result.clone());
                             self.state.add_message(result_msg.clone());
                             new_messages.push(result_msg.clone());
                             self.emit(AgentEvent::MessageStart {
+                                turn_index: turn_count,
                                 message: result_msg.clone(),
                             });
                             self.emit(AgentEvent::MessageEnd {
+                                turn_index: turn_count,
+                                response_id: None,
                                 message: result_msg,
                             });
                         }
 
                         self.emit(AgentEvent::TurnEnd {
+                            turn_index: turn_count,
                             message: agent_msg,
                             tool_results,
                         });
@@ -1456,7 +1527,7 @@ impl Agent {
                         let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.append_run_message(&mut new_messages, msg, true, true);
+                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
                             }
                             incomplete_turn_retries = 0;
                             incomplete_turn_retry_started_at = None;
@@ -1467,7 +1538,7 @@ impl Agent {
                         // Check for follow-up messages
                         let follow_ups = self.poll_follow_up_messages().await;
                         for msg in follow_ups {
-                            self.append_run_message(&mut new_messages, msg, true, true);
+                            self.append_run_message(&mut new_messages, msg, true, true, turn_count);
                         }
 
                         incomplete_turn_retries = 0;
@@ -1477,6 +1548,7 @@ impl Agent {
                     } else {
                         // No tool calls — conversation turn is complete
                         self.emit(AgentEvent::TurnEnd {
+                            turn_index: turn_count,
                             message: agent_msg.clone(),
                             tool_results: Vec::new(),
                         });
@@ -1501,6 +1573,7 @@ impl Agent {
                                     });
 
                                 self.emit(AgentEvent::MessageDiscarded {
+                                    turn_index: turn_count,
                                     message: agent_msg.clone(),
                                     reason: agent_error.to_string(),
                                 });
@@ -1540,7 +1613,7 @@ impl Agent {
                         let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.append_run_message(&mut new_messages, msg, true, true);
+                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
                             }
                             turn_count += 1;
                             continue;
@@ -1550,7 +1623,7 @@ impl Agent {
                         let follow_ups = self.poll_follow_up_messages().await;
                         if !follow_ups.is_empty() {
                             for msg in follow_ups {
-                                self.append_run_message(&mut new_messages, msg, true, true);
+                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
                             }
                             turn_count += 1;
                             continue;
@@ -1568,8 +1641,9 @@ impl Agent {
                 Err(e) => {
                     *self.state.error.write() = Some(e.to_string());
                     let terminal_message =
-                        self.append_terminal_error_message(&mut new_messages, &e);
+                        self.append_terminal_error_message(&mut new_messages, &e, turn_count);
                     self.emit(AgentEvent::TurnEnd {
+                        turn_index: turn_count,
                         message: terminal_message,
                         tool_results: Vec::new(),
                     });
@@ -1624,9 +1698,12 @@ impl Agent {
         self.emit(AgentEvent::AgentStart);
         for message in &messages {
             self.emit(AgentEvent::MessageStart {
+                turn_index: 0,
                 message: message.clone(),
             });
             self.emit(AgentEvent::MessageEnd {
+                turn_index: 0,
+                response_id: None,
                 message: message.clone(),
             });
         }
@@ -1910,6 +1987,7 @@ struct ToolExecCtx<'a> {
     tool_timeout: std::time::Duration,
     abort_flag: Arc<AtomicBool>,
     abort_signal: AbortSignal,
+    turn_index: usize,
 }
 
 /// Execute a tool call and apply the `after_tool_call` hook if set.
@@ -1933,6 +2011,7 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
         tool_timeout,
         abort_flag,
         abort_signal,
+        turn_index,
     } = ctx;
     // Execute the tool
     let tool_result = if let Some(ref exec) = executor {
@@ -1943,6 +2022,7 @@ async fn execute_and_apply_after_hook(ctx: ToolExecCtx<'_>) -> (AgentToolResult,
         let update_tc_args = tc_args.clone();
         let update_cb: ToolUpdateCallback = Arc::new(move |partial: serde_json::Value| {
             subs.emit(&AgentEvent::ToolExecutionUpdate {
+                turn_index,
                 tool_call_id: update_tc_id.clone(),
                 tool_name: update_tc_name.clone(),
                 args: update_tc_args.clone(),

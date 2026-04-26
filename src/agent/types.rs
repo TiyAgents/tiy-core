@@ -174,34 +174,57 @@ pub enum AgentEvent {
     /// Agent finished.
     AgentEnd { messages: Vec<AgentMessage> },
     /// Turn started.
-    TurnStart,
+    TurnStart {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
+    },
     /// Turn finished.
     TurnEnd {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         message: AgentMessage,
         tool_results: Vec<ToolResultMessage>,
     },
     /// Message started.
-    MessageStart { message: AgentMessage },
+    MessageStart {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
+        message: AgentMessage,
+    },
     /// Message updated (streaming).
     MessageUpdate {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         message: AgentMessage,
         assistant_event: Box<AssistantMessageEvent>,
     },
     /// Message finished.
-    MessageEnd { message: AgentMessage },
+    MessageEnd {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
+        /// Provider-assigned response identifier, extracted from `AssistantMessage.response_id`.
+        response_id: Option<String>,
+        message: AgentMessage,
+    },
     /// A previously streamed message was discarded and removed from model state.
     MessageDiscarded {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         message: AgentMessage,
         reason: String,
     },
     /// Tool execution started.
     ToolExecutionStart {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         tool_call_id: String,
         tool_name: String,
         args: serde_json::Value,
     },
     /// Tool execution progress (streaming partial results from tools).
     ToolExecutionUpdate {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         tool_call_id: String,
         tool_name: String,
         args: serde_json::Value,
@@ -209,6 +232,8 @@ pub enum AgentEvent {
     },
     /// Tool execution finished.
     ToolExecutionEnd {
+        /// Zero-based turn index within the current run.
+        turn_index: usize,
         tool_call_id: String,
         tool_name: String,
         result: serde_json::Value,
@@ -414,6 +439,17 @@ pub type GetApiKeyFn = Arc<
         + Sync,
 >;
 
+/// Pre-serialization message hook: `Message[] + Model -> Message[]`.
+///
+/// Called after `convert_to_llm` and before the messages are assembled into
+/// a `Context`. Receives the target `Model` so callers can apply
+/// provider-specific structural normalisation at the typed-message level.
+pub type OnMessagesFn = Arc<
+    dyn Fn(Vec<Message>, Model) -> Pin<Box<dyn std::future::Future<Output = Vec<Message>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Payload inspection / replacement hook (re-exported from crate::types).
 pub use crate::types::OnPayloadFn;
 
@@ -515,6 +551,8 @@ pub struct AgentHooks {
     pub get_api_key: Option<GetApiKeyFn>,
     /// Payload inspection / replacement hook.
     pub on_payload: Option<OnPayloadFn>,
+    /// Pre-serialization message hook (operates on typed `Message` + `Model`).
+    pub on_messages: Option<OnMessagesFn>,
     /// Custom stream function (for proxy backends, etc.).
     pub stream_fn: Option<StreamFn>,
     /// Dynamic steering-message supplier.

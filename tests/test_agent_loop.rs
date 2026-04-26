@@ -362,7 +362,7 @@ async fn test_agent_events_emitted() {
             AgentEvent::AgentEnd { .. } => {
                 aec.fetch_add(1, Ordering::SeqCst);
             }
-            AgentEvent::TurnStart => {
+            AgentEvent::TurnStart { .. } => {
                 tsc.fetch_add(1, Ordering::SeqCst);
             }
             _ => {}
