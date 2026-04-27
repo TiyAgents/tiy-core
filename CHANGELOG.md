@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### :sparkles: New Features
 - [`d42c906`](https://github.com/TiyAgents/tiycore/commit/d42c906dfe05986a2db92bf8c681e5cd9a2d539d) - **protocol**: ✨ add reasoning content normalization for DeepSeek and constrained providers *(commit by [@jorben](https://github.com/jorben))*
 
+## [0.1.21] - 2026-04-26
+### :sparkles: New Features
+- [`3acbefc`](https://github.com/TiyAgents/tiycore/commit/3acbefc4f43748f833bee15e1833a201ca8f0703) - **agent**: ✨ add turn_index to events and pre-serialization message hook *(commit by [@jorben](https://github.com/jorben))*
+
 
 ## [0.1.20] - 2026-04-25
 ### :sparkles: New Features
@@ -233,4 +237,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.18]: https://github.com/TiyAgents/tiycore/compare/0.1.17...0.1.18
 [0.1.19]: https://github.com/TiyAgents/tiycore/compare/0.1.18...0.1.19
 [0.1.20]: https://github.com/TiyAgents/tiycore/compare/0.1.19...0.1.20
+[0.1.21]: https://github.com/TiyAgents/tiycore/compare/0.1.20...0.1.21
 [0.2.0]: https://github.com/TiyAgents/tiycore/compare/0.1.21...0.2.0
+
