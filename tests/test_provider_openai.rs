@@ -935,7 +935,7 @@ async fn test_stream_reasoning_text_field() {
         .expect("thinking block should exist");
     assert_eq!(
         thinking.thinking_signature.as_deref(),
-        Some("reasoning_text")
+        None
     );
 }
 

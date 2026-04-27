@@ -746,24 +746,16 @@ fn convert_assistant_message(
 
     let mut extra_fields = HashMap::new();
 
-    // P0-2: Add thinking as reasoning_content field (when not requires_thinking_as_text)
+    // P0-2: Add thinking as reasoning_content extra field.
+    // Always use \"reasoning_content\" as the key — thinking_signature is
+    // a cryptographic signature for Anthropic model verification; it must
+    // never be used as a JSON field name in OpenAI-compatible requests.
     if !compat.requires_thinking_as_text {
         if let Some(ref thinking) = thinking_text {
-            if let Some(signature) = thinking_blocks
-                .iter()
-                .filter_map(|t| t.thinking_signature.as_ref())
-                .find(|sig| !sig.trim().is_empty())
-            {
-                extra_fields.insert(
-                    signature.clone(),
-                    serde_json::Value::String(thinking.clone()),
-                );
-            } else {
-                extra_fields.insert(
-                    "reasoning_content".to_string(),
-                    serde_json::Value::String(thinking.clone()),
-                );
-            }
+            extra_fields.insert(
+                "reasoning_content".to_string(),
+                serde_json::Value::String(thinking.clone()),
+            );
         }
     }
 
@@ -1427,10 +1419,6 @@ async fn run_stream(
                                     current_block
                                 {
                                     thinking_block.thinking.push_str(content);
-                                    if thinking_block.thinking_signature.is_none() {
-                                        thinking_block.thinking_signature =
-                                            Some(source_field.to_string());
-                                    }
                                     emitted_semantic_event = true;
                                     stream.push(AssistantMessageEvent::ThinkingDelta {
                                         content_index: output.content.len(),
