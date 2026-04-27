@@ -23,6 +23,7 @@ define_openai_delegation_provider! {
         supports_store: false,
         supports_developer_role: false,
         thinking_format: "openai".to_string(),
+        reasoning_content_constrained: true,
         ..Default::default()
     },
 }

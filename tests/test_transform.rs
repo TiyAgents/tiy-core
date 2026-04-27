@@ -512,11 +512,7 @@ fn test_mapper_denormalize_missing() {
 fn test_transform_thinking_same_provider_different_model_preserves_structure() {
     // Same provider (Anthropic), different model — thinking should stay as Thinking
     // but with signature cleared.
-    let target = make_model(
-        Provider::Anthropic,
-        Api::AnthropicMessages,
-        "claude-opus-5",
-    );
+    let target = make_model(Provider::Anthropic, Api::AnthropicMessages, "claude-opus-5");
 
     let messages = vec![
         Message::User(UserMessage::text("Hello")),
@@ -558,11 +554,7 @@ fn test_transform_thinking_same_provider_different_model_preserves_structure() {
 #[test]
 fn test_transform_thinking_same_provider_redacted_still_dropped() {
     // Same provider, different model, redacted thinking — should still be dropped
-    let target = make_model(
-        Provider::Anthropic,
-        Api::AnthropicMessages,
-        "claude-opus-5",
-    );
+    let target = make_model(Provider::Anthropic, Api::AnthropicMessages, "claude-opus-5");
 
     let messages = vec![
         Message::User(UserMessage::text("Hello")),
@@ -595,11 +587,7 @@ fn test_transform_thinking_same_provider_redacted_still_dropped() {
 #[test]
 fn test_transform_thinking_same_provider_empty_thinking_dropped() {
     // Same provider, different model, empty thinking — should be dropped
-    let target = make_model(
-        Provider::Anthropic,
-        Api::AnthropicMessages,
-        "claude-opus-5",
-    );
+    let target = make_model(Provider::Anthropic, Api::AnthropicMessages, "claude-opus-5");
 
     let messages = vec![
         Message::User(UserMessage::text("Hello")),
@@ -627,11 +615,7 @@ fn test_transform_thinking_same_provider_empty_thinking_dropped() {
 #[test]
 fn test_transform_thinking_same_provider_tool_call_signature_cleared() {
     // Same provider, different model — tool call thought_signature should be cleared
-    let target = make_model(
-        Provider::Google,
-        Api::GoogleGenerativeAi,
-        "gemini-3.0-pro",
-    );
+    let target = make_model(Provider::Google, Api::GoogleGenerativeAi, "gemini-3.0-pro");
 
     let messages = vec![
         Message::User(UserMessage::text("Hello")),

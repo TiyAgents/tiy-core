@@ -127,6 +127,8 @@ pub struct CatalogModelMetadata {
     pub modalities: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning_content_constrained: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Value>,
     pub source: String,
@@ -134,6 +136,11 @@ pub struct CatalogModelMetadata {
 }
 
 /// Metadata match result from a store.
+#[allow(dead_code)]
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CatalogModelMatch {
     pub metadata: CatalogModelMetadata,
@@ -277,6 +284,8 @@ pub struct ModelPatch {
     pub capabilities: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content_constrained: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch_source: Option<String>,
 }
@@ -734,6 +743,9 @@ pub fn apply_model_patches(
             if let Some(capabilities) = patch.capabilities.as_ref() {
                 model.capabilities = Some(capabilities.clone());
             }
+            if let Some(reasoning_content_constrained) = patch.reasoning_content_constrained {
+                model.reasoning_content_constrained = reasoning_content_constrained;
+            }
             if let Some(pricing) = patch.pricing.as_ref() {
                 model.pricing = Some(pricing.clone());
             }
@@ -1044,6 +1056,32 @@ fn opencode_go_predefined_models() -> Vec<ProviderExtractedModel> {
         ProviderExtractedModel {
             provider: Provider::OpenCodeGo,
             raw_id: "minimax-m2.7".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "deepseek-v4-pro".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            max_output_tokens: None,
+            max_input_tokens: None,
+            created_at: None,
+            modalities: None,
+            capabilities: None,
+            raw: json!({}),
+        },
+        ProviderExtractedModel {
+            provider: Provider::OpenCodeGo,
+            raw_id: "deepseek-v4-flash".to_string(),
             display_name: None,
             description: None,
             context_window: None,
@@ -2092,6 +2130,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: None,
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2144,6 +2183,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2160,6 +2200,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2223,6 +2264,7 @@ mod tests {
             max_input_tokens: None,
             modalities: Some(vec!["text".to_string(), "image".to_string()]),
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2269,6 +2311,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2285,6 +2328,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2301,6 +2345,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),
@@ -2317,6 +2362,7 @@ mod tests {
             max_input_tokens: None,
             modalities: None,
             capabilities: Some(vec!["tools".to_string()]),
+            reasoning_content_constrained: false,
             pricing: None,
             source: "openrouter".to_string(),
             raw: json!({}),

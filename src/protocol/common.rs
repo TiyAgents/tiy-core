@@ -460,11 +460,7 @@ pub fn emit_pending_block_ends_multi(
     }
 }
 
-fn emit_thinking_end(
-    stream: &AssistantMessageEventStream,
-    output: &AssistantMessage,
-    idx: usize,
-) {
+fn emit_thinking_end(stream: &AssistantMessageEventStream, output: &AssistantMessage, idx: usize) {
     let content = output
         .content
         .get(idx)
@@ -609,6 +605,100 @@ pub async fn send_request_with_retry(
             }
         }
     }
+}
+
+// ============================================================================
+// Reasoning Content Normalization (shared across protocols)
+// ============================================================================
+
+/// Normalize reasoning/thinking content in messages for constrained providers
+/// (e.g., DeepSeek API and third-party providers forwarding DeepSeek models).
+///
+/// * `reasoning_content_constrained` — when true, enables normalization.
+/// * `thinking_enabled` — when true, backfills missing thinking blocks from the
+///   most recent assistant message that has one, and ensures every assistant
+///   message with thinking also has a (possibly empty) text content.
+/// * `thinking_enabled` — when false, strips all thinking blocks.
+///
+/// Normalization is applied when:
+/// - `reasoning_content_constrained` is true (provider `default_compat()` or catalog patches),
+/// - the base_url matches `api.deepseek.com` (custom openai-compatible provider), or
+/// - the model ID contains `deepseek` (defense-in-depth fallback for unregistered models).
+pub(crate) fn normalize_reasoning_content(
+    messages: Vec<Message>,
+    reasoning_content_constrained: bool,
+    thinking_enabled: bool,
+    base_url: &str,
+    model_id: &str,
+) -> Vec<Message> {
+    let constrained = reasoning_content_constrained
+        || base_url.contains("api.deepseek.com")
+        || model_id.to_ascii_lowercase().contains("deepseek");
+
+    if !constrained {
+        return messages;
+    }
+
+    let mut normalized = Vec::with_capacity(messages.len());
+    let mut last_thinking: Option<ThinkingContent> = None;
+
+    for msg in messages {
+        match msg {
+            Message::Assistant(mut assistant) => {
+                if thinking_enabled {
+                    // Track the most recent non-empty thinking block for backfilling
+                    let has_thinking = assistant.content.iter().any(
+                        |b| matches!(b, ContentBlock::Thinking(t) if !t.thinking.trim().is_empty()),
+                    );
+
+                    if has_thinking {
+                        // Store the most recent non-empty thinking block as the backfill
+                        // candidate for subsequent assistant messages that lack reasoning.
+                        for block in &assistant.content {
+                            if let ContentBlock::Thinking(t) = block {
+                                if !t.thinking.trim().is_empty() {
+                                    last_thinking = Some(t.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    } else if let Some(ref thinking) = last_thinking {
+                        // Backfill: insert a copy of the most recent thinking block at the front
+                        assistant
+                            .content
+                            .insert(0, ContentBlock::Thinking(thinking.clone()));
+                    }
+
+                    // Ensure content is not "null": if we have thinking but no text content,
+                    // insert an empty text block for provider compatibility
+                    let has_text = assistant
+                        .content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Text(_)));
+                    let has_any_thinking = assistant
+                        .content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Thinking(_)));
+                    if has_any_thinking && !has_text {
+                        assistant
+                            .content
+                            .push(ContentBlock::Text(TextContent::new("")));
+                    }
+                } else {
+                    // Thinking disabled: remove all thinking blocks
+                    assistant
+                        .content
+                        .retain(|b| !matches!(b, ContentBlock::Thinking(_)));
+                }
+                normalized.push(Message::Assistant(assistant));
+            }
+            other => {
+                normalized.push(other);
+            }
+        }
+    }
+
+    normalized
 }
 
 #[cfg(test)]

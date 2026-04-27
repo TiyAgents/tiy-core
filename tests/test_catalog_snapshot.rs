@@ -30,6 +30,7 @@ fn sample_metadata() -> CatalogModelMetadata {
         max_input_tokens: Some(200_000),
         modalities: Some(vec!["text".to_string(), "image".to_string()]),
         capabilities: Some(vec!["reasoning".to_string(), "tools".to_string()]),
+        reasoning_content_constrained: false,
         pricing: Some(json!({"input": "15.0", "output": "75.0"})),
         source: "openrouter".to_string(),
         raw: json!({"id": "anthropic/claude-opus-4.6"}),

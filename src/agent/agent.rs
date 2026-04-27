@@ -1492,7 +1492,13 @@ impl Agent {
                 Ok(assistant_msg) => {
                     // Add assistant message to state and new_messages
                     let agent_msg = AgentMessage::Assistant(assistant_msg.clone());
-                    self.append_run_message(&mut new_messages, agent_msg.clone(), false, true, turn_count);
+                    self.append_run_message(
+                        &mut new_messages,
+                        agent_msg.clone(),
+                        false,
+                        true,
+                        turn_count,
+                    );
 
                     // Check if there are tool calls
                     if assistant_msg.has_tool_calls()
@@ -1501,7 +1507,9 @@ impl Agent {
                         // Build context snapshot for tool hook use after the assistant message
                         // has been committed to state, matching the visible conversation.
                         let context = self.build_context().await;
-                        let tool_results = self.execute_tool_calls(&assistant_msg, &context, turn_count).await;
+                        let tool_results = self
+                            .execute_tool_calls(&assistant_msg, &context, turn_count)
+                            .await;
 
                         for result in &tool_results {
                             let result_msg = AgentMessage::ToolResult(result.clone());
@@ -1527,7 +1535,13 @@ impl Agent {
                         let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
+                                self.append_run_message(
+                                    &mut new_messages,
+                                    msg,
+                                    true,
+                                    true,
+                                    turn_count,
+                                );
                             }
                             incomplete_turn_retries = 0;
                             incomplete_turn_retry_started_at = None;
@@ -1613,7 +1627,13 @@ impl Agent {
                         let deferred_steering = self.dequeue_deferred_steering_messages().await;
                         if !deferred_steering.is_empty() {
                             for msg in deferred_steering {
-                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
+                                self.append_run_message(
+                                    &mut new_messages,
+                                    msg,
+                                    true,
+                                    true,
+                                    turn_count,
+                                );
                             }
                             turn_count += 1;
                             continue;
@@ -1623,7 +1643,13 @@ impl Agent {
                         let follow_ups = self.poll_follow_up_messages().await;
                         if !follow_ups.is_empty() {
                             for msg in follow_ups {
-                                self.append_run_message(&mut new_messages, msg, true, true, turn_count);
+                                self.append_run_message(
+                                    &mut new_messages,
+                                    msg,
+                                    true,
+                                    true,
+                                    turn_count,
+                                );
                             }
                             turn_count += 1;
                             continue;

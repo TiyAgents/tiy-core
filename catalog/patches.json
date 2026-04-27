@@ -5,6 +5,18 @@
       "alias": "z-ai/glm-5",
       "context_window": 200000,
       "patch_source": "catalog-patch:openrouter:z-ai/glm-5"
+    },
+    {
+      "source": "openrouter",
+      "alias": "deepseek/deepseek-v4-pro",
+      "reasoning_content_constrained": true,
+      "patch_source": "catalog-patch:openrouter:deepseek/deepseek-v4-pro"
+    },
+    {
+      "source": "openrouter",
+      "alias": "deepseek/deepseek-v4-flash",
+      "reasoning_content_constrained": true,
+      "patch_source": "catalog-patch:openrouter:deepseek/deepseek-v4-flash"
     }
   ],
   "injections": [

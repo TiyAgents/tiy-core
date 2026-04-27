@@ -634,12 +634,25 @@ fn convert_messages(
     target_model: &Model,
     cache_control: Option<&AnthropicCacheControl>,
     use_claude_code_names: bool,
+    thinking_enabled: bool,
 ) -> Vec<AnthropicMessage> {
     let mut messages = Vec::new();
     let transformed = transform_messages(
         &context.messages,
         target_model,
         Some(&normalize_anthropic_tool_call_id),
+    );
+
+    // Normalize reasoning content for constrained providers (e.g. DeepSeek via third-party)
+    let default_url = "";
+    let base_url =
+        super::common::resolve_base_url(None, target_model.base_url.as_deref(), default_url);
+    let transformed = super::common::normalize_reasoning_content(
+        transformed,
+        false, // Anthropic protocol has no OpenAI compat — rely on heuristics
+        thinking_enabled,
+        base_url,
+        &target_model.id,
     );
 
     for msg in &transformed {
@@ -947,7 +960,13 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let messages = convert_messages(context, model, cache_control.as_ref(), oauth_token);
+    let messages = convert_messages(
+        context,
+        model,
+        cache_control.as_ref(),
+        oauth_token,
+        thinking.is_some(),
+    );
     let tools = context
         .tools
         .as_ref()
@@ -1163,8 +1182,14 @@ async fn run_stream(
             }
             Err(err) => {
                 // Close any open thinking/text blocks before emitting the error
-                let (thinking_indices, text_indices) = find_open_block_indices(&open_blocks, &block_types);
-                super::common::emit_pending_block_ends_multi(&stream, &output, thinking_indices, text_indices);
+                let (thinking_indices, text_indices) =
+                    find_open_block_indices(&open_blocks, &block_types);
+                super::common::emit_pending_block_ends_multi(
+                    &stream,
+                    &output,
+                    thinking_indices,
+                    text_indices,
+                );
                 super::common::emit_terminal_error(
                     &mut output,
                     format!("Anthropic stream transport error: {}", err),
@@ -1505,7 +1530,12 @@ async fn run_stream(
         );
         // Close any open thinking/text blocks before emitting the incomplete error
         let (thinking_indices, text_indices) = find_open_block_indices(&open_blocks, &block_types);
-        super::common::emit_pending_block_ends_multi(&stream, &output, thinking_indices, text_indices);
+        super::common::emit_pending_block_ends_multi(
+            &stream,
+            &output,
+            thinking_indices,
+            text_indices,
+        );
         super::common::emit_incomplete_stream_error(
             &mut output,
             "anthropic",
@@ -1649,7 +1679,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let messages = convert_messages(&context, &model, None, false);
+        let messages = convert_messages(&context, &model, None, false, false);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
@@ -1674,7 +1704,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let messages = convert_messages(&context, &model, None, false);
+        let messages = convert_messages(&context, &model, None, false, false);
         // Tool results should be merged into a single user message
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");

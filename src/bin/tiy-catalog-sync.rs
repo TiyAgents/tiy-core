@@ -211,6 +211,7 @@ pub(crate) fn extract_openrouter_models(
                 max_input_tokens: None,
                 modalities,
                 capabilities,
+                reasoning_content_constrained: false,
                 pricing: item.get("pricing").cloned(),
                 source: "openrouter".to_string(),
                 raw: item.clone(),
@@ -505,6 +506,7 @@ mod tests {
             modalities: None,
             capabilities: None,
             pricing: None,
+            reasoning_content_constrained: false,
             source: "openrouter".to_string(),
             raw: json!({}),
         }];
@@ -523,6 +525,7 @@ mod tests {
                     max_input_tokens: None,
                     modalities: None,
                     capabilities: None,
+                    reasoning_content_constrained: None,
                     pricing: None,
                     patch_source: Some("catalog-patch:openrouter:z-ai/glm-5".to_string()),
                 }],
@@ -549,6 +552,7 @@ mod tests {
             modalities: None,
             capabilities: None,
             pricing: None,
+            reasoning_content_constrained: false,
             source: "openrouter".to_string(),
             raw: json!({}),
         }];
@@ -564,6 +568,7 @@ mod tests {
             modalities: Some(vec!["text".to_string()]),
             capabilities: Some(vec!["reasoning".to_string()]),
             pricing: None,
+            reasoning_content_constrained: false,
             source: "catalog-injection:deepseek:deepseek-reasoner".to_string(),
             raw: json!({}),
         };
@@ -599,6 +604,7 @@ mod tests {
             modalities: None,
             capabilities: None,
             pricing: None,
+            reasoning_content_constrained: false,
             source: "openrouter".to_string(),
             raw: json!({}),
         }];
@@ -614,6 +620,7 @@ mod tests {
             modalities: None,
             capabilities: None,
             pricing: None,
+            reasoning_content_constrained: false,
             source: "catalog-injection:deepseek:deepseek-reasoner".to_string(),
             raw: json!({}),
         };

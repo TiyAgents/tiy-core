@@ -201,6 +201,12 @@ fn detect_compat(model: &Model) -> OpenAICompletionsCompat {
     let is_grok = matches!(model.provider, Provider::XAI) || base_url.contains("api.x.ai");
     let is_groq = matches!(model.provider, Provider::Groq) || base_url.contains("groq.com");
 
+    // NOTE: `reasoning_content_constrained` is intentionally left false here.
+    // It is set by the provider's `default_compat()` (e.g. DeepSeekProvider) or
+    // injected via catalog patches (patches.json). A model-id heuristic in
+    // common::normalize_reasoning_content serves as a defense-in-depth fallback
+    // for models that are not yet registered in either path.
+
     let reasoning_effort_map = if is_groq && model.id.eq_ignore_ascii_case("qwen/qwen3-32b") {
         HashMap::from([
             ("minimal".to_string(), "default".to_string()),
@@ -233,6 +239,7 @@ fn detect_compat(model: &Model) -> OpenAICompletionsCompat {
         },
         supports_strict_mode: true,
         open_router_routing: None,
+        reasoning_content_constrained: false,
     }
 }
 
@@ -476,13 +483,28 @@ fn has_tool_history(messages: &[Message]) -> bool {
     })
 }
 
-fn convert_messages(context: &Context, model: &Model) -> Vec<OpenAIMessage> {
+fn convert_messages(
+    context: &Context,
+    model: &Model,
+    thinking_enabled: bool,
+) -> Vec<OpenAIMessage> {
     let compat = resolve_compat(model);
     let mut messages = Vec::new();
     let transformed = transform_messages(
         &context.messages,
         model,
         Some(&normalize_openai_tool_call_id),
+    );
+
+    // Normalize reasoning content for constrained providers (e.g. DeepSeek)
+    let default_url = "";
+    let base_url = super::common::resolve_base_url(None, model.base_url.as_deref(), default_url);
+    let transformed = super::common::normalize_reasoning_content(
+        transformed,
+        compat.reasoning_content_constrained,
+        thinking_enabled,
+        base_url,
+        &model.id,
     );
 
     // Add system prompt
@@ -966,7 +988,8 @@ async fn run_stream(
         .usage(Usage::default())
         .build()?;
 
-    let messages = convert_messages(context, model);
+    let thinking_enabled = thinking_options.is_some();
+    let messages = convert_messages(context, model, thinking_enabled);
     let tools = context
         .tools
         .as_ref()
@@ -1708,7 +1731,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let messages = convert_messages(&context, &model);
+        let messages = convert_messages(&context, &model, false);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
@@ -1932,5 +1955,392 @@ mod tests {
 
         assert!(detail.contains("missing finish_reason"));
         assert!(detail.contains("missing [DONE] sentinel"));
+    }
+
+    // ========================================================================
+    // normalize_reasoning_content tests (in super::super::common)
+    // ========================================================================
+
+    /// Build an assistant Message with the given content blocks.
+    fn assistant_msg(content: Vec<ContentBlock>) -> Message {
+        Message::Assistant(AssistantMessage {
+            role: crate::types::Role::Assistant,
+            content,
+            api: Api::OpenAICompletions,
+            provider: Provider::OpenAI,
+            model: "test".to_string(),
+            stop_reason: crate::types::StopReason::Stop,
+            usage: crate::types::Usage::default(),
+            error_message: None,
+            response_id: None,
+            timestamp: 0,
+        })
+    }
+
+    /// Build a simple user Message.
+    fn user_msg(text: &str) -> Message {
+        Message::User(UserMessage::text(text.to_string()))
+    }
+
+    #[test]
+    fn test_normalize_passthrough_for_non_constrained_provider() {
+        let compat = OpenAICompletionsCompat::default(); // reasoning_content_constrained = false
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("thinking...")),
+                ContentBlock::Text(TextContent::new("Hi!")),
+            ]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages.clone(),
+            compat.reasoning_content_constrained,
+            true,
+            "",
+            "gpt-4o",
+        );
+        assert_eq!(
+            result, messages,
+            "should pass through unchanged for non-constrained"
+        );
+    }
+
+    #[test]
+    fn test_normalize_thinking_enabled_backfills_missing_reasoning() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        let thinking_block = ThinkingContent::new("previous thinking");
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(thinking_block.clone()),
+                ContentBlock::Text(TextContent::new("Response 1")),
+            ]),
+            assistant_msg(vec![
+                // No thinking block — should be backfilled
+                ContentBlock::Text(TextContent::new("Response 2")),
+            ]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "",
+            "deepseek-chat",
+        );
+
+        // Second assistant should now have a thinking block
+        if let Message::Assistant(ref msg) = result[2] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(
+                has_thinking,
+                "second assistant should have backfilled thinking"
+            );
+        } else {
+            panic!("expected assistant message");
+        }
+    }
+
+    #[test]
+    fn test_normalize_thinking_enabled_ensures_content_not_null() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        // Assistant with thinking but no text — should get empty text block
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![ContentBlock::Thinking(ThinkingContent::new(
+                "reasoning",
+            ))]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "",
+            "deepseek-chat",
+        );
+
+        if let Message::Assistant(ref msg) = result[1] {
+            let has_text = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text(_)));
+            assert!(has_text, "should have inserted empty text block");
+            // The empty text block should be empty string
+            for block in &msg.content {
+                if let ContentBlock::Text(t) = block {
+                    assert!(t.text.is_empty(), "inserted text block should be empty");
+                }
+            }
+        } else {
+            panic!("expected assistant message");
+        }
+    }
+
+    #[test]
+    fn test_normalize_thinking_disabled_strips_all_thinking() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("should be stripped")),
+                ContentBlock::Text(TextContent::new("Response")),
+            ]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            false,
+            "",
+            "deepseek-chat",
+        );
+
+        if let Message::Assistant(ref msg) = result[1] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(!has_thinking, "all thinking blocks should be stripped");
+            let has_text = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text(_)));
+            assert!(has_text, "text content should be preserved");
+        } else {
+            panic!("expected assistant message");
+        }
+    }
+
+    #[test]
+    fn test_normalize_thinking_enabled_preserves_existing_reasoning() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        let thinking1 = ThinkingContent::new("thinking 1");
+        let thinking2 = ThinkingContent::new("thinking 2");
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(thinking1.clone()),
+                ContentBlock::Text(TextContent::new("Response 1")),
+            ]),
+            assistant_msg(vec![
+                ContentBlock::Thinking(thinking2.clone()),
+                ContentBlock::Text(TextContent::new("Response 2")),
+            ]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "",
+            "deepseek-chat",
+        );
+
+        // Both assistants should still have their original thinking
+        if let Message::Assistant(ref msg) = result[1] {
+            let thinkings: Vec<_> = msg
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Thinking(t) = b {
+                        Some(t.thinking.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                thinkings,
+                vec!["thinking 1".to_string()],
+                "first thinking should be preserved exactly"
+            );
+        }
+        if let Message::Assistant(ref msg) = result[2] {
+            let thinkings: Vec<_> = msg
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Thinking(t) = b {
+                        Some(t.thinking.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                thinkings,
+                vec!["thinking 2".to_string()],
+                "second thinking should be preserved exactly"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_base_url_heuristic_triggers_constrained() {
+        // Even without the compat flag, api.deepseek.com in base_url triggers normalization
+        let compat = OpenAICompletionsCompat::default(); // reasoning_content_constrained = false
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("thinking")),
+                ContentBlock::Text(TextContent::new("Response")),
+            ]),
+            assistant_msg(vec![
+                // No thinking — should be backfilled because base_url matches
+                ContentBlock::Text(TextContent::new("Response 2")),
+            ]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "https://api.deepseek.com/v1",
+            "deepseek-chat",
+        );
+
+        if let Message::Assistant(ref msg) = result[2] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(
+                has_thinking,
+                "should backfill when base_url matches api.deepseek.com"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_non_assistant_messages_passthrough() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        let user = user_msg("Hello");
+        let tool_result = Message::ToolResult(ToolResultMessage {
+            role: crate::types::Role::ToolResult,
+            tool_call_id: "call_1".to_string(),
+            tool_name: "test".to_string(),
+            content: vec![ContentBlock::Text(TextContent::new("result"))],
+            details: None::<serde_json::Value>,
+            is_error: false,
+            timestamp: 0,
+        });
+
+        let messages = vec![user.clone(), tool_result.clone()];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "",
+            "deepseek-chat",
+        );
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], user);
+        // Verify it's still a ToolResult
+        assert!(matches!(result[1], Message::ToolResult(_)));
+    }
+
+    #[test]
+    fn test_normalize_model_id_heuristic_triggers_constrained() {
+        // Simulates third-party provider (e.g. OpenRouter) forwarding a DeepSeek model.
+        // Neither compat flag nor base_url match — only model ID contains "deepseek".
+        let compat = OpenAICompletionsCompat::default(); // reasoning_content_constrained = false
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("thinking")),
+                ContentBlock::Text(TextContent::new("Response")),
+            ]),
+            assistant_msg(vec![
+                // No thinking — should be backfilled because model ID matches
+                ContentBlock::Text(TextContent::new("Response 2")),
+            ]),
+        ];
+
+        // base_url is non-deepseek (e.g. OpenRouter), but model_id contains "deepseek"
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "https://openrouter.ai/api/v1",
+            "deepseek/deepseek-chat",
+        );
+
+        if let Message::Assistant(ref msg) = result[2] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(
+                has_thinking,
+                "should backfill when model ID contains 'deepseek' even through third-party provider"
+            );
+        } else {
+            panic!("expected assistant message");
+        }
+    }
+
+    #[test]
+    fn test_normalize_model_id_case_insensitive() {
+        // Model ID detection should be case-insensitive.
+        let compat = OpenAICompletionsCompat::default();
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("thinking")),
+                ContentBlock::Text(TextContent::new("Response")),
+            ]),
+            assistant_msg(vec![ContentBlock::Text(TextContent::new("Response 2"))]),
+        ];
+
+        // Uppercase "DeepSeek" should still trigger
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "https://openrouter.ai/api/v1",
+            "openrouter/DeepSeek-R1",
+        );
+
+        if let Message::Assistant(ref msg) = result[2] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(
+                has_thinking,
+                "should backfill for case-insensitive model ID match"
+            );
+        }
     }
 }

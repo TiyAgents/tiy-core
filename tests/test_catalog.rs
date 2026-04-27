@@ -39,6 +39,7 @@ async fn test_list_models_with_openai_enrichment() {
         max_input_tokens: Some(1_000_000),
         modalities: Some(vec!["text".to_string(), "image".to_string()]),
         capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+        reasoning_content_constrained: false,
         pricing: Some(json!({"input": "2.0", "output": "8.0"})),
         source: "openrouter".to_string(),
         raw: json!({}),
@@ -199,8 +200,8 @@ async fn test_list_models_for_opencode_go_uses_predefined_list() {
     .await
     .expect("opencode go list should succeed");
 
-    // Should return 5 predefined models
-    assert_eq!(result.models.len(), 5);
+    // Should return 7 predefined models
+    assert_eq!(result.models.len(), 7);
 
     // Verify all expected model IDs are present
     let model_ids: Vec<&str> = result.models.iter().map(|m| m.raw_id.as_str()).collect();
@@ -209,6 +210,8 @@ async fn test_list_models_for_opencode_go_uses_predefined_list() {
     assert!(model_ids.contains(&"mimo-v2.5-pro"));
     assert!(model_ids.contains(&"mimo-v2.5"));
     assert!(model_ids.contains(&"minimax-m2.7"));
+    assert!(model_ids.contains(&"deepseek-v4-pro"));
+    assert!(model_ids.contains(&"deepseek-v4-flash"));
 
     // Verify no metadata is pre-filled (enriched by upstream catalog)
     for model in &result.models {
@@ -440,6 +443,7 @@ fn test_enrich_manual_model_uses_snapshot_metadata() {
         max_input_tokens: Some(1_000_000),
         modalities: Some(vec!["text".to_string(), "image".to_string()]),
         capabilities: Some(vec!["tools".to_string(), "reasoning".to_string()]),
+        reasoning_content_constrained: false,
         pricing: Some(json!({"input": "2.0", "output": "8.0"})),
         source: "openrouter".to_string(),
         raw: json!({}),

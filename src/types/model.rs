@@ -356,6 +356,12 @@ pub struct OpenAICompletionsCompat {
     /// OpenRouter routing preferences (e.g., `{"only": ["anthropic"]}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_router_routing: Option<serde_json::Value>,
+
+    /// When true, this provider requires every assistant message to carry
+    /// reasoning/thinking content when thinking is enabled, and content must
+    /// not be null.  Currently DeepSeek API enforces this constraint.
+    #[serde(default)]
+    pub reasoning_content_constrained: bool,
 }
 
 fn default_true() -> bool {
@@ -381,6 +387,7 @@ impl Default for OpenAICompletionsCompat {
             thinking_format: "openai".to_string(),
             supports_strict_mode: true,
             open_router_routing: None,
+            reasoning_content_constrained: false,
         }
     }
 }
