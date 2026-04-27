@@ -1398,7 +1398,7 @@ async fn run_stream(
                                     .map(|content| (content, "reasoning_text"))
                             });
 
-                        if let Some((content, source_field)) = reasoning {
+                        if let Some((content, _source_field)) = reasoning {
                             if !content.is_empty() {
                                 if current_block.as_ref().is_none_or(|b| !b.is_thinking()) {
                                     finish_current_block(
