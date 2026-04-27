@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-27
+### :sparkles: New Features
+- [`d42c906`](https://github.com/TiyAgents/tiycore/commit/d42c906dfe05986a2db92bf8c681e5cd9a2d539d) - **protocol**: ✨ add reasoning content normalization for DeepSeek and constrained providers *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.1.20] - 2026-04-25
 ### :sparkles: New Features
 - [`5ee1b71`](https://github.com/TiyAgents/tiycore/commit/5ee1b71d6e6abce72e09122e7b20a36d80a4023f) - **provider/zenmux**: ✨ add deepseek model routing to OpenAI-compatible protocol *(commit by [@jorben](https://github.com/jorben))*
@@ -228,3 +233,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.18]: https://github.com/TiyAgents/tiycore/compare/0.1.17...0.1.18
 [0.1.19]: https://github.com/TiyAgents/tiycore/compare/0.1.18...0.1.19
 [0.1.20]: https://github.com/TiyAgents/tiycore/compare/0.1.19...0.1.20
+[0.2.0]: https://github.com/TiyAgents/tiycore/compare/0.1.21...0.2.0
