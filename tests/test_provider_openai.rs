@@ -933,10 +933,7 @@ async fn test_stream_reasoning_text_field() {
         .iter()
         .find_map(|block| block.as_thinking())
         .expect("thinking block should exist");
-    assert_eq!(
-        thinking.thinking_signature.as_deref(),
-        None
-    );
+    assert_eq!(thinking.thinking_signature.as_deref(), None);
 }
 
 #[tokio::test]

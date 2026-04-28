@@ -238,6 +238,8 @@ pub struct UnifiedModelInfo {
     pub match_confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub metadata_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning_content_constrained: bool,
     pub raw: Value,
 }
 
@@ -824,6 +826,9 @@ fn enrich_model(
         pricing: metadata.and_then(|m| m.pricing.clone()),
         match_confidence: metadata_match.as_ref().map(|m| m.confidence),
         metadata_sources: metadata.map(|m| vec![m.source.clone()]).unwrap_or_default(),
+        reasoning_content_constrained: metadata
+            .map(|m| m.reasoning_content_constrained)
+            .unwrap_or(false),
         raw: model.raw,
     };
     unified
