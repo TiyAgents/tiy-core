@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-27
+### :bug: Bug Fixes
+- [`7ca9761`](https://github.com/TiyAgents/tiycore/commit/7ca9761cda88c6739943fc61e6d43ba1ad482f18) - **protocol**: 🐛 always use reasoning_content for thinking text *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.0] - 2026-04-27
 ### :sparkles: New Features
 - [`d42c906`](https://github.com/TiyAgents/tiycore/commit/d42c906dfe05986a2db92bf8c681e5cd9a2d539d) - **protocol**: ✨ add reasoning content normalization for DeepSeek and constrained providers *(commit by [@jorben](https://github.com/jorben))*
@@ -240,3 +245,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.21]: https://github.com/TiyAgents/tiycore/compare/0.1.20...0.1.21
 [0.2.0]: https://github.com/TiyAgents/tiycore/compare/0.1.21...0.2.0
 
+[0.2.1]: https://github.com/TiyAgents/tiycore/compare/0.2.0...0.2.1
