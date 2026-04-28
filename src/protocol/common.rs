@@ -621,19 +621,15 @@ pub async fn send_request_with_retry(
 /// * `thinking_enabled` — when false, strips all thinking blocks.
 ///
 /// Normalization is applied when:
-/// - `reasoning_content_constrained` is true (provider `default_compat()` or catalog patches),
-/// - the base_url matches `api.deepseek.com` (custom openai-compatible provider), or
-/// - the model ID contains `deepseek` (defense-in-depth fallback for unregistered models).
+/// - `reasoning_content_constrained` is true (provider `default_compat()` or catalog patches), or
+/// - the base_url matches `api.deepseek.com` (custom openai-compatible provider).
 pub(crate) fn normalize_reasoning_content(
     messages: Vec<Message>,
     reasoning_content_constrained: bool,
     thinking_enabled: bool,
     base_url: &str,
-    model_id: &str,
 ) -> Vec<Message> {
-    let constrained = reasoning_content_constrained
-        || base_url.contains("api.deepseek.com")
-        || model_id.to_ascii_lowercase().contains("deepseek");
+    let constrained = reasoning_content_constrained || base_url.contains("api.deepseek.com");
 
     if !constrained {
         return messages;

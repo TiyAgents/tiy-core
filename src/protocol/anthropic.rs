@@ -649,10 +649,9 @@ fn convert_messages(
         super::common::resolve_base_url(None, target_model.base_url.as_deref(), default_url);
     let transformed = super::common::normalize_reasoning_content(
         transformed,
-        false, // Anthropic protocol has no OpenAI compat — rely on heuristics
+        false, // Anthropic protocol has no OpenAI compat — rely on explicit constraints only
         thinking_enabled,
         base_url,
-        &target_model.id,
     );
 
     for msg in &transformed {

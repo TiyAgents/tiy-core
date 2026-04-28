@@ -203,9 +203,7 @@ fn detect_compat(model: &Model) -> OpenAICompletionsCompat {
 
     // NOTE: `reasoning_content_constrained` is intentionally left false here.
     // It is set by the provider's `default_compat()` (e.g. DeepSeekProvider) or
-    // injected via catalog patches (patches.json). A model-id heuristic in
-    // common::normalize_reasoning_content serves as a defense-in-depth fallback
-    // for models that are not yet registered in either path.
+    // injected via catalog patches (patches.json).
 
     let reasoning_effort_map = if is_groq && model.id.eq_ignore_ascii_case("qwen/qwen3-32b") {
         HashMap::from([
@@ -504,7 +502,6 @@ fn convert_messages(
         compat.reasoning_content_constrained,
         thinking_enabled,
         base_url,
-        &model.id,
     );
 
     // Add system prompt
@@ -1986,7 +1983,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "",
-            "gpt-4o",
         );
         assert_eq!(
             result, messages,
@@ -2020,7 +2016,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "",
-            "deepseek-chat",
         );
 
         // Second assistant should now have a thinking block
@@ -2058,7 +2053,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "",
-            "deepseek-chat",
         );
 
         if let Message::Assistant(ref msg) = result[1] {
@@ -2098,7 +2092,6 @@ mod tests {
             compat.reasoning_content_constrained,
             false,
             "",
-            "deepseek-chat",
         );
 
         if let Message::Assistant(ref msg) = result[1] {
@@ -2144,7 +2137,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "",
-            "deepseek-chat",
         );
 
         // Both assistants should still have their original thinking
@@ -2208,7 +2200,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "https://api.deepseek.com/v1",
-            "deepseek-chat",
         );
 
         if let Message::Assistant(ref msg) = result[2] {
@@ -2248,7 +2239,6 @@ mod tests {
             compat.reasoning_content_constrained,
             true,
             "",
-            "deepseek-chat",
         );
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], user);
@@ -2257,50 +2247,10 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_model_id_heuristic_triggers_constrained() {
-        // Simulates third-party provider (e.g. OpenRouter) forwarding a DeepSeek model.
-        // Neither compat flag nor base_url match — only model ID contains "deepseek".
+    fn test_normalize_model_id_alone_does_not_trigger_constrained() {
+        // Third-party DeepSeek model IDs should not trigger normalization by name alone.
+        // Callers must use the compat flag/catalog patch or a DeepSeek base URL.
         let compat = OpenAICompletionsCompat::default(); // reasoning_content_constrained = false
-
-        let messages = vec![
-            user_msg("Hello"),
-            assistant_msg(vec![
-                ContentBlock::Thinking(ThinkingContent::new("thinking")),
-                ContentBlock::Text(TextContent::new("Response")),
-            ]),
-            assistant_msg(vec![
-                // No thinking — should be backfilled because model ID matches
-                ContentBlock::Text(TextContent::new("Response 2")),
-            ]),
-        ];
-
-        // base_url is non-deepseek (e.g. OpenRouter), but model_id contains "deepseek"
-        let result = super::super::common::normalize_reasoning_content(
-            messages,
-            compat.reasoning_content_constrained,
-            true,
-            "https://openrouter.ai/api/v1",
-            "deepseek/deepseek-chat",
-        );
-
-        if let Message::Assistant(ref msg) = result[2] {
-            let has_thinking = msg
-                .content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::Thinking(_)));
-            assert!(
-                has_thinking,
-                "should backfill when model ID contains 'deepseek' even through third-party provider"
-            );
-        } else {
-            panic!("expected assistant message");
-        }
-    }
-
-    #[test]
-    fn test_normalize_model_id_case_insensitive() {
-        // Model ID detection should be case-insensitive.
-        let compat = OpenAICompletionsCompat::default();
 
         let messages = vec![
             user_msg("Hello"),
@@ -2311,13 +2261,48 @@ mod tests {
             assistant_msg(vec![ContentBlock::Text(TextContent::new("Response 2"))]),
         ];
 
-        // Uppercase "DeepSeek" should still trigger
         let result = super::super::common::normalize_reasoning_content(
             messages,
             compat.reasoning_content_constrained,
             true,
             "https://openrouter.ai/api/v1",
-            "openrouter/DeepSeek-R1",
+        );
+
+        if let Message::Assistant(ref msg) = result[2] {
+            let has_thinking = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking(_)));
+            assert!(
+                !has_thinking,
+                "should not backfill based on a DeepSeek-looking model ID alone"
+            );
+        } else {
+            panic!("expected assistant message");
+        }
+    }
+
+    #[test]
+    fn test_normalize_explicit_constraint_triggers_for_third_party_provider() {
+        let compat = OpenAICompletionsCompat {
+            reasoning_content_constrained: true,
+            ..Default::default()
+        };
+
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg(vec![
+                ContentBlock::Thinking(ThinkingContent::new("thinking")),
+                ContentBlock::Text(TextContent::new("Response")),
+            ]),
+            assistant_msg(vec![ContentBlock::Text(TextContent::new("Response 2"))]),
+        ];
+
+        let result = super::super::common::normalize_reasoning_content(
+            messages,
+            compat.reasoning_content_constrained,
+            true,
+            "https://openrouter.ai/api/v1",
         );
 
         if let Message::Assistant(ref msg) = result[2] {
@@ -2327,8 +2312,10 @@ mod tests {
                 .any(|b| matches!(b, ContentBlock::Thinking(_)));
             assert!(
                 has_thinking,
-                "should backfill for case-insensitive model ID match"
+                "should backfill when explicit reasoning_content_constrained is true"
             );
+        } else {
+            panic!("expected assistant message");
         }
     }
 }
