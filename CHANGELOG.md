@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-28
+### :sparkles: New Features
+- [`bd0565d`](https://github.com/TiyAgents/tiycore/commit/bd0565d62bef8b66a0cd6efd2296eae506af80a8) - **catalog**: ✨ add reasoning_content_constrained field to UnifiedModelInfo *(commit by [@jorben](https://github.com/jorben))*
+
+### :recycle: Refactors
+- [`a8ccc84`](https://github.com/TiyAgents/tiycore/commit/a8ccc847f896d6b9002ae9b115c0b549901fa73d) - **protocol**: ♻️ remove model-id heuristic from reasoning content normalization *(commit by [@jorben](https://github.com/jorben))*
+
+
 ## [0.2.0] - 2026-04-27
 ### :sparkles: New Features
 - [`d42c906`](https://github.com/TiyAgents/tiycore/commit/d42c906dfe05986a2db92bf8c681e5cd9a2d539d) - **protocol**: ✨ add reasoning content normalization for DeepSeek and constrained providers *(commit by [@jorben](https://github.com/jorben))*
@@ -240,3 +248,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.21]: https://github.com/TiyAgents/tiycore/compare/0.1.20...0.1.21
 [0.2.0]: https://github.com/TiyAgents/tiycore/compare/0.1.21...0.2.0
 
+[0.2.2]: https://github.com/TiyAgents/tiycore/compare/0.2.1...0.2.2
