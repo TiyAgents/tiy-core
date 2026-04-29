@@ -1217,8 +1217,8 @@ async fn run_stream(
                 .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
-            if line.starts_with("event: ") {
-                current_event_type = line[7..].to_string();
+            if let Some(stripped) = line.strip_prefix("event: ") {
+                current_event_type = stripped.to_string();
                 continue;
             }
 

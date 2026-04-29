@@ -3,10 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Thinking/Reasoning level for models that support it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingLevel {
     /// No thinking.
+    #[default]
     Off,
     /// Minimal thinking.
     Minimal,
@@ -18,12 +19,6 @@ pub enum ThinkingLevel {
     High,
     /// Extra high thinking (OpenAI GPT-5, Anthropic Opus 4.7+).
     XHigh,
-}
-
-impl Default for ThinkingLevel {
-    fn default() -> Self {
-        ThinkingLevel::Off
-    }
 }
 
 impl std::fmt::Display for ThinkingLevel {
@@ -58,19 +53,14 @@ impl From<&str> for ThinkingLevel {
 /// Controls whether thinking/reasoning content is included in the API response.
 /// When a model requires explicit display opt-in (e.g., Opus 4.7 defaults to omitting
 /// thinking content), this enum specifies the desired behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingDisplay {
     /// Thinking content is summarized and visible in the response.
+    #[default]
     Summarized,
     /// Thinking content is omitted from the response.
     Omitted,
-}
-
-impl Default for ThinkingDisplay {
-    fn default() -> Self {
-        ThinkingDisplay::Summarized
-    }
 }
 
 impl std::fmt::Display for ThinkingDisplay {

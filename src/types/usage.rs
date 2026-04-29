@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Token usage information.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct Usage {
     /// Number of input tokens.
     pub input: u64,
@@ -17,19 +17,6 @@ pub struct Usage {
     pub total_tokens: u64,
     /// Cost breakdown.
     pub cost: UsageCost,
-}
-
-impl Default for Usage {
-    fn default() -> Self {
-        Self {
-            input: 0,
-            output: 0,
-            cache_read: 0,
-            cache_write: 0,
-            total_tokens: 0,
-            cost: UsageCost::default(),
-        }
-    }
 }
 
 impl Usage {
@@ -71,7 +58,7 @@ impl Usage {
 }
 
 /// Cost breakdown for usage.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct UsageCost {
     /// Cost for input tokens.
     pub input: f64,
@@ -83,18 +70,6 @@ pub struct UsageCost {
     pub cache_write: f64,
     /// Total cost.
     pub total: f64,
-}
-
-impl Default for UsageCost {
-    fn default() -> Self {
-        Self {
-            input: 0.0,
-            output: 0.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-            total: 0.0,
-        }
-    }
 }
 
 impl UsageCost {

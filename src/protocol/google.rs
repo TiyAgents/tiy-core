@@ -345,9 +345,7 @@ fn build_thinking_config(
     level: Option<ThinkingLevel>,
     thinking_budget_tokens: Option<u32>,
 ) -> Option<GoogleThinkingConfig> {
-    let Some(level) = level else {
-        return None;
-    };
+    let level = level?;
 
     if !model.reasoning {
         return None;

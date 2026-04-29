@@ -693,7 +693,7 @@ impl Agent {
         self.run_abort_signal
             .read()
             .clone()
-            .unwrap_or_else(AbortSignal::new)
+            .unwrap_or_default()
     }
 
     fn dequeue_local_messages(
@@ -1002,7 +1002,7 @@ impl Agent {
                 .provider(model.provider.clone())
                 .model(model.id.clone())
                 .usage(Usage::default())
-                .stop_reason(stop_reason.clone())
+                .stop_reason(stop_reason)
                 .build()
                 .expect("terminal assistant message should be buildable")
         });

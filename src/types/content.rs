@@ -3,22 +3,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Text content block.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TextContent {
     /// The actual text.
     pub text: String,
     /// Optional signature for OpenAI responses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_signature: Option<String>,
-}
-
-impl Default for TextContent {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            text_signature: None,
-        }
-    }
 }
 
 impl TextContent {
@@ -32,7 +23,7 @@ impl TextContent {
 }
 
 /// Thinking content block (Extended Thinking).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ThinkingContent {
     /// The thinking/reasoning content.
     pub thinking: String,
@@ -42,16 +33,6 @@ pub struct ThinkingContent {
     /// Whether the thinking was redacted by safety filters.
     #[serde(default)]
     pub redacted: bool,
-}
-
-impl Default for ThinkingContent {
-    fn default() -> Self {
-        Self {
-            thinking: String::new(),
-            thinking_signature: None,
-            redacted: false,
-        }
-    }
 }
 
 impl ThinkingContent {

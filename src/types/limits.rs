@@ -27,7 +27,7 @@ use std::time::Duration;
 ///
 /// Designed to be loaded from config files (JSON/TOML) or constructed programmatically.
 /// All sub-configs implement `Default` with conservative, safe values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     /// HTTP client and SSE stream limits (used by providers).
     #[serde(default)]
@@ -48,18 +48,6 @@ pub struct SecurityConfig {
     /// Base URL validation policy.
     #[serde(default)]
     pub url: UrlPolicy,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            http: HttpLimits::default(),
-            agent: AgentLimits::default(),
-            stream: StreamLimits::default(),
-            headers: HeaderPolicy::default(),
-            url: UrlPolicy::default(),
-        }
-    }
 }
 
 impl SecurityConfig {
@@ -444,7 +432,7 @@ impl UrlPolicy {
         // Check HTTPS requirement
         if self.require_https && scheme == "http" {
             // Allow HTTP for localhost/loopback (local development)
-            let is_local = parsed.host_str().is_some_and(|h| is_local_host(h));
+            let is_local = parsed.host_str().is_some_and(is_local_host);
             // Allow HTTP for explicitly exempted hosts (enterprise intranet)
             let is_exempt = parsed.host_str().is_some_and(|h| self.is_https_exempt(h));
             if !is_local && !is_exempt {

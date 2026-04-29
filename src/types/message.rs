@@ -4,22 +4,17 @@ use crate::types::{ContentBlock, UserContent};
 use serde::{Deserialize, Serialize};
 
 /// Role of a message participant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// User message.
+    #[default]
     User,
     /// Assistant/AI message.
     Assistant,
     /// Tool result message.
     #[serde(rename = "toolResult")]
     ToolResult,
-}
-
-impl Default for Role {
-    fn default() -> Self {
-        Role::User
-    }
 }
 
 impl std::fmt::Display for Role {
@@ -33,10 +28,11 @@ impl std::fmt::Display for Role {
 }
 
 /// Stop reason for assistant messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StopReason {
     /// Normal completion.
+    #[default]
     Stop,
     /// Maximum token limit reached.
     Length,
@@ -47,12 +43,6 @@ pub enum StopReason {
     Error,
     /// Request was aborted.
     Aborted,
-}
-
-impl Default for StopReason {
-    fn default() -> Self {
-        StopReason::Stop
-    }
 }
 
 impl std::fmt::Display for StopReason {

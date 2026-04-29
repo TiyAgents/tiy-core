@@ -105,10 +105,7 @@ where
     /// Get the final result with a timeout.
     /// Returns `Some(result)` on success, `None` if the timeout expires.
     pub async fn try_result(&self, timeout: std::time::Duration) -> Option<R> {
-        match tokio::time::timeout(timeout, self.result()).await {
-            Ok(r) => Some(r),
-            Err(_) => None,
-        }
+        tokio::time::timeout(timeout, self.result()).await.ok()
     }
 }
 

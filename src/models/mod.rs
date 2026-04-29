@@ -32,7 +32,7 @@ impl ModelRegistry {
 
         self.models
             .entry(provider_key)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(model_key, model);
     }
 

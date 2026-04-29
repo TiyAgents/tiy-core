@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Conversation context.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Context {
     /// System prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,16 +19,6 @@ pub struct Context {
     /// Available tools.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self {
-            system_prompt: None,
-            messages: Vec::new(),
-            tools: None,
-        }
-    }
 }
 
 impl Context {
@@ -251,7 +241,7 @@ pub type OnPayloadFn = Arc<
 >;
 
 /// Stream options.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct StreamOptions {
     /// Temperature for sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -361,29 +351,6 @@ impl PartialEq for StreamOptions {
     }
 }
 
-impl Default for StreamOptions {
-    fn default() -> Self {
-        Self {
-            temperature: None,
-            max_tokens: None,
-            api_key: None,
-            base_url: None,
-            headers: None,
-            session_id: None,
-            cache_retention: None,
-            security: None,
-            on_payload: None,
-            transport: None,
-            metadata: None,
-            tool_choice: None,
-            service_tier: None,
-            max_retries: None,
-            max_retry_delay_ms: None,
-            cancel_token: None,
-        }
-    }
-}
-
 impl StreamOptions {
     /// Get the effective security config (provided or default).
     pub fn security_config(&self) -> std::borrow::Cow<'_, crate::types::SecurityConfig> {
@@ -395,7 +362,7 @@ impl StreamOptions {
 }
 
 /// Simple stream options with thinking support.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SimpleStreamOptions {
     /// Base stream options.
     #[serde(flatten)]
@@ -421,17 +388,6 @@ impl std::fmt::Debug for SimpleStreamOptions {
             .field("thinking_budget_tokens", &self.thinking_budget_tokens)
             .field("thinking_display", &self.thinking_display)
             .finish()
-    }
-}
-
-impl Default for SimpleStreamOptions {
-    fn default() -> Self {
-        Self {
-            base: StreamOptions::default(),
-            reasoning: None,
-            thinking_budget_tokens: None,
-            thinking_display: None,
-        }
     }
 }
 

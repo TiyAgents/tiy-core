@@ -971,8 +971,8 @@ async fn run_stream(
                 .to_string();
             line_buffer = line_buffer[newline_pos + 1..].to_string();
 
-            if line.starts_with("event: ") {
-                current_event_type = line[7..].to_string();
+            if let Some(stripped) = line.strip_prefix("event: ") {
+                current_event_type = stripped.to_string();
                 continue;
             }
 
@@ -1179,7 +1179,7 @@ async fn run_stream(
                         let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
                         // Auto-register if output_item.added was never received for this index
-                        if !item_content_map.contains_key(&output_index) {
+                        if let std::collections::hash_map::Entry::Vacant(e) = item_content_map.entry(output_index) {
                             let call_id = val
                                 .get("call_id")
                                 .or_else(|| val.get("item_id"))
@@ -1205,16 +1205,13 @@ async fn run_stream(
                             )));
                             partial_tool_args.insert(output_index, String::new());
                             open_output_items.insert(output_index);
-                            item_content_map.insert(
-                                output_index,
-                                ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::FunctionCall,
-                                    item_id,
-                                    call_id: Some(call_id),
-                                    name: Some(name),
-                                },
-                            );
+                            e.insert(ItemInfo {
+                                content_idx,
+                                item_type: ItemType::FunctionCall,
+                                item_id,
+                                call_id: Some(call_id),
+                                name: Some(name),
+                            });
                             emitted_semantic_event = true;
                             stream.push(AssistantMessageEvent::ToolCallStart {
                                 content_index: content_idx,
@@ -1255,7 +1252,7 @@ async fn run_stream(
                             .and_then(|args| args.as_str())
                             .unwrap_or("");
 
-                        if !item_content_map.contains_key(&output_index) {
+                        if let std::collections::hash_map::Entry::Vacant(e) = item_content_map.entry(output_index) {
                             let call_id = val
                                 .get("call_id")
                                 .and_then(|c| c.as_str())
@@ -1280,16 +1277,13 @@ async fn run_stream(
                             )));
                             partial_tool_args.insert(output_index, String::new());
                             open_output_items.insert(output_index);
-                            item_content_map.insert(
-                                output_index,
-                                ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::FunctionCall,
-                                    item_id,
-                                    call_id: Some(call_id),
-                                    name: Some(name),
-                                },
-                            );
+                            e.insert(ItemInfo {
+                                content_idx,
+                                item_type: ItemType::FunctionCall,
+                                item_id,
+                                call_id: Some(call_id),
+                                name: Some(name),
+                            });
                             emitted_semantic_event = true;
                             stream.push(AssistantMessageEvent::ToolCallStart {
                                 content_index: content_idx,
@@ -1333,22 +1327,19 @@ async fn run_stream(
                         let delta = val.get("delta").and_then(|d| d.as_str()).unwrap_or("");
 
                         // Auto-register if output_item.added was never received for this index
-                        if !item_content_map.contains_key(&output_index) {
+                        if let std::collections::hash_map::Entry::Vacant(e) = item_content_map.entry(output_index) {
                             let content_idx = output.content.len();
                             output
                                 .content
                                 .push(ContentBlock::Thinking(ThinkingContent::new("")));
                             open_output_items.insert(output_index);
-                            item_content_map.insert(
-                                output_index,
-                                ItemInfo {
-                                    content_idx,
-                                    item_type: ItemType::Reasoning,
-                                    item_id: String::new(),
-                                    call_id: None,
-                                    name: None,
-                                },
-                            );
+                            e.insert(ItemInfo {
+                                content_idx,
+                                item_type: ItemType::Reasoning,
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
                             emitted_semantic_event = true;
                             stream.push(AssistantMessageEvent::ThinkingStart {
                                 content_index: content_idx,
