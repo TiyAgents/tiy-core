@@ -376,7 +376,7 @@ impl Default for OpenAICompletionsCompat {
     fn default() -> Self {
         Self {
             supports_store: true,
-            supports_developer_role: true,
+            supports_developer_role: false,
             supports_reasoning_effort: true,
             reasoning_effort_map: HashMap::new(),
             supports_usage_in_streaming: true,
