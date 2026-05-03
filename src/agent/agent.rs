@@ -2295,7 +2295,7 @@ mod tests {
     fn test_effective_api_for_bai_non_claude_models_uses_openai_completions() {
         assert_eq!(
             effective_api_for_model(&bai_model("gpt-4o", None)),
-            Api::OpenAICompletions
+            Api::OpenAIResponses
         );
         assert_eq!(
             effective_api_for_model(&bai_model("deepseek-r1", None)),

@@ -1,12 +1,15 @@
 //! BAI provider (adaptive multi-protocol proxy based on model ID).
 //!
 //! BAI is a multi-protocol proxy that supports:
+//! - OpenAI Responses protocol at `https://api.b.ai/v1/responses`
 //! - OpenAI-compatible protocol at `https://api.b.ai/v1/chat/completions`
 //! - Anthropic Messages protocol at `https://api.b.ai/v1/messages`
 //!
 //! Adaptive routing logic (when base_url is empty or starts with `https://api.b.ai`):
 //! - If the model ID contains "claude" (case-insensitive),
 //!   routes to Anthropic Messages protocol
+//! - If the model ID contains "gpt" or "openai" (case-insensitive),
+//!   routes to OpenAI Responses protocol
 //! - Otherwise, routes to OpenAI Completions protocol (default)
 //!
 //! When a custom base_url is provided (not empty and not starting with
@@ -30,6 +33,7 @@ const BAI_BASE_URL: &str = "https://api.b.ai/v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BaiProtocolRoute {
     OpenAICompatible,
+    OpenAIResponses,
     Anthropic,
 }
 
@@ -38,6 +42,8 @@ pub(crate) fn bai_detect_route(model_id: &str) -> BaiProtocolRoute {
     let lower = model_id.to_ascii_lowercase();
     if lower.contains("claude") {
         BaiProtocolRoute::Anthropic
+    } else if lower.contains("gpt") || lower.contains("openai") {
+        BaiProtocolRoute::OpenAIResponses
     } else {
         BaiProtocolRoute::OpenAICompatible
     }
@@ -47,6 +53,7 @@ pub(crate) fn bai_detect_route(model_id: &str) -> BaiProtocolRoute {
 pub(crate) fn bai_api_for_route(route: BaiProtocolRoute) -> Api {
     match route {
         BaiProtocolRoute::OpenAICompatible => Api::OpenAICompletions,
+        BaiProtocolRoute::OpenAIResponses => Api::OpenAIResponses,
         BaiProtocolRoute::Anthropic => Api::AnthropicMessages,
     }
 }
@@ -142,6 +149,11 @@ impl LLMProtocol for BaiProvider {
                         crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
                     provider.stream(&m, context, opts)
                 }
+                BaiProtocolRoute::OpenAIResponses => {
+                    let provider =
+                        crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
+                    provider.stream(&m, context, opts)
+                }
                 BaiProtocolRoute::Anthropic => {
                     let provider = crate::protocol::anthropic::AnthropicProtocol::new();
                     provider.stream(&m, context, opts)
@@ -177,6 +189,11 @@ impl LLMProtocol for BaiProvider {
                 BaiProtocolRoute::OpenAICompatible => {
                     let provider =
                         crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
+                    provider.stream_simple(&m, context, opts)
+                }
+                BaiProtocolRoute::OpenAIResponses => {
+                    let provider =
+                        crate::protocol::openai_responses::OpenAIResponsesProtocol::new();
                     provider.stream_simple(&m, context, opts)
                 }
                 BaiProtocolRoute::Anthropic => {
@@ -218,11 +235,25 @@ mod tests {
             BaiProtocolRoute::Anthropic
         );
 
-        // Non-claude models → OpenAICompatible
+        // GPT / OpenAI models → OpenAIResponses
         assert_eq!(
             bai_detect_route("gpt-4o"),
-            BaiProtocolRoute::OpenAICompatible
+            BaiProtocolRoute::OpenAIResponses
         );
+        assert_eq!(
+            bai_detect_route("gpt-4o-mini"),
+            BaiProtocolRoute::OpenAIResponses
+        );
+        assert_eq!(
+            bai_detect_route("GPT-4-turbo"),
+            BaiProtocolRoute::OpenAIResponses
+        );
+        assert_eq!(
+            bai_detect_route("openai-o3"),
+            BaiProtocolRoute::OpenAIResponses
+        );
+
+        // Other models → OpenAICompatible
         assert_eq!(
             bai_detect_route("deepseek-r1"),
             BaiProtocolRoute::OpenAICompatible
@@ -244,11 +275,16 @@ mod tests {
             Api::OpenAICompletions
         );
         assert_eq!(
+            bai_api_for_route(BaiProtocolRoute::OpenAIResponses),
+            Api::OpenAIResponses
+        );
+        assert_eq!(
             bai_api_for_route(BaiProtocolRoute::Anthropic),
             Api::AnthropicMessages
         );
 
-        assert_eq!(bai_detect_api("gpt-4o"), Api::OpenAICompletions);
+        assert_eq!(bai_detect_api("deepseek-r1"), Api::OpenAICompletions);
+        assert_eq!(bai_detect_api("gpt-4o"), Api::OpenAIResponses);
         assert_eq!(bai_detect_api("claude-sonnet-4"), Api::AnthropicMessages);
     }
 }
