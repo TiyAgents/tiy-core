@@ -30,6 +30,7 @@ const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const ZENMUX_BASE_URL: &str = "https://zenmux.ai/api/v1";
+const BAI_BASE_URL: &str = "https://api.b.ai/v1";
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 const MINIMAX_BASE_URL: &str = "https://api.minimax.io/anthropic/v1";
@@ -970,6 +971,8 @@ fn strip_vendor_prefix(value: &str) -> String {
         "z-ai:",
         "zenmux/",
         "zenmux:",
+        "bai/",
+        "bai:",
         "minimax/",
         "minimax:",
         "kimi/",
@@ -1178,6 +1181,7 @@ fn adapter_for(provider: &Provider) -> Result<Box<dyn ModelListAdapter>, ModelCa
         | Provider::Groq
         | Provider::ZAI
         | Provider::DeepSeek
+        | Provider::Bai
         | Provider::Ollama => Ok(Box::new(ModelsEndpointAdapter::new(provider.clone()))),
         Provider::OpenCodeGo => Ok(Box::new(PredefinedModelsAdapter::new(
             provider.clone(),
@@ -1481,6 +1485,11 @@ fn provider_list_models_profile(
             default_base_url: Some(ZENMUX_BASE_URL),
             auth_scheme: ProviderAuthScheme::Bearer,
             api_key_env_vars: &["ZENMUX_API_KEY"],
+        },
+        Provider::Bai => ProviderListModelsProfile {
+            default_base_url: Some(BAI_BASE_URL),
+            auth_scheme: ProviderAuthScheme::Bearer,
+            api_key_env_vars: &["BAI_API_KEY"],
         },
         Provider::Ollama => ProviderListModelsProfile {
             default_base_url: Some(OLLAMA_BASE_URL),

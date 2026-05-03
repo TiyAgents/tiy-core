@@ -180,6 +180,9 @@ pub enum Provider {
     /// Zenmux.
     #[serde(rename = "zenmux")]
     Zenmux,
+    /// BAI.
+    #[serde(rename = "bai")]
+    Bai,
     /// Ollama.
     #[serde(rename = "ollama")]
     Ollama,
@@ -218,6 +221,7 @@ impl Provider {
             Provider::KimiCoding => "kimi-coding",
             Provider::DeepSeek => "deepseek",
             Provider::Zenmux => "zenmux",
+            Provider::Bai => "bai",
             Provider::Ollama => "ollama",
             Provider::Custom(s) => s.as_str(),
         }
@@ -260,6 +264,7 @@ impl From<String> for Provider {
             "kimi-coding" => Provider::KimiCoding,
             "deepseek" => Provider::DeepSeek,
             "zenmux" => Provider::Zenmux,
+            "bai" => Provider::Bai,
             "ollama" => Provider::Ollama,
             _ => Provider::Custom(s),
         }
