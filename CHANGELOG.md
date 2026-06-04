@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-06-04
+### :sparkles: New Features
+- [`b00785d`](https://github.com/tiylabs/tiycore/commit/b00785d2719cc959e349dac602193c57730dc8eb) - **agent**: ✨ add follow-up-to-steering promotion *(PR [#39](https://github.com/tiylabs/tiycore/pull/39) by [@HayWolf](https://github.com/HayWolf))*
+- [`0ecf26f`](https://github.com/tiylabs/tiycore/commit/0ecf26f91e8a728baa3b302100011d678967fe23) - **xiaomi-mimo**: ✨ add compat config to downgrade xhigh thinking level *(PR [#38](https://github.com/tiylabs/tiycore/pull/38) by [@HayWolf](https://github.com/HayWolf))*
+
+
 ## [0.2.7] - 2026-05-20
 ### :sparkles: New Features
 - [`a8e9403`](https://github.com/tiylabs/tiycore/commit/a8e9403da19e8926e29d55481357a7877c775079) - **events**: ✨ Add retry visibility event *(PR [#34](https://github.com/tiylabs/tiycore/pull/34) by [@jorben](https://github.com/jorben))*
@@ -291,3 +297,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.5]: https://github.com/TiyAgents/tiycore/compare/0.2.3...0.2.5
 [0.2.6]: https://github.com/tiylabs/tiycore/compare/0.2.5...0.2.6
 [0.2.7]: https://github.com/tiylabs/tiycore/compare/0.2.6...0.2.7
+[0.2.9]: https://github.com/tiylabs/tiycore/compare/0.2.8...0.2.9
