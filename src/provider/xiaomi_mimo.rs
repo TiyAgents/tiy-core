@@ -4,11 +4,15 @@
 //! - `https://api.xiaomimimo.com/v1`
 //!
 //! This provider delegates to `OpenAICompletionsProtocol` with a default base URL.
+//!
+//! Compat customizations:
+//! - `xhigh` thinking level is downgraded to `high` (Xiaomi MiMo does not support xhigh).
 
 use crate::protocol::LLMProtocol;
 use crate::stream::AssistantMessageEventStream;
 use crate::types::*;
 use async_trait::async_trait;
+use std::collections::HashMap;
 
 /// Default base URL for Xiaomi MiMo API.
 const DEFAULT_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
@@ -30,6 +34,19 @@ impl XiaomiMIMOProvider {
     pub fn with_api_key(api_key: impl Into<String>) -> Self {
         Self {
             default_api_key: Some(api_key.into()),
+        }
+    }
+
+    /// Get provider-specific compat settings.
+    pub fn default_compat() -> OpenAICompletionsCompat {
+        let mut effort_map = HashMap::new();
+        effort_map.insert("xhigh".to_string(), "high".to_string());
+        OpenAICompletionsCompat {
+            thinking: CompatThinking {
+                effort_map,
+                ..Default::default()
+            },
+            ..Default::default()
         }
     }
 
@@ -75,6 +92,11 @@ impl LLMProtocol for XiaomiMIMOProvider {
             m.base_url = Some(DEFAULT_BASE_URL.to_string());
         }
 
+        // Inject compat with xhigh→high downgrade if not already set
+        if m.compat.is_none() {
+            m.compat = Some(Self::default_compat());
+        }
+
         let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
         provider.stream(&m, context, opts)
     }
@@ -95,6 +117,11 @@ impl LLMProtocol for XiaomiMIMOProvider {
         // Set default base_url if not provided
         if m.base_url.is_none() && opts.base.base_url.is_none() {
             m.base_url = Some(DEFAULT_BASE_URL.to_string());
+        }
+
+        // Inject compat with xhigh→high downgrade if not already set
+        if m.compat.is_none() {
+            m.compat = Some(Self::default_compat());
         }
 
         let provider = crate::protocol::openai_completions::OpenAICompletionsProtocol::new();
