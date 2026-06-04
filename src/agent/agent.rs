@@ -915,7 +915,10 @@ impl Agent {
             .can_push()
             .map_err(|e| PromoteError::QueueFull(Box::new(e)))?;
 
-        let message = self.follow_up_queue.remove(id).ok_or(PromoteError::NotFound)?;
+        let message = self
+            .follow_up_queue
+            .remove(id)
+            .ok_or(PromoteError::NotFound)?;
         let source_remaining = self.follow_up_queue.len();
         self.emit_queue_event(QueueEvent::Removed {
             kind: QueueKind::FollowUp,

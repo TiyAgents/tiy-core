@@ -2363,7 +2363,10 @@ async fn test_has_queued_messages_async_caches_supplier_output() {
     );
 
     // Verify messages actually ended up in the local queue
-    assert!(agent.has_queued_messages(), "local queue should be populated");
+    assert!(
+        agent.has_queued_messages(),
+        "local queue should be populated"
+    );
 }
 
 /// Test that `has_queued_messages_async` probes V2 steering suppliers.
@@ -2409,5 +2412,8 @@ async fn test_has_queued_messages_async_probes_v2_supplier() {
     );
 
     // Messages should have been cached into local queue
-    assert!(agent.has_queued_messages(), "V2 supplier messages should be cached");
+    assert!(
+        agent.has_queued_messages(),
+        "V2 supplier messages should be cached"
+    );
 }

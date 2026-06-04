@@ -618,7 +618,11 @@ fn test_promote_follow_up_event_sequence() {
 
     assert!(matches!(
         &captured[0],
-        QueueEvent::Removed { kind: QueueKind::FollowUp, count: 1, .. }
+        QueueEvent::Removed {
+            kind: QueueKind::FollowUp,
+            count: 1,
+            ..
+        }
     ));
     assert!(matches!(
         &captured[1],
@@ -631,7 +635,11 @@ fn test_promote_follow_up_event_sequence() {
     ));
     assert!(matches!(
         &captured[2],
-        QueueEvent::Enqueued { kind: QueueKind::Steering, count: 1, .. }
+        QueueEvent::Enqueued {
+            kind: QueueKind::Steering,
+            count: 1,
+            ..
+        }
     ));
 }
 
@@ -677,7 +685,10 @@ fn test_try_promote_follow_up_not_found() {
 #[test]
 fn test_promote_error_display() {
     let not_found = PromoteError::NotFound;
-    assert_eq!(format!("{}", not_found), "message not found in follow-up queue");
+    assert_eq!(
+        format!("{}", not_found),
+        "message not found in follow-up queue"
+    );
 
     // Construct a QueueFullError via Agent-level try_steer (which calls try_push)
     let agent = Agent::new();
@@ -726,4 +737,3 @@ fn test_queue_full_error_into_message() {
     let err2 = QueueFullError::new(1, 1);
     assert!(err2.into_message().is_none());
 }
-
