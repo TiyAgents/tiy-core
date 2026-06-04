@@ -165,12 +165,33 @@ pub enum OverflowBehavior {
 }
 
 /// Error returned when a message is rejected due to backpressure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct QueueFullError {
     /// Current queue depth at the time of rejection.
     pub current_depth: usize,
     /// Configured maximum depth.
     pub max_depth: usize,
+    /// The message that was rejected, returned so the caller can recover it.
+    pub(crate) message: Option<Box<AgentMessage>>,
+}
+
+impl QueueFullError {
+    /// Create a `QueueFullError` without an attached message.
+    ///
+    /// Used for pre-check results (`can_push`) where no message was actually
+    /// rejected. The `into_message()` method will return `None`.
+    pub fn new(current_depth: usize, max_depth: usize) -> Self {
+        Self {
+            current_depth,
+            max_depth,
+            message: None,
+        }
+    }
+
+    /// Consume the error and return the rejected message, if any.
+    pub fn into_message(self) -> Option<AgentMessage> {
+        self.message.map(|b| *b)
+    }
 }
 
 impl std::fmt::Display for QueueFullError {
@@ -282,6 +303,7 @@ impl MessageQueue {
                     return Err(QueueFullError {
                         current_depth: buf.len(),
                         max_depth: bp.max_depth,
+                        message: Some(Box::new(item.message)),
                     });
                 }
                 OverflowBehavior::DropOldest => {
@@ -298,6 +320,25 @@ impl MessageQueue {
     /// Set the backpressure configuration.
     pub fn set_backpressure(&self, config: BackpressureConfig) {
         *self.backpressure.lock() = config;
+    }
+
+    /// Check whether a `try_push` would succeed without actually pushing.
+    ///
+    /// Returns `Ok(())` if a push would be accepted, or `Err(QueueFullError)`
+    /// if the queue is full and overflow behavior is `Reject`.
+    ///
+    /// This is a best-effort check: the result may be stale by the time
+    /// `try_push` is called due to concurrent operations.
+    pub fn can_push(&self) -> Result<(), QueueFullError> {
+        let bp = self.backpressure.lock().clone();
+        if bp.max_depth == 0 || bp.overflow == OverflowBehavior::Unlimited {
+            return Ok(());
+        }
+        let buf = self.buffer.lock();
+        if buf.len() >= bp.max_depth && bp.overflow == OverflowBehavior::Reject {
+            return Err(QueueFullError::new(buf.len(), bp.max_depth));
+        }
+        Ok(())
     }
 
     /// Get the current backpressure configuration.

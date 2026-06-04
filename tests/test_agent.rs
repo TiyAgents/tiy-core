@@ -558,3 +558,172 @@ fn test_agent_error_display() {
     );
     assert_eq!(format!("{}", AgentError::Other("misc".into())), "misc");
 }
+
+// ============================================================================
+// Promote follow-up → steering tests
+// ============================================================================
+
+#[test]
+fn test_promote_follow_up_to_steering_success() {
+    let agent = Agent::new();
+    let handle = agent.follow_up(AgentMessage::from("hello"));
+    assert_eq!(handle.kind, QueueKind::FollowUp);
+
+    let new_handle = agent
+        .promote_follow_up_to_steering(handle.id)
+        .expect("promote should succeed");
+
+    // New handle points to the steering queue
+    assert_eq!(new_handle.kind, QueueKind::Steering);
+
+    // Old follow-up handle is invalidated
+    assert!(agent.cancel_follow_up_message(handle.id).is_none());
+
+    // New steering handle is valid
+    let msg = agent
+        .cancel_steering_message(new_handle.id)
+        .expect("should be able to cancel the promoted message");
+    assert!(matches!(msg, AgentMessage::User(_)));
+}
+
+#[test]
+fn test_promote_follow_up_not_found() {
+    let agent = Agent::new();
+    // Enqueue and immediately drain to get an id that no longer exists
+    let handle = agent.follow_up(AgentMessage::from("temp"));
+    agent.clear_follow_up_queue();
+    assert!(agent.promote_follow_up_to_steering(handle.id).is_none());
+}
+
+#[test]
+fn test_promote_follow_up_event_sequence() {
+    use std::sync::{Arc, Mutex};
+
+    let agent = Agent::new();
+    let events: Arc<Mutex<Vec<QueueEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_clone = events.clone();
+    agent.set_on_queue_event(move |e| {
+        events_clone.lock().unwrap().push(e);
+    });
+
+    let handle = agent.follow_up(AgentMessage::from("test"));
+    // Clear events from the follow_up call
+    events.lock().unwrap().clear();
+
+    let _new_handle = agent.promote_follow_up_to_steering(handle.id).unwrap();
+
+    let captured = events.lock().unwrap();
+    // Expected: Removed(FollowUp), Transferred(FollowUp→Steering), Enqueued(Steering)
+    assert_eq!(captured.len(), 3);
+
+    assert!(matches!(
+        &captured[0],
+        QueueEvent::Removed { kind: QueueKind::FollowUp, count: 1, .. }
+    ));
+    assert!(matches!(
+        &captured[1],
+        QueueEvent::Transferred {
+            from: QueueKind::FollowUp,
+            to: QueueKind::Steering,
+            count: 1,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &captured[2],
+        QueueEvent::Enqueued { kind: QueueKind::Steering, count: 1, .. }
+    ));
+}
+
+#[test]
+fn test_try_promote_follow_up_queue_full() {
+    let agent = Agent::new();
+    // Set steering queue to max_depth=1, Reject
+    agent.set_steering_backpressure(BackpressureConfig {
+        max_depth: 1,
+        overflow: OverflowBehavior::Reject,
+    });
+    // Fill the steering queue
+    agent.steer(AgentMessage::from("blocking"));
+
+    let handle = agent.follow_up(AgentMessage::from("promote-me"));
+
+    let result = agent.try_promote_follow_up_to_steering(handle.id);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        PromoteError::QueueFull(err) => {
+            assert_eq!(err.max_depth, 1);
+        }
+        other => panic!("Expected QueueFull, got {:?}", other),
+    }
+
+    // Message should still be in the follow-up queue (can_push pre-check prevented removal)
+    let msg = agent
+        .cancel_follow_up_message(handle.id)
+        .expect("message should still be in follow-up queue");
+    assert!(matches!(msg, AgentMessage::User(_)));
+}
+
+#[test]
+fn test_try_promote_follow_up_not_found() {
+    let agent = Agent::new();
+    // Enqueue and immediately drain to get an id that no longer exists
+    let handle = agent.follow_up(AgentMessage::from("temp"));
+    agent.clear_follow_up_queue();
+    let result = agent.try_promote_follow_up_to_steering(handle.id);
+    assert!(matches!(result, Err(PromoteError::NotFound)));
+}
+
+#[test]
+fn test_promote_error_display() {
+    let not_found = PromoteError::NotFound;
+    assert_eq!(format!("{}", not_found), "message not found in follow-up queue");
+
+    // Construct a QueueFullError via Agent-level try_steer (which calls try_push)
+    let agent = Agent::new();
+    agent.set_steering_backpressure(BackpressureConfig {
+        max_depth: 1,
+        overflow: OverflowBehavior::Reject,
+    });
+    agent.steer(AgentMessage::from("fill"));
+    let err = agent.try_steer(AgentMessage::from("overflow")).unwrap_err();
+    let queue_full = PromoteError::QueueFull(Box::new(err));
+    assert!(format!("{}", queue_full).contains("steering queue full"));
+}
+
+#[test]
+fn test_promote_multiple_messages_preserves_order() {
+    let agent = Agent::new();
+
+    let h1 = agent.follow_up(AgentMessage::from("first"));
+    let h2 = agent.follow_up(AgentMessage::from("second"));
+
+    // Promote the second one first
+    let new_h2 = agent.promote_follow_up_to_steering(h2.id).unwrap();
+    assert_eq!(new_h2.kind, QueueKind::Steering);
+
+    // First should still be in follow-up
+    let msg1 = agent.cancel_follow_up_message(h1.id).unwrap();
+    assert!(matches!(msg1, AgentMessage::User(_)));
+}
+
+#[test]
+fn test_queue_full_error_into_message() {
+    // Construct a QueueFullError with a message via Agent try_steer
+    let agent = Agent::new();
+    agent.set_steering_backpressure(BackpressureConfig {
+        max_depth: 1,
+        overflow: OverflowBehavior::Reject,
+    });
+    agent.steer(AgentMessage::from("fill"));
+    let err = agent.try_steer(AgentMessage::from("overflow")).unwrap_err();
+    let msg = err.into_message().expect("should have a rejected message");
+    assert!(matches!(msg, AgentMessage::User(_)));
+
+    // can_push errors don't carry a message (not constructable from outside,
+    // but we verify into_message returns None when message field is None
+    // by checking a QueueFullError created without one)
+    let err2 = QueueFullError::new(1, 1);
+    assert!(err2.into_message().is_none());
+}
+

@@ -836,6 +836,135 @@ impl Agent {
         self.cancel_message_from_queue(QueueKind::FollowUp, id)
     }
 
+    // -----------------------------------------------------------------------
+    // Promote follow-up → steering
+    // -----------------------------------------------------------------------
+
+    /// Promote a pending follow-up message to steering (interrupts current work).
+    ///
+    /// The message is removed from the follow-up queue and inserted into the
+    /// steering queue. If the agent is currently streaming, the promoted
+    /// message will be picked up by the next steering check in the stream
+    /// event loop, causing the current turn to be interrupted
+    /// (`AgentError::Steered`).
+    ///
+    /// Returns `Some(new_handle)` on success. The returned handle has
+    /// `kind: Steering` and a **new** [`QueuedMessageId`] assigned by the
+    /// steering queue — the old follow-up handle is invalidated.
+    ///
+    /// Returns `None` if the message was already consumed or cancelled from
+    /// the follow-up queue.
+    pub fn promote_follow_up_to_steering(
+        &self,
+        id: QueuedMessageId,
+    ) -> Option<QueuedMessageHandle> {
+        let message = self.follow_up_queue.remove(id)?;
+        let source_remaining = self.follow_up_queue.len();
+        self.emit_queue_event(QueueEvent::Removed {
+            kind: QueueKind::FollowUp,
+            count: 1,
+            remaining: source_remaining,
+        });
+
+        let new_id = self.steering_queue.push(message);
+        let target_depth = self.steering_queue.len();
+        self.emit_queue_event(QueueEvent::Transferred {
+            from: QueueKind::FollowUp,
+            to: QueueKind::Steering,
+            count: 1,
+            source_remaining,
+            target_queue_depth: target_depth,
+        });
+        self.emit_queue_event(QueueEvent::Enqueued {
+            kind: QueueKind::Steering,
+            count: 1,
+            queue_depth: target_depth,
+        });
+
+        Some(QueuedMessageHandle {
+            kind: QueueKind::Steering,
+            id: new_id,
+        })
+    }
+
+    /// Try to promote a pending follow-up message to steering with backpressure awareness.
+    ///
+    /// Like [`promote_follow_up_to_steering`](Self::promote_follow_up_to_steering), but
+    /// respects the steering queue's backpressure configuration. If the
+    /// steering queue is full and its overflow behavior is `Reject`, the
+    /// operation fails **without modifying either queue** — the message
+    /// remains in the follow-up queue with its original ID and handle intact.
+    ///
+    /// # Errors
+    ///
+    /// - [`PromoteError::NotFound`] — the message was already consumed or
+    ///   cancelled from the follow-up queue.
+    /// - [`PromoteError::QueueFull`] — the steering queue would reject the
+    ///   message. Neither queue has been modified.
+    pub fn try_promote_follow_up_to_steering(
+        &self,
+        id: QueuedMessageId,
+    ) -> Result<QueuedMessageHandle, crate::agent::PromoteError> {
+        use crate::agent::PromoteError;
+
+        // Pre-check: would the steering queue accept a new message?
+        // This is a best-effort check; a concurrent push could still cause
+        // try_push below to fail, in which case we fall back to re-inserting
+        // the message into the follow-up queue (with a new ID).
+        self.steering_queue
+            .can_push()
+            .map_err(|e| PromoteError::QueueFull(Box::new(e)))?;
+
+        let message = self.follow_up_queue.remove(id).ok_or(PromoteError::NotFound)?;
+        let source_remaining = self.follow_up_queue.len();
+        self.emit_queue_event(QueueEvent::Removed {
+            kind: QueueKind::FollowUp,
+            count: 1,
+            remaining: source_remaining,
+        });
+
+        match self.steering_queue.try_push(message) {
+            Ok(new_id) => {
+                let target_depth = self.steering_queue.len();
+                self.emit_queue_event(QueueEvent::Transferred {
+                    from: QueueKind::FollowUp,
+                    to: QueueKind::Steering,
+                    count: 1,
+                    source_remaining,
+                    target_queue_depth: target_depth,
+                });
+                self.emit_queue_event(QueueEvent::Enqueued {
+                    kind: QueueKind::Steering,
+                    count: 1,
+                    queue_depth: target_depth,
+                });
+                Ok(QueuedMessageHandle {
+                    kind: QueueKind::Steering,
+                    id: new_id,
+                })
+            }
+            Err(queue_full) => {
+                // Race: can_push succeeded but try_push failed (concurrent push).
+                // Fall back to strategy B: re-insert into follow-up queue.
+                // This allocates a new ID and invalidates the old handle.
+                let current_depth = queue_full.current_depth;
+                let max_depth = queue_full.max_depth;
+                if let Some(msg) = queue_full.into_message() {
+                    self.follow_up_queue.push(msg);
+                    let restored_depth = self.follow_up_queue.len();
+                    self.emit_queue_event(QueueEvent::Enqueued {
+                        kind: QueueKind::FollowUp,
+                        count: 1,
+                        queue_depth: restored_depth,
+                    });
+                }
+                Err(PromoteError::QueueFull(Box::new(
+                    crate::agent::queue::QueueFullError::new(current_depth, max_depth),
+                )))
+            }
+        }
+    }
+
     fn cancel_message_from_queue(
         &self,
         kind: QueueKind,
@@ -963,7 +1092,7 @@ impl Agent {
         }
     }
 
-    /// Set a handler for queue lifecycle events (enqueue, consume, clear).
+    /// Set a handler for queue lifecycle events (enqueue, consume, clear, remove, transfer).
     ///
     /// The handler is called synchronously and must not block.
     pub fn set_on_queue_event<F>(&self, handler: F)

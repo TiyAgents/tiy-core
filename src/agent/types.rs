@@ -343,6 +343,19 @@ pub enum QueueEvent {
         /// Remaining messages in the queue after removal.
         remaining: usize,
     },
+    /// A message was moved from one queue to another.
+    Transferred {
+        /// Source queue the message was moved from.
+        from: QueueKind,
+        /// Target queue the message was moved to.
+        to: QueueKind,
+        /// How many messages were transferred.
+        count: usize,
+        /// Remaining messages in the source queue after removal.
+        source_remaining: usize,
+        /// Total depth of the target queue after insertion.
+        target_queue_depth: usize,
+    },
 }
 
 /// Callback type for queue lifecycle events.
@@ -351,6 +364,43 @@ pub enum QueueEvent {
 /// agent's task. Use channels or other async primitives internally if you
 /// need to defer work.
 pub type OnQueueEventFn = Arc<dyn Fn(QueueEvent) + Send + Sync>;
+
+// ============================================================================
+// PromoteError
+// ============================================================================
+
+/// Error returned when promoting a follow-up message to steering fails.
+#[derive(Debug, Clone)]
+pub enum PromoteError {
+    /// Source message not found in the follow-up queue (already consumed or cancelled).
+    NotFound,
+    /// Target steering queue is full and overflow behavior is `Reject`.
+    ///
+    /// In the common case (no concurrent queue operations), neither queue
+    /// has been modified. Under a race condition where a concurrent push
+    /// fills the steering queue between the `can_push` pre-check and
+    /// `try_push`, the message is re-inserted into the follow-up queue
+    /// with a **new** [`QueuedMessageId`], invalidating the old handle.
+    QueueFull(Box<crate::agent::queue::QueueFullError>),
+}
+
+impl std::fmt::Display for PromoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PromoteError::NotFound => write!(f, "message not found in follow-up queue"),
+            PromoteError::QueueFull(err) => write!(f, "steering queue full: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for PromoteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PromoteError::NotFound => None,
+            PromoteError::QueueFull(err) => Some(err),
+        }
+    }
+}
 
 // ============================================================================
 // ThinkingBudgets
