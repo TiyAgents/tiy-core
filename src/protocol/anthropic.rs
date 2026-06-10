@@ -560,6 +560,14 @@ struct MessageDelta {
 struct MessageDeltaUsage {
     #[serde(default)]
     output_tokens: u64,
+    // Anthropic may report the final cache read / write counts in the
+    // `message_delta` event (after `message_start`). The values are
+    // optional: when Anthropic omits the field the `message_start` values
+    // are authoritative, and we must NOT clobber them with `0`.
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
 }
 
 // ============================================================================
@@ -1474,6 +1482,21 @@ async fn run_stream(
                         }
                         if let Some(usage) = delta_data.usage {
                             output.usage.output = usage.output_tokens;
+                            // Anthropic reports the final cache read / write
+                            // counters in `message_delta` (the values from
+                            // `message_start` are placeholders). Only override
+                            // the three segments when `message_delta`
+                            // explicitly carries the field — Anthropic omits
+                            // the field when the values are unchanged, and
+                            // blindly assigning `0` would clobber the
+                            // `message_start` values and break three-segment
+                            // billable accounting.
+                            if let Some(v) = usage.cache_read_input_tokens {
+                                output.usage.cache_read = v;
+                            }
+                            if let Some(v) = usage.cache_creation_input_tokens {
+                                output.usage.cache_write = v;
+                            }
                             output.usage.total_tokens = output.usage.input
                                 + output.usage.output
                                 + output.usage.cache_read

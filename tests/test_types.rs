@@ -858,13 +858,18 @@ fn test_usage_from_tokens() {
 
 #[test]
 fn test_usage_add() {
-    let mut u1 = Usage::from_tokens(100, 200); // total_tokens = 300
-    let u2 = Usage::from_tokens(50, 100); // total_tokens = 150
+    let mut u1 = Usage::from_tokens(100, 200); // total_tokens = 300 (from from_tokens)
+    let u2 = Usage::from_tokens(50, 100); // total_tokens = 150 (from from_tokens)
     u1.add(&u2);
     assert_eq!(u1.input, 150);
     assert_eq!(u1.output, 300);
-    // total_tokens is now recomputed as input + output + cache_read + cache_write
-    assert_eq!(u1.total_tokens, 450);
+    // `total_tokens` carries the wire-level total (set by `from_tokens` /
+    // each protocol module) and is **not** recomputed by `add` — recomputing
+    // it as `input + output + cache_read + cache_write` would double-count
+    // the cached slice for OpenAI / Google and is not safe across protocols.
+    // For a protocol-agnostic footprint, use `context_size()`.
+    assert_eq!(u1.total_tokens, 300);
+    assert_eq!(u1.context_size(), 150 + 300);
 }
 
 #[test]

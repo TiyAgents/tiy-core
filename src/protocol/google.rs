@@ -1075,9 +1075,20 @@ async fn run_stream(
                     }
 
                     // Handle usage metadata
+                    //
+                    // Semantic alignment with other protocols (OpenAI):
+                    //   `prompt_token_count` is the *total* prompt size INCLUDING
+                    //   any cached portion, so we subtract the cached slice to
+                    //   get the uncached `input`. `cache_read` holds the cached
+                    //   slice, so `input + cache_read == prompt_token_count`.
+                    //   After this normalization, `Usage::context_size()`
+                    //   (input + output + cache_read + cache_write) returns the
+                    //   true context footprint for Google as well.
                     if let Some(ref usage) = chunk_data.usage_metadata {
                         saw_usage_metadata = true;
-                        output.usage.input = usage.prompt_token_count;
+                        output.usage.input = usage
+                            .prompt_token_count
+                            .saturating_sub(usage.cached_content_token_count);
                         output.usage.output =
                             usage.candidates_token_count + usage.thoughts_token_count;
                         output.usage.cache_read = usage.cached_content_token_count;
